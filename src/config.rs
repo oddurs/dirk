@@ -59,36 +59,40 @@ pub struct LayoutDef {
 }
 
 impl PaneDef {
-    /// Every program this pane or its descendants will run.
-    fn programs(&self) -> Vec<&str> {
+    /// This pane and its descendants, flattened to the ones that actually run
+    /// something.
+    fn leaves(&self) -> Vec<&PaneDef> {
         if self.pane.is_empty() {
-            return self
-                .command
-                .first()
-                .map(|c| vec![c.as_str()])
-                .unwrap_or_default();
+            return vec![self];
         }
-        self.pane.iter().flat_map(|p| p.programs()).collect()
+        self.pane.iter().flat_map(|p| p.leaves()).collect()
     }
 }
 
 impl LayoutDef {
-    pub fn programs(&self) -> Vec<&str> {
+    fn leaves(&self) -> Vec<&PaneDef> {
         if self.pane.is_empty() {
-            return self
-                .command
-                .first()
-                .map(|c| vec![c.as_str()])
-                .unwrap_or_default();
+            return Vec::new();
         }
-        self.pane.iter().flat_map(|p| p.programs()).collect()
+        self.pane.iter().flat_map(|p| p.leaves()).collect()
     }
 
-    /// True when every program this layout needs is installed. A layout is all
-    /// or nothing: half a dashboard is not a dashboard.
+    /// True when this layout can actually be built: every leaf names a program,
+    /// and every one of those is installed.
+    ///
+    /// The first half matters as much as the second. `command` is optional in
+    /// the file, so a pane can be written with a title and nothing to run, and
+    /// a layout that is offered and then cannot start is worse than one that
+    /// was never listed.
     pub fn runnable(&self) -> bool {
-        let programs = self.programs();
-        !programs.is_empty() && programs.iter().all(|c| on_path(c))
+        let leaves = self.leaves();
+        if leaves.is_empty() {
+            // A single-program layout: the command lives on the layout itself.
+            return self.command.first().is_some_and(|c| on_path(c));
+        }
+        leaves
+            .iter()
+            .all(|l| l.command.first().is_some_and(|c| on_path(c)))
     }
 }
 

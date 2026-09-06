@@ -221,11 +221,8 @@ impl Session {
 
     /// Split the focused pane, putting a second shell beside it.
     pub fn split(&mut self, dir: Dir, rows: u16, cols: u16) {
-        let Focus::Ws { p, w } = self.focus else {
-            return;
-        };
         let Some(cwd) = self
-            .workspace(p, w)
+            .focused_workspace()
             .and_then(|ws| ws.active_pane())
             .map(|x| x.cwd.clone())
         else {
@@ -234,7 +231,7 @@ impl Session {
         let Some(pane) = self.spawn_shell(&cwd, rows, cols) else {
             return;
         };
-        let Some(ws) = self.workspace_mut(p, w) else {
+        let Some(ws) = self.focused_workspace_mut() else {
             return;
         };
 
@@ -256,10 +253,22 @@ impl Session {
         self.projects.get_mut(p)?.workspaces.get_mut(w)
     }
 
+    /// The workspace that has the keyboard, whichever list it came from.
+    ///
+    /// A layout is a workspace, so answering `None` for one meant cycling panes
+    /// and clicking to focus silently did nothing inside a dashboard — the one
+    /// place with several panes to move between.
+    pub fn focused_workspace(&self) -> Option<&Workspace> {
+        match self.focus {
+            Focus::Layout(i) => self.layouts.get(i)?.ws.as_ref(),
+            Focus::Ws { p, w } => self.workspace(p, w),
+        }
+    }
+
     pub fn focused_workspace_mut(&mut self) -> Option<&mut Workspace> {
         match self.focus {
+            Focus::Layout(i) => self.layouts.get_mut(i)?.ws.as_mut(),
             Focus::Ws { p, w } => self.workspace_mut(p, w),
-            Focus::Layout(_) => None,
         }
     }
 

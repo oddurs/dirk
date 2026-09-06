@@ -222,7 +222,33 @@ mod tests {
     }
 
     #[test]
-    fn programs_are_collected_from_every_leaf() {
-        assert_eq!(dashboard().programs(), vec!["smali", "ptop", "smali"]);
+    fn a_pane_with_no_command_makes_the_whole_layout_unrunnable() {
+        // `command` is optional in the file, so this is writable by accident.
+        // Before it was caught here it reached `Pane::spawn` with an empty argv
+        // and took dirk down with it.
+        let mut def = dashboard();
+        def.pane[0].command.clear();
+        assert!(
+            !def.runnable(),
+            "a layout with nothing to run in a pane was offered"
+        );
+
+        // And the single-program form, which keeps its command on the layout.
+        let bare = LayoutDef {
+            name: "empty".into(),
+            ..LayoutDef::default()
+        };
+        assert!(!bare.runnable());
+    }
+
+    #[test]
+    fn planning_a_commandless_pane_still_produces_a_leaf() {
+        // `runnable` is the gate; `plan` is not asked to have an opinion, and
+        // should not quietly drop a pane the tree was shaped around.
+        let mut def = dashboard();
+        def.pane[0].command.clear();
+        let (_, leaves) = plan(&def, 1);
+        assert_eq!(leaves.len(), 3);
+        assert!(leaves[0].1.command.is_empty());
     }
 }

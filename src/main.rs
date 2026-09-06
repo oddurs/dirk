@@ -409,9 +409,14 @@ impl App {
 
         // The cursor belongs to the focused pane, and only when that pane is
         // showing one.
+        // The cursor goes where the screen was drawn, which for a labelled pane
+        // is below the rule rather than at the top of its rectangle.
         if let (Some(pane), Some(rect)) = (self.session.active_pane(), self.focused_rect())
             && let Ok(t) = pane.term.lock()
-            && let Some(pos) = ui::pane::cursor(t.screen(), rect)
+            && let Some(pos) = ui::pane::cursor(
+                t.screen(),
+                mux::session::content_of(pane.label.is_some(), rect),
+            )
         {
             f.set_cursor_position(pos);
         }
@@ -620,10 +625,20 @@ impl App {
             ws.focus = id;
         }
 
-        let (col, row) = (m.column - r.x, m.row - r.y);
         let Some(pane) = self.visible_pane_mut(index) else {
             return;
         };
+
+        // A labelled pane's terminal starts below the rule, so the event has to
+        // be measured from there. Measuring from the rectangle would put every
+        // click one row low -- selecting the line above the one you pointed at.
+        let inner = mux::session::content_of(pane.label.is_some(), r);
+        if m.row < inner.y {
+            // The rule itself is chrome. Focusing was the whole of that click.
+            return;
+        }
+        let (col, row) = (m.column - inner.x, m.row - inner.y);
+
         let bytes = pane
             .term
             .lock()

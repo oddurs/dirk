@@ -428,3 +428,56 @@ command = ["definitely-not-installed-anywhere"]
         h.drawn()
     );
 }
+
+#[test]
+fn panes_in_a_layout_can_be_cycled_and_typed_into() {
+    // The bug this pins: `focused_workspace_mut` answered `None` for a layout,
+    // so cycling did nothing and the keyboard stayed on the first leaf forever
+    // -- in the one place with several panes worth moving between.
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Test"
+key = "9"
+split = "cols"
+
+[[layout.pane]]
+title = "left"
+command = ["/bin/sh"]
+
+[[layout.pane]]
+title = "right"
+command = ["/bin/sh"]
+"#,
+    );
+    assert!(
+        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
+        "never started"
+    );
+    h.prefix(b"9");
+    assert!(
+        h.wait_for("left", Duration::from_secs(10)),
+        "layout never opened\n{}",
+        h.drawn()
+    );
+
+    h.send(b"printf 'zz%s' A\r");
+    h.prefix(b";");
+    h.send(b"printf 'zz%s' B\r");
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            h.find("zzA").is_some() && h.find("zzB").is_some()
+        }),
+        "both panes should have taken input\n{}",
+        h.drawn()
+    );
+
+    let (_, a) = h.find("zzA").expect("zzA");
+    let (_, b) = h.find("zzB").expect("zzB");
+    assert!(
+        a < b,
+        "the two markers should be in different panes, got {a} and {b}\n{}",
+        h.drawn()
+    );
+}
