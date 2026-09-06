@@ -7,7 +7,7 @@ milestone: v0.1
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1
-area: ui
+area: chrome
 ---
 
 ## Problem

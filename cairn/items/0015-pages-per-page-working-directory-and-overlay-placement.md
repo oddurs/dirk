@@ -3,11 +3,13 @@ id: 15
 title: 'Pages: per-page working directory and overlay placement'
 type: feature
 status: backlog
-milestone: v0.1
+milestone: v0.2
+depends_on:
+- 22
 created: 2026-09-06
 updated: 2026-09-06
-priority: p2
-area: ui
+priority: p1
+area: layout
 ---
 
 ## Problem

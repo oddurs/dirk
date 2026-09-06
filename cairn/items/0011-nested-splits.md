@@ -2,12 +2,12 @@
 id: 11
 title: Nested splits
 type: feature
-status: backlog
-milestone: v1.0
+status: planned
+milestone: v0.2
 created: 2026-09-06
 updated: 2026-09-06
-priority: p2
-area: mux
+priority: p0
+area: layout
 ---
 
 ## Problem

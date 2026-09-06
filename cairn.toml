@@ -14,13 +14,14 @@ format = 1
 
 [project]
 name = "dirk"
+description = "A terminal multiplexer that knows what its sessions are for."
 dir = "cairn/items"           # where item files live, relative to this file
 id_width = 4              # 0001, 0002, ...
 default_type = "feature"
 default_status = "backlog"
 # filename_max = 255      # longest filename your filesystem accepts, in bytes;
                           # titles are only shortened as much as this demands
-# url = "https://github.com/OWNER/REPO/blob/main"   # makes rendered items clickable
+url = "https://github.com/oddurs/dirk/blob/main"
 
 # ─── Item types ──────────────────────────────────────────────────────────────
 # `template` seeds the body of new items of that type, so every bug report and
@@ -60,6 +61,23 @@ icon = "~"
 color = "gray"
 
 [[type]]
+name = "spike"
+icon = "?"
+color = "magenta"
+template = """
+## Question
+
+## Why it needs answering before the work
+
+## What would settle it
+
+## Answer
+
+<!-- Filled in when the spike closes. A spike with no answer recorded was a
+     waste of the time it took. -->
+"""
+
+[[type]]
 name = "docs"
 icon = "*"
 color = "blue"
@@ -89,6 +107,12 @@ color = "yellow"
 name = "blocked"
 category = "active"
 color = "red"
+
+[[status]]
+name = "review"
+label = "in review"
+category = "active"
+color = "magenta"
 
 [[status]]
 name = "done"
@@ -122,23 +146,83 @@ description = "Rough size, not an estimate"
 
 [[field]]
 name = "area"
-kind = "text"
+kind = "enum"
+values = [
+  "nav",        # the sidebar: layouts, spaces, agents
+  "layout",     # named multi-pane arrangements, and the split tree under them
+  "mux",        # panes, splits, focus, scrollback
+  "pty",        # the process end: spawn, resize, signals, terminal emulation
+  "agents",     # detecting coding agents and reading their lifecycle
+  "naming",     # the namesync policy
+  "git",        # branches, worktrees, repository state
+  "server",     # the daemon, detach, persistence
+  "api",        # the socket protocol and the dirk CLI that speaks it
+  "config",     # config.toml, keybindings, themes
+  "chrome",     # the rail and everything drawn that is not a pane or the nav
+  "perf",
+  "docs",
+  "packaging",
+]
+column = true
 description = "Subsystem this touches"
 
 # ─── Milestones ──────────────────────────────────────────────────────────────
 # Sections of the rendered roadmap, in due-date order.
 
+# The order is a dependency order, not a wish list. Each milestone is the thing
+# that has to be true before the next one is worth starting.
+
 [[milestone]]
 name = "v0.1"
-title = "First usable version"
-due = "2026-12-01"
-description = "Enough to dogfood in a real project."
+title = "It runs"
+due = "2026-09-06"
+description = """
+Panes on a pty, a clickable sidebar, a rail, and naming. Single process:
+closing the terminal ends the session. Shipped."""
+
+[[milestone]]
+name = "v0.2"
+title = "The nav"
+due = "2026-10-15"
+description = """
+The sidebar becomes the product. Three sections — layouts, spaces, agents — with
+two-line rows carrying project, worktree, branch and intent. Static layouts, and
+the split tree they need underneath. This is the milestone dirk is for."""
+
+[[milestone]]
+name = "v0.3"
+title = "It knows what the agents are doing"
+due = "2026-11-15"
+description = """
+Real agent detection and real lifecycle states, so `blocked` — the only state
+waiting on a human — is shown rather than guessed. Attention routing and
+notifications on top of it."""
+
+[[milestone]]
+name = "v0.4"
+title = "Sessions that outlive their terminal"
+due = "2027-01-15"
+description = """
+A daemon, detach and reattach, persistence across restarts, and a socket API
+with a CLI so an agent inside a pane can drive dirk. The milestone that lets
+dirk replace herdr rather than sit beside it."""
+
+[[milestone]]
+name = "v0.5"
+title = "A multiplexer you would not miss tmux from"
+due = "2027-02-15"
+description = """
+Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
+and configurable keys. The unglamorous half, and the half that decides whether
+this is usable all day."""
 
 [[milestone]]
 name = "v1.0"
-title = "Stable release"
-due = "2027-03-01"
-description = "Documented, tested, and safe to depend on."
+title = "Production"
+due = "2027-04-01"
+description = """
+Documented, packaged, hardened and fast. Safe for someone who is not the author
+to depend on."""
 
 [[milestone]]
 name = "later"
@@ -159,6 +243,18 @@ name = "next"
 description = "Planned work for the nearest milestone"
 filter = "status=planned"
 sort = "priority,milestone"
+
+[[view]]
+name = "nav"
+description = "The sidebar, which is the point of the whole project"
+filter = "area=nav,category!=done"
+sort = "priority,id"
+
+[[view]]
+name = "blockers"
+description = "Everything that would hold a release"
+filter = "priority=p0,category!=done"
+sort = "milestone,id"
 
 [[view]]
 name = "triage"

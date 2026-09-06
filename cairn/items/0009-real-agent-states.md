@@ -2,13 +2,20 @@
 id: 9
 title: Real agent states
 type: feature
-status: backlog
-milestone: v1.0
+status: dropped
+milestone: v0.3
 created: 2026-09-06
 updated: 2026-09-06
 priority: p0
-area: naming
+area: agents
 ---
+
+## Superseded
+
+Split into three items that say what this one gestured at: 0030 detects the
+agent, 0031 gives it real lifecycle states including the seen rule, and 0032
+makes the rail counts mean something. Dropped rather than closed, because
+nothing was built for it.
 
 ## Problem
 The sidebar's state glyph is currently inferred from whether a pane has ever

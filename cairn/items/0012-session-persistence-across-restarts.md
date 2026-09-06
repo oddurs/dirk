@@ -3,7 +3,9 @@ id: 12
 title: Session persistence across restarts
 type: feature
 status: backlog
-milestone: v1.0
+milestone: v0.4
+depends_on:
+- 7
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1

@@ -3,7 +3,7 @@ id: 8
 title: Scrollback and copy mode
 type: feature
 status: backlog
-milestone: v1.0
+milestone: v0.5
 created: 2026-09-06
 updated: 2026-09-06
 priority: p0

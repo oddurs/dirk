@@ -2,12 +2,12 @@
 id: 10
 title: Git branch and worktree awareness
 type: feature
-status: backlog
-milestone: v0.1
+status: planned
+milestone: v0.2
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1
-area: naming
+area: git
 ---
 
 ## Problem

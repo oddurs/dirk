@@ -175,13 +175,34 @@ It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE.
 
+## Where this is going
+
+The sidebar is the product, and v0.1 has a sketch of it. The roadmap is
+[ROADMAP.md](ROADMAP.md), tracked with [cairn](https://github.com/oddurs/cairn);
+`cairn next` says what is startable, `cairn show <id>` has the reasoning.
+
+| | | |
+| --- | --- | --- |
+| **v0.1** | It runs | panes on a pty, a clickable sidebar, a rail, naming |
+| **v0.2** | The nav | three sections — layouts, spaces, agents — two-line rows carrying project, worktree, branch and intent, and static layouts with a split tree under them |
+| **v0.3** | It knows what the agents are doing | real detection and real lifecycle states, so `blocked` is shown rather than guessed; attention routing and notifications |
+| **v0.4** | Sessions that outlive their terminal | a daemon, detach and reattach, persistence, and a socket API with a CLI so an agent inside a pane can drive dirk |
+| **v0.5** | A multiplexer you would not miss tmux from | scrollback, copy mode, search, tabs, zoom, a command palette, configurable keys |
+| **v1.0** | Production | documented, packaged, hardened, and measured |
+
+The milestones are a dependency order rather than a wish list. Layouts need a
+split tree; the API needs a daemon; ordering agents by attention is a re-sort of
+a guess until the states are real.
+
 ## Status
 
 v0.1 is a single process. Close the terminal and the work goes with it, so
-[herdr](https://herdr.dev) stays installed for anything long-running. Detach and
-reattach is [item 0007](cairn/items); the roadmap is in
-[ROADMAP.md](ROADMAP.md), managed with [cairn](https://github.com/oddurs/cairn).
+[herdr](https://herdr.dev) stays installed for anything long-running — that is
+item `0007`, and the whole of v0.4.
 
-The other honest gap: the sidebar's state glyph is inferred from whether a pane
-has ever published a title, so `blocked` — the one state that is waiting on you
-— is never actually shown. That is item 0009.
+Two other gaps worth naming rather than burying. The state glyph beside a
+workspace is inferred from whether its pane has ever published a title, so
+everything that has looks like it is working and `blocked` is never shown
+(`0030`, `0031`). And the section above the project tree lists single programs,
+where it should list layouts — named multi-pane arrangements, of which the
+author's dashboard is one (`0022`).

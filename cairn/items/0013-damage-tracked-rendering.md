@@ -7,7 +7,7 @@ milestone: v1.0
 created: 2026-09-06
 updated: 2026-09-06
 priority: p2
-area: ui
+area: perf
 ---
 
 ## Problem
