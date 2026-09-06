@@ -35,10 +35,16 @@ the opposite end: the sidebar is the product, and the panes hang off it.
 browser. A project appears once it has a workspace, and disappears when its last
 one closes. `o` opens something new.
 
-**Pages are not workspaces.** ptop, lazygit and a cairn board are singletons
-with no project: there is one of each, they sit above the rule, and they are
-spawned the first time you open one rather than all running in the background so
-that one of them can occasionally be glanced at.
+**Layouts are not workspaces — except that they are.** A layout is a named
+arrangement of programs: one system monitor, one dashboard. There is one of
+each, they sit above the rule, and they are built the first time you open one
+rather than all running in the background so that one of them can occasionally
+be glanced at.
+
+Structurally a layout *is* a workspace — panes, a split tree, a focused pane and
+a name is the whole of one — so there is no second code path for them. A
+single-program layout and a five-pane dashboard differ only in how many leaves
+they have.
 
 **Names come from the work, not from you.** A coding agent already publishes a
 summary of what it is doing as its terminal title. dirk reads it and names the
@@ -93,17 +99,36 @@ shell         = ""           # empty means $SHELL
 mark = "◆"
 name = "dirk"
 
-# A page whose program is not on PATH is dropped at startup rather than left to
-# fail on first open.
-[[pages]]
-title   = "ptop"
+# A layout whose programs are not all on PATH is dropped at startup: an entry
+# that could only ever show `command not found` is worse than no entry.
+[[layout]]
+name    = "ptop"
 command = ["ptop"]
 key     = "1"
 
-[[pages]]
-title   = "cairn"
-command = ["cairn", "board"]
-key     = "3"
+# Panes nest. `size` is lines or columns ("5"), a share ("30%"), or absent to
+# take an even part of what is left.
+[[layout]]
+name  = "Overview"
+key   = "4"
+split = "rows"
+
+  [[layout.pane]]
+  title   = "brief"
+  command = ["smali", "brief"]
+  size    = "6"
+
+  [[layout.pane]]
+  split = "cols"
+
+    [[layout.pane.pane]]
+    title   = "ptop"
+    command = ["ptop"]
+
+    [[layout.pane.pane]]
+    title   = "cairn"
+    command = ["cairn", "board"]
+    size    = "30%"
 
 [naming]
 enabled          = true
@@ -184,7 +209,7 @@ The sidebar is the product, and v0.1 has a sketch of it. The roadmap is
 | | | |
 | --- | --- | --- |
 | **v0.1** | It runs | panes on a pty, a clickable sidebar, a rail, naming |
-| **v0.2** | The nav | three sections — layouts, spaces, agents — two-line rows carrying project, worktree, branch and intent, and static layouts with a split tree under them |
+| **v0.2** | The nav | three sections — layouts, spaces, agents — two-line rows carrying project, worktree, branch and intent, and static layouts with a split tree under them (`0011`, `0022` done) |
 | **v0.3** | It knows what the agents are doing | real detection and real lifecycle states, so `blocked` is shown rather than guessed; attention routing and notifications |
 | **v0.4** | Sessions that outlive their terminal | a daemon, detach and reattach, persistence, and a socket API with a CLI so an agent inside a pane can drive dirk |
 | **v0.5** | A multiplexer you would not miss tmux from | scrollback, copy mode, search, tabs, zoom, a command palette, configurable keys |
@@ -203,6 +228,6 @@ item `0007`, and the whole of v0.4.
 Two other gaps worth naming rather than burying. The state glyph beside a
 workspace is inferred from whether its pane has ever published a title, so
 everything that has looks like it is working and `blocked` is never shown
-(`0030`, `0031`). And the section above the project tree lists single programs,
-where it should list layouts — named multi-pane arrangements, of which the
-author's dashboard is one (`0022`).
+(`0030`, `0031`). And a layout pane whose program exits still vanishes instead
+of holding its output, which makes a print-and-exit panel like `cairn board`
+the panel dirk is least able to show (`0049`).

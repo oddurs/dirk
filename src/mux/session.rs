@@ -15,19 +15,25 @@
 // You should have received a copy of the GNU General Public License along with
 // this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The tree: projects → workspaces → panes, plus the static pages beside it.
+//! The tree: projects → workspaces → panes, plus the layouts beside it.
 //!
 //! Two things live in the sidebar and they are not the same kind of thing.
-//! **Pages** are singletons with no project — one ptop, one lazygit, opened on
-//! demand and kept. **Projects** are directories you work in, and a workspace
-//! is one unit of work inside one of them. That distinction is why pages sit
-//! above the tree rather than as a fourth level inside it.
+//! **Layouts** are named arrangements with no project — one system monitor, one
+//! dashboard — opened on demand and kept. **Projects** are directories you work
+//! in, and a workspace is one unit of work inside one of them. That distinction
+//! is why layouts sit above the tree rather than as a fourth level inside it.
+//!
+//! A layout *is* a workspace: panes, a split tree, a focused pane and a name is
+//! the whole of one. So there is no separate code path for them, and the only
+//! difference is where they are listed and that naming leaves their names
+//! alone.
 //!
 //! A project appears here only once it has a workspace. A sidebar listing every
 //! directory under `~/Code` would be a file browser; this is a list of what is
 //! actually open, which is a different and much shorter list.
 
-use crate::config::{Config, PageDef};
+use crate::config::{Config, LayoutDef};
+use crate::mux::layout;
 use crate::mux::tree::{Dir, Node};
 use crate::mux::{Ev, Pane, PaneId};
 use ratatui::layout::Rect;
@@ -107,22 +113,22 @@ pub struct Project {
     pub expanded: bool,
 }
 
-pub struct Page {
-    pub def: PageDef,
-    /// Spawned on first open, not at startup: three programs running all day so
-    /// that one of them can be glanced at is the cost smali's README already
-    /// complained about.
-    pub pane: Option<Pane>,
+pub struct Layout {
+    pub def: LayoutDef,
+    /// Built on first open, not at startup: five programs running all day so
+    /// that one of them can be glanced at occasionally is a cost with nothing
+    /// on the other side of it.
+    pub ws: Option<Workspace>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    Page(usize),
+    Layout(usize),
     Ws { p: usize, w: usize },
 }
 
 pub struct Session {
-    pub pages: Vec<Page>,
+    pub layouts: Vec<Layout>,
     pub projects: Vec<Project>,
     pub focus: Focus,
     pub shell: String,
@@ -134,11 +140,11 @@ pub struct Session {
 impl Session {
     pub fn new(cfg: &Config, tx: Sender<Ev>) -> Self {
         Self {
-            pages: cfg
-                .pages
+            layouts: cfg
+                .layouts
                 .iter()
                 .cloned()
-                .map(|def| Page { def, pane: None })
+                .map(|def| Layout { def, ws: None })
                 .collect(),
             projects: Vec::new(),
             focus: Focus::Ws { p: 0, w: 0 },
@@ -253,67 +259,115 @@ impl Session {
     pub fn focused_workspace_mut(&mut self) -> Option<&mut Workspace> {
         match self.focus {
             Focus::Ws { p, w } => self.workspace_mut(p, w),
-            Focus::Page(_) => None,
+            Focus::Layout(_) => None,
         }
     }
 
     /// The pane keystrokes go to.
     pub fn active_pane_mut(&mut self) -> Option<&mut Pane> {
         match self.focus {
-            Focus::Page(i) => self.pages.get_mut(i)?.pane.as_mut(),
+            Focus::Layout(i) => self.layouts.get_mut(i)?.ws.as_mut()?.active_pane_mut(),
             Focus::Ws { p, w } => self.workspace_mut(p, w)?.active_pane_mut(),
         }
     }
     pub fn active_pane(&self) -> Option<&Pane> {
         match self.focus {
-            Focus::Page(i) => self.pages.get(i)?.pane.as_ref(),
+            Focus::Layout(i) => self.layouts.get(i)?.ws.as_ref()?.active_pane(),
             Focus::Ws { p, w } => self.workspace(p, w)?.active_pane(),
         }
     }
 
-    // ── Pages ───────────────────────────────────────────────────────────
+    // ── Layouts ─────────────────────────────────────────────────────────
 
-    /// Focus a page, spawning it if this is the first time.
-    pub fn open_page(&mut self, i: usize, rows: u16, cols: u16) {
-        let Some(page) = self.pages.get(i) else {
+    /// Focus a layout, building it if this is the first time.
+    ///
+    /// Built in three passes, because ids and geometry depend on each other:
+    /// plan the tree, ask it where each pane will go, then spawn each program
+    /// at the size it is actually getting. Spawning first and resizing after
+    /// would show every program in the layout one redraw at the wrong size,
+    /// which for a full-screen program is a visible flash.
+    pub fn open_layout(&mut self, i: usize, area: Rect) {
+        if self.layouts.get(i).is_none() {
             return;
-        };
-        if page.pane.is_none() {
-            let argv = page.def.command.clone();
-            let id = self.id();
+        }
+        if self.layouts[i].ws.is_none() {
+            let def = self.layouts[i].def.clone();
+            let base = self.next_id + 1;
+            let (tree, leaves) = layout::plan(&def, base);
+            self.next_id += leaves.len() as u64;
+
+            let rects = tree.rects(area);
             let cwd = crate::config::home();
-            match Pane::spawn(
-                id,
-                &argv,
-                &cwd,
-                rows,
-                cols,
-                self.scrollback,
-                self.tx.clone(),
-            ) {
-                Ok(p) => self.pages[i].pane = Some(p),
-                Err(e) => {
-                    eprintln!("dirk: spawn {}: {e}", argv.join(" "));
-                    return;
+            let mut panes: Vec<Pane> = Vec::new();
+
+            for (id, pane_def) in leaves {
+                let r = rects
+                    .iter()
+                    .find(|(x, _)| *x == id)
+                    .map(|(_, r)| *r)
+                    .unwrap_or(area);
+                let label = (!pane_def.title.is_empty()).then(|| pane_def.title.clone());
+                // The label takes the pane's top row, so the program gets what
+                // is left rather than what the tree allotted.
+                let inner = content_of(label.is_some(), r);
+
+                match Pane::spawn(
+                    id,
+                    &pane_def.command,
+                    &cwd,
+                    inner.height,
+                    inner.width,
+                    self.scrollback,
+                    self.tx.clone(),
+                ) {
+                    Ok(mut p) => {
+                        p.label = label;
+                        panes.push(p);
+                    }
+                    Err(e) => {
+                        // All or nothing: half a dashboard is not a dashboard,
+                        // and the panes already started would be orphans.
+                        eprintln!("dirk: {}: {e}", pane_def.command.join(" "));
+                        return;
+                    }
                 }
             }
+
+            let Some(&first) = tree.leaves().first() else {
+                return;
+            };
+            self.layouts[i].ws = Some(Workspace {
+                label: def.name.clone(),
+                panes,
+                tree,
+                focus: first,
+                naming: NameState::default(),
+            });
         }
-        self.focus = Focus::Page(i);
+        self.focus = Focus::Layout(i);
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────
 
     /// A child exited. Drop its pane, and collapse anything left empty.
     ///
-    /// A page whose program exits goes back to unspawned rather than being
-    /// removed: `q` in lazygit should return you to the tree and leave the
-    /// entry there to be opened again.
     pub fn reap(&mut self, id: PaneId) {
-        for (i, page) in self.pages.iter_mut().enumerate() {
-            if page.pane.as_ref().is_some_and(|p| p.id == id) {
-                page.pane = None;
-                if self.focus == Focus::Page(i) {
-                    self.focus = self.first_workspace().unwrap_or(Focus::Page(i));
+        for i in 0..self.layouts.len() {
+            let Some(ws) = self.layouts[i].ws.as_mut() else {
+                continue;
+            };
+            if let Some(k) = ws.panes.iter().position(|p| p.id == id) {
+                ws.panes.remove(k);
+                let empty = ws.tree.remove(id);
+                ws.refocus();
+                // A layout whose last pane exits goes back to unbuilt rather
+                // than being removed: quitting lazygit should return you to the
+                // tree and leave the entry there to be opened again.
+                if empty || ws.panes.is_empty() {
+                    self.layouts[i].ws = None;
+                    if self.focus == Focus::Layout(i) {
+                        self.focus = self.first_workspace().unwrap_or(Focus::Layout(i));
+                    }
                 }
                 return;
             }
@@ -351,18 +405,18 @@ impl Session {
     /// Put focus somewhere that exists.
     pub fn refocus(&mut self) {
         let ok = match self.focus {
-            Focus::Page(i) => self.pages.get(i).is_some_and(|p| p.pane.is_some()),
+            Focus::Layout(i) => self.layouts.get(i).is_some_and(|l| l.ws.is_some()),
             Focus::Ws { p, w } => self.workspace(p, w).is_some(),
         };
         if !ok {
-            self.focus = self.first_workspace().unwrap_or(Focus::Page(0));
+            self.focus = self.first_workspace().unwrap_or(Focus::Layout(0));
         }
     }
 
     /// True when there is nothing left to show and dirk should exit.
     pub fn is_empty(&self) -> bool {
         self.projects.iter().all(|p| p.workspaces.is_empty())
-            && self.pages.iter().all(|p| p.pane.is_none())
+            && self.layouts.iter().all(|l| l.ws.is_none())
     }
 
     /// Close the focused pane. Killing the child produces an `Exited` event,
@@ -400,7 +454,7 @@ impl Session {
         }
         let cur = match self.focus {
             Focus::Ws { p, w } => flat.iter().position(|&x| x == (p, w)).unwrap_or(0) as isize,
-            Focus::Page(_) => -1,
+            Focus::Layout(_) => -1,
         };
         let n = flat.len() as isize;
         let next = (cur + delta).rem_euclid(n) as usize;
@@ -413,21 +467,42 @@ impl Session {
     /// shown, so switching workspaces does not resize a tree of sleeping shells.
     pub fn resize_visible(&mut self, area: Rect) {
         match self.focus {
-            Focus::Page(i) => {
-                if let Some(pane) = self.pages.get_mut(i).and_then(|p| p.pane.as_mut()) {
-                    pane.resize(area.height, area.width);
+            Focus::Layout(i) => {
+                if let Some(ws) = self.layouts.get_mut(i).and_then(|l| l.ws.as_mut()) {
+                    resize_tree(ws, area);
                 }
             }
             Focus::Ws { p, w } => {
                 let Some(ws) = self.workspace_mut(p, w) else {
                     return;
                 };
-                for (id, r) in ws.tree.rects(area) {
-                    if let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) {
-                        pane.resize(r.height, r.width);
-                    }
-                }
+                resize_tree(ws, area);
             }
+        }
+    }
+}
+
+/// The part of a pane's rectangle that carries terminal content.
+///
+/// A labelled pane gives its top row to the label, so this is the one place
+/// that arithmetic lives — drawing and resizing must agree about it or the
+/// program inside is told a size it does not have.
+pub fn content_of(labelled: bool, r: Rect) -> Rect {
+    if !labelled || r.height < 2 {
+        return r;
+    }
+    Rect {
+        y: r.y + 1,
+        height: r.height - 1,
+        ..r
+    }
+}
+
+fn resize_tree(ws: &mut Workspace, area: Rect) {
+    for (id, r) in ws.tree.rects(area) {
+        if let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) {
+            let inner = content_of(pane.label.is_some(), r);
+            pane.resize(inner.height, inner.width);
         }
     }
 }

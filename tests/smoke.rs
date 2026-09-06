@@ -30,6 +30,13 @@ use std::time::{Duration, Instant};
 const ROWS: u16 = 24;
 const COLS: u16 = 80;
 
+/// Unique per config directory, so concurrent tests do not share one.
+fn next_config_id() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// The pty is drained on its own thread, always.
 ///
 /// This is not tidiness. A pty buffer is a few kilobytes, and dirk redraws on
@@ -45,6 +52,25 @@ struct Harness {
 
 impl Harness {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// Start dirk against a written configuration file.
+    ///
+    /// Each call gets its own config directory, so a test that needs a layout
+    /// does not change what every other test sees.
+    fn start_with_config(config: &str) -> Self {
+        let dir = std::env::temp_dir().join("dirk-smoke").join(format!(
+            "{}-{}",
+            std::process::id(),
+            next_config_id()
+        ));
+        std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+        std::fs::write(dir.join("dirk").join("config.toml"), config).expect("config");
+        Self::start_with(Some(dir))
+    }
+
+    fn start_with(config_home: Option<std::path::PathBuf>) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -60,9 +86,12 @@ impl Harness {
         // A predictable, quiet shell: an interactive zsh would paint a prompt
         // and a theme over the assertions.
         cmd.env("SHELL", "/bin/sh");
-        // Keep config lookup inside the repo so the test never depends on what
-        // happens to be in the real ~/.config.
-        cmd.env("XDG_CONFIG_HOME", env!("CARGO_MANIFEST_DIR"));
+        // Keep config lookup away from the real ~/.config, so a test never
+        // depends on what happens to be in the author's own configuration.
+        cmd.env(
+            "XDG_CONFIG_HOME",
+            config_home.unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+        );
 
         let child = pair.slave.spawn_command(cmd).expect("spawn dirk");
         drop(pair.slave);
@@ -320,6 +349,82 @@ fn closing_a_split_pane_gives_the_whole_width_back() {
             .iter()
             .any(|r| r.contains(&marker))),
         "the surviving pane did not get the full width back\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_layout_opens_every_pane_it_declares() {
+    // Two panes stacked, each labelled. This exercises the whole path:
+    // parsing the layout, planning the tree, spawning at the planned size, and
+    // drawing the label rule that says which panel is which.
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Test"
+key = "9"
+split = "rows"
+
+[[layout.pane]]
+title = "upper"
+command = ["/bin/sh"]
+
+[[layout.pane]]
+title = "lower"
+command = ["/bin/sh"]
+"#,
+    );
+    assert!(
+        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
+        "never started"
+    );
+
+    // The configured layout replaces the built-in ones, so it is the only entry
+    // in the section above the tree.
+    assert!(
+        h.wait_for("Test", Duration::from_secs(5)),
+        "layout not listed\n{}",
+        h.drawn()
+    );
+
+    h.prefix(b"9");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            h.find("upper").is_some() && h.find("lower").is_some()
+        }),
+        "both panes should be labelled\n{}",
+        h.drawn()
+    );
+
+    let (upper, _) = h.find("upper").expect("upper");
+    let (lower, _) = h.find("lower").expect("lower");
+    assert!(
+        upper < lower,
+        "split rows should stack upper above lower\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_layout_whose_program_is_missing_is_not_offered() {
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Ghost"
+key = "9"
+command = ["definitely-not-installed-anywhere"]
+"#,
+    );
+    assert!(
+        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
+        "never started"
+    );
+
+    // An entry that could only ever show `command not found` is worse than no
+    // entry, so it is dropped at startup rather than left to fail on first use.
+    assert!(
+        h.find("Ghost").is_none(),
+        "a layout that cannot run was listed\n{}",
         h.drawn()
     );
 }

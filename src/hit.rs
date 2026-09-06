@@ -29,7 +29,7 @@ use ratatui::layout::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    Page(usize),
+    Layout(usize),
     /// The disclosure triangle and the project name both fold the project.
     ProjectFold(usize),
     Workspace {

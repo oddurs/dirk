@@ -74,7 +74,7 @@ use ui::picker::Picker;
 
 const USAGE: &str = "\
 Usage: dirk [OPTION]...
-Run a terminal multiplexer with a clickable project tree, static pages, and
+Run a terminal multiplexer with a clickable project tree, static layouts, and
 workspaces named from what the program inside them says it is doing.
 
   -h, --help     display this help and exit
@@ -341,8 +341,8 @@ impl App {
     /// The rects of the panes currently on screen, in the order they are drawn.
     fn visible_rects(&self) -> Vec<Rect> {
         match self.session.focus {
-            Focus::Page(i) => match self.session.pages.get(i).and_then(|p| p.pane.as_ref()) {
-                Some(_) => vec![self.content],
+            Focus::Layout(i) => match self.session.layouts.get(i).and_then(|l| l.ws.as_ref()) {
+                Some(ws) => ws.rects(self.content).into_iter().map(|(_, r)| r).collect(),
                 None => Vec::new(),
             },
             Focus::Ws { p, w } => match self.session.workspace(p, w) {
@@ -354,7 +354,11 @@ impl App {
 
     fn visible_pane_mut(&mut self, index: usize) -> Option<&mut Pane> {
         match self.session.focus {
-            Focus::Page(i) => self.session.pages.get_mut(i)?.pane.as_mut(),
+            Focus::Layout(i) => {
+                let ws = self.session.layouts.get_mut(i)?.ws.as_mut()?;
+                let id = *ws.tree.leaves().get(index)?;
+                ws.pane_mut(id)
+            }
             Focus::Ws { p, w } => {
                 let ws = self.session.workspace_mut(p, w)?;
                 let id = *ws.tree.leaves().get(index)?;
@@ -416,7 +420,11 @@ impl App {
     fn focused_rect(&self) -> Option<Rect> {
         let rects = self.visible_rects();
         match self.session.focus {
-            Focus::Page(_) => rects.first().copied(),
+            Focus::Layout(i) => {
+                let ws = self.session.layouts.get(i)?.ws.as_ref()?;
+                let at = ws.tree.leaves().iter().position(|&id| id == ws.focus)?;
+                rects.get(at).copied()
+            }
             Focus::Ws { p, w } => {
                 let ws = self.session.workspace(p, w)?;
                 let at = ws.tree.leaves().iter().position(|&id| id == ws.focus)?;
@@ -487,8 +495,13 @@ impl App {
             KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.session.step_workspace(1),
             KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => self.session.step_workspace(-1),
             KeyCode::Char(c) => {
-                if let Some(i) = self.session.pages.iter().position(|p| p.def.key == Some(c)) {
-                    self.session.open_page(i, rows, cols);
+                if let Some(i) = self
+                    .session
+                    .layouts
+                    .iter()
+                    .position(|l| l.def.key == Some(c))
+                {
+                    self.session.open_layout(i, self.content);
                 }
             }
             _ => {}
@@ -551,7 +564,7 @@ impl App {
 
         if let MouseEventKind::Down(MouseButton::Left) = m.kind {
             match target {
-                Some(Target::Page(i)) => return self.session.open_page(i, rows, cols),
+                Some(Target::Layout(i)) => return self.session.open_layout(i, self.content),
                 Some(Target::ProjectFold(p)) => {
                     if let Some(proj) = self.session.projects.get_mut(p) {
                         proj.expanded = !proj.expanded;
@@ -624,35 +637,56 @@ impl App {
 
 /// Draw whatever the focus points at. Free function so the session can be
 /// borrowed while the hit map is written.
+///
+/// A layout and a project workspace draw identically, because a layout is a
+/// workspace. The only thing this function decides is which one.
 fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitMap) {
-    let rects = match session.focus {
-        Focus::Page(i) => match session.pages.get(i).and_then(|p| p.pane.as_ref()) {
-            Some(pane) => {
-                if let Ok(t) = pane.term.lock() {
-                    ui::pane::blit(t.screen(), area, buf, false);
-                }
-                hits.push(area, Target::Pane { index: 0 });
-                return;
-            }
-            None => return empty(buf, area, "page is not running"),
+    let ws = match session.focus {
+        Focus::Layout(i) => match session.layouts.get(i).and_then(|l| l.ws.as_ref()) {
+            Some(ws) => ws,
+            None => return empty(buf, area, "layout is not open"),
         },
-        Focus::Ws { p, w } => {
-            let Some(ws) = session.workspace(p, w) else {
-                return empty(buf, area, "nothing open — press ctrl-space o");
-            };
-            let placed = ws.rects(area);
-            for (i, (id, r)) in placed.iter().enumerate() {
-                if let Some(pane) = ws.pane(*id)
-                    && let Ok(t) = pane.term.lock()
-                {
-                    ui::pane::blit(t.screen(), *r, buf, *id != ws.focus);
-                }
-                hits.push(*r, Target::Pane { index: i });
-            }
-            placed.into_iter().map(|(_, r)| r).collect::<Vec<_>>()
-        }
+        Focus::Ws { p, w } => match session.workspace(p, w) {
+            Some(ws) => ws,
+            None => return empty(buf, area, "nothing open — press ctrl-space o"),
+        },
     };
-    let _ = rects;
+
+    for (i, (id, r)) in ws.rects(area).into_iter().enumerate() {
+        let Some(pane) = ws.pane(id) else { continue };
+
+        // A labelled pane gives its top row to a rule carrying the label, which
+        // is how a five-pane dashboard says which panel is which.
+        let inner = mux::session::content_of(pane.label.is_some(), r);
+        if let Some(label) = &pane.label {
+            rule(buf, Rect { height: 1, ..r }, label);
+        }
+        if let Ok(t) = pane.term.lock() {
+            ui::pane::blit(t.screen(), inner, buf, id != ws.focus);
+        }
+        hits.push(r, Target::Pane { index: i });
+    }
+}
+
+/// `─ brief ─────────────`. A rule rather than a border: three sides of a box
+/// only repeat what the neighbouring pane's own edge already says.
+fn rule(buf: &mut Buffer, area: Rect, label: &str) {
+    ui::fill(buf, area, THEME.panel());
+    let mut x = area.x;
+    x += ui::write_str(buf, x, area.y, "─ ", THEME.rule_strong(), area.width);
+    let left = area.width.saturating_sub(x - area.x).saturating_sub(2) as usize;
+    x += ui::write_str(
+        buf,
+        x,
+        area.y,
+        &ui::elide(label, left),
+        THEME.title(),
+        area.width,
+    );
+    x += ui::write_str(buf, x, area.y, " ", THEME.rule_strong(), area.width);
+    for c in x..area.right() {
+        ui::write_str(buf, c, area.y, "─", THEME.rule_strong(), 1);
+    }
 }
 
 fn empty(buf: &mut Buffer, area: Rect, msg: &str) {

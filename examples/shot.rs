@@ -41,6 +41,12 @@ fn main() {
     cmd.cwd(env!("CARGO_MANIFEST_DIR"));
     cmd.env("TERM", "xterm-256color");
     cmd.env("SHELL", "/bin/sh");
+    // `DIRK_SHOT_CONFIG=<dir> cargo run --example shot` points dirk at a
+    // configuration directory of your own, which is how a layout gets looked at
+    // without installing it.
+    if let Ok(dir) = std::env::var("DIRK_SHOT_CONFIG") {
+        cmd.env("XDG_CONFIG_HOME", dir);
+    }
     let mut child = pair.slave.spawn_command(cmd).unwrap();
     drop(pair.slave);
 
@@ -87,6 +93,11 @@ fn main() {
 
     writer.write_all(&prefix(b"|")).unwrap();
     std::thread::sleep(Duration::from_millis(700));
+
+    if std::env::var("DIRK_SHOT_LAYOUT").is_ok() {
+        writer.write_all(&prefix(b"1")).unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+    }
 
     for row in 0..rows {
         let s = screen.lock().unwrap();

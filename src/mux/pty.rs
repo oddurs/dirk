@@ -57,6 +57,10 @@ pub struct Pane {
     pub id: PaneId,
     pub term: Arc<Mutex<Term>>,
     pub cwd: PathBuf,
+    /// Drawn as a rule above the pane. Set for panes that came from a layout,
+    /// where knowing which panel is which is most of the point; a shell you
+    /// opened yourself needs no caption.
+    pub label: Option<String>,
     pub dead: bool,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
@@ -146,6 +150,7 @@ impl Pane {
             id,
             term,
             cwd: cwd.to_path_buf(),
+            label: None,
             dead: false,
             writer,
             master,
