@@ -17,6 +17,7 @@
 
 //! The multiplexer core: panes, and the tree they hang in.
 
+pub mod layout;
 pub mod pty;
 pub mod session;
 pub mod tree;

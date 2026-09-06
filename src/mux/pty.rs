@@ -57,6 +57,10 @@ pub struct Pane {
     pub id: PaneId,
     pub term: Arc<Mutex<Term>>,
     pub cwd: PathBuf,
+    /// Drawn as a rule above the pane. Set for panes that came from a layout,
+    /// where knowing which panel is which is most of the point; a shell you
+    /// opened yourself needs no caption.
+    pub label: Option<String>,
     pub dead: bool,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
@@ -80,7 +84,11 @@ impl Pane {
         tx: Sender<Ev>,
     ) -> std::io::Result<Self> {
         let (rows, cols) = (rows.max(1), cols.max(1));
-        let program = argv.first().cloned().unwrap_or_default();
+        // Guarded rather than assumed: `argv[1..]` on an empty slice panics, and
+        // a layout pane may legally be written with a title and no command.
+        let Some(program) = argv.first().cloned() else {
+            return Err(std::io::Error::other("no command to run"));
+        };
 
         let PtyPair { slave, master } = native_pty_system()
             .openpty(PtySize {
@@ -146,6 +154,7 @@ impl Pane {
             id,
             term,
             cwd: cwd.to_path_buf(),
+            label: None,
             dead: false,
             writer,
             master,

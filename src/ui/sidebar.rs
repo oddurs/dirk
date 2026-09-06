@@ -15,13 +15,13 @@
 // You should have received a copy of the GNU General Public License along with
 // this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The left sidebar: pages above, the project tree below.
+//! The left sidebar: layouts above, the project tree below.
 //!
-//! Two lists, and keeping them apart is the point. **Pages** are singletons
-//! with no project — one ptop, one lazygit — so they sit above the rule and
-//! never indent. **Projects** are where work happens, and a workspace is one
-//! unit of it, named by `name.rs` from whatever the agent inside says it is
-//! doing.
+//! Two lists, and keeping them apart is the point. **Layouts** are named
+//! arrangements with no project — one system monitor, one dashboard — so they
+//! sit above the rule and never indent. **Projects** are where work happens,
+//! and a workspace is one unit of it, named by `name.rs` from whatever the
+//! agent inside says it is doing.
 //!
 //! A project with one workspace still draws both rows. Collapsing that case
 //! would make the tree change shape as you work in it, and a nav that moves
@@ -57,8 +57,8 @@ pub fn render(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitMap
         height: 1,
     };
 
-    // ── Pages ───────────────────────────────────────────────────────────
-    if !session.pages.is_empty() {
+    // ── Layouts ─────────────────────────────────────────────────────────
+    if !session.layouts.is_empty() {
         y += 1;
         if y >= bottom {
             return;
@@ -71,17 +71,17 @@ pub fn render(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitMap
                 width: w,
                 height: 1,
             },
-            "pages",
+            "layouts",
             THEME.title(),
         );
         y += 1;
 
-        for (i, page) in session.pages.iter().enumerate() {
+        for (i, layout) in session.layouts.iter().enumerate() {
             if y >= bottom {
                 return;
             }
-            let focused = session.focus == Focus::Page(i);
-            let live = page.pane.is_some();
+            let focused = session.focus == Focus::Layout(i);
+            let live = layout.ws.is_some();
 
             if focused {
                 fill(buf, row(y), THEME.selected());
@@ -97,7 +97,7 @@ pub fn render(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitMap
             let mut x = inner.x;
             // The key that jumps here, in the accent, so the column of keys
             // reads as keys rather than as part of the name.
-            if let Some(k) = page.def.key {
+            if let Some(k) = layout.def.key {
                 x += write_str(
                     buf,
                     x,
@@ -107,14 +107,14 @@ pub fn render(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitMap
                     w,
                 );
             }
-            // A dot for a page that is running, so "open" and "not yet
-            // spawned" are distinguishable without a second column.
+            // A dot for a layout that is open, so "running" and "not yet
+            // built" are distinguishable without a second column.
             let dot = if live { "• " } else { "  " };
             x += write_str(buf, x, y, dot, if focused { base } else { THEME.ok() }, w);
             let left = w.saturating_sub(x - inner.x) as usize;
-            write_str(buf, x, y, &elide(&page.def.title, left), base, w);
+            write_str(buf, x, y, &elide(&layout.def.name, left), base, w);
 
-            hits.push(row(y), Target::Page(i));
+            hits.push(row(y), Target::Layout(i));
             y += 1;
         }
     }

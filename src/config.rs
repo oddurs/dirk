@@ -24,17 +24,76 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// A static page: a program dirk keeps one of, above the projects in the
-/// sidebar. Pages are panes like any other — the difference is that there is
-/// exactly one, it is not attached to a project, and it is spawned the first
-/// time you open it rather than at startup.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PageDef {
+/// One pane of a layout: either a program to run, or a split holding more
+/// panes. A node with children ignores its own `command`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PaneDef {
+    /// Shown on the pane's border.
     pub title: String,
     pub command: Vec<String>,
+    /// `"5"` for lines or columns, `"30%"` for a share, empty to take what is
+    /// left. Panes with no size split the remainder evenly.
+    pub size: String,
+    /// How this pane's children divide it: `"cols"` or `"rows"`.
+    pub split: String,
+    pub pane: Vec<PaneDef>,
+}
+
+/// A named arrangement of programs, listed above the projects in the sidebar
+/// and opened as a space of its own.
+///
+/// A layout with a `command` and no `pane` entries is a single-program layout,
+/// which is what the three defaults are. Nothing distinguishes it structurally
+/// from the dashboard except how many leaves it has.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LayoutDef {
+    pub name: String,
     /// Single key that jumps straight here.
-    #[serde(default)]
     pub key: Option<char>,
+    /// Used when there are no children.
+    pub command: Vec<String>,
+    pub split: String,
+    pub pane: Vec<PaneDef>,
+}
+
+impl PaneDef {
+    /// This pane and its descendants, flattened to the ones that actually run
+    /// something.
+    fn leaves(&self) -> Vec<&PaneDef> {
+        if self.pane.is_empty() {
+            return vec![self];
+        }
+        self.pane.iter().flat_map(|p| p.leaves()).collect()
+    }
+}
+
+impl LayoutDef {
+    fn leaves(&self) -> Vec<&PaneDef> {
+        if self.pane.is_empty() {
+            return Vec::new();
+        }
+        self.pane.iter().flat_map(|p| p.leaves()).collect()
+    }
+
+    /// True when this layout can actually be built: every leaf names a program,
+    /// and every one of those is installed.
+    ///
+    /// The first half matters as much as the second. `command` is optional in
+    /// the file, so a pane can be written with a title and nothing to run, and
+    /// a layout that is offered and then cannot start is worse than one that
+    /// was never listed.
+    pub fn runnable(&self) -> bool {
+        let leaves = self.leaves();
+        if leaves.is_empty() {
+            // A single-program layout: the command lives on the layout itself.
+            return self.command.first().is_some_and(|c| on_path(c));
+        }
+        leaves
+            .iter()
+            .all(|l| l.command.first().is_some_and(|c| on_path(c)))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,7 +126,8 @@ pub struct Config {
     pub brand: Brand,
     /// Where `o` looks for projects to open.
     pub projects_root: PathBuf,
-    pub pages: Vec<PageDef>,
+    #[serde(rename = "layout")]
+    pub layouts: Vec<LayoutDef>,
     /// Empty means `$SHELL`.
     pub shell: String,
     pub sidebar_width: u16,
@@ -101,7 +161,7 @@ impl Default for Config {
         Self {
             brand: Brand::default(),
             projects_root: home().join("Code"),
-            pages: default_pages(),
+            layouts: default_layouts(),
             shell: String::new(),
             sidebar_width: 28,
             scrollback: 5000,
@@ -110,26 +170,20 @@ impl Default for Config {
     }
 }
 
-/// The three you asked for. A page whose program is not installed is dropped
-/// at startup rather than left to fail on first open — a menu entry that only
-/// ever shows `command not found` is worse than no entry.
-fn default_pages() -> Vec<PageDef> {
+/// Three single-program layouts. One whose program is not installed is dropped
+/// at startup rather than left to fail on first open — an entry that only ever
+/// shows `command not found` is worse than no entry.
+fn default_layouts() -> Vec<LayoutDef> {
+    let one = |name: &str, key: char, command: &[&str]| LayoutDef {
+        name: name.into(),
+        key: Some(key),
+        command: command.iter().map(|s| (*s).to_string()).collect(),
+        ..LayoutDef::default()
+    };
     vec![
-        PageDef {
-            title: "ptop".into(),
-            command: vec!["ptop".into()],
-            key: Some('1'),
-        },
-        PageDef {
-            title: "lazygit".into(),
-            command: vec!["lazygit".into()],
-            key: Some('2'),
-        },
-        PageDef {
-            title: "cairn".into(),
-            command: vec!["cairn".into(), "board".into()],
-            key: Some('3'),
-        },
+        one("ptop", '1', &["ptop"]),
+        one("lazygit", '2', &["lazygit"]),
+        one("cairn", '3', &["cairn", "board"]),
     ]
 }
 
@@ -155,8 +209,18 @@ impl Config {
             }),
             Err(_) => Config::default(),
         };
-        cfg.pages
-            .retain(|p| p.command.first().is_some_and(|c| on_path(c)));
+        // Reported here, before the terminal is taken over, because a message
+        // printed after that is written onto the alternate screen and vanishes
+        // with it.
+        for l in &cfg.layouts {
+            for bad in crate::mux::layout::bad_sizes(l) {
+                eprintln!(
+                    "dirk: layout {}: bad size {bad:?}; using an even share",
+                    l.name
+                );
+            }
+        }
+        cfg.layouts.retain(|l| l.runnable());
         cfg
     }
 
