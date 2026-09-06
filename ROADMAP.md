@@ -23,7 +23,7 @@ closing the terminal ends the session. Shipped.
 
 ## v0.2 — The nav
 
-`··········` 0% · 0 of 14 done · due 2026-10-15
+`#·········` 7% · 1 of 14 done · due 2026-10-15
 
 The sidebar becomes the product. Three sections — layouts, spaces, agents — with
 two-line rows carrying project, worktree, branch and intent. Static layouts, and
@@ -42,12 +42,15 @@ the split tree they need underneath. This is the milestone dirk is for.
 ### planned
 
 - [ ] `0010` Git branch and worktree awareness <sup>feature · p1 · git</sup>
-- [ ] `0011` Nested splits <sup>feature · p0 · layout</sup>
 - [ ] `0019` Sidebar: three sections — layouts, spaces, agents <sup>feature · p0 · nav</sup>
 - [ ] `0020` Two-line rows: identity above, intent below <sup>feature · p0 · nav</sup>
 - [ ] `0021` The agents section, ordered by attention <sup>feature · p0 · nav</sup>
 - [ ] `0022` Static layouts, declared in configuration <sup>feature · p0 · layout</sup>
 - [ ] `0026` Sidebar scrolling and keyboard selection <sup>feature · p0 · nav</sup>
+
+### done
+
+- [x] `0011` Nested splits <sup>feature · p0 · layout</sup>
 
 ## v0.3 — It knows what the agents are doing
 

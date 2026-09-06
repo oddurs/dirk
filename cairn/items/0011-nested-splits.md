@@ -2,7 +2,7 @@
 id: 11
 title: Nested splits
 type: feature
-status: doing
+status: done
 milestone: v0.2
 assignee: oddurs
 created: 2026-09-06
