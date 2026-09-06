@@ -68,6 +68,10 @@ fn main() {
     std::thread::sleep(Duration::from_millis(400));
     writer.write_all(&[0]).unwrap();
     writer.write_all(b"n").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    // A split, so the shot shows the layout tree doing its job.
+    writer.write_all(&[0]).unwrap();
+    writer.write_all(b"|").unwrap();
     std::thread::sleep(Duration::from_millis(500));
     writer
         .write_all(b"printf '\\033]2;Reading the vt100 grid\\007'\r")

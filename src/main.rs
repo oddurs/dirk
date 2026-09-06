@@ -60,8 +60,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use hit::{HitMap, Target};
-use mux::session::layout_panes;
-use mux::{Ev, Focus, Pane, Session};
+use mux::{Dir, Ev, Focus, Pane, Session};
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
@@ -347,7 +346,7 @@ impl App {
                 None => Vec::new(),
             },
             Focus::Ws { p, w } => match self.session.workspace(p, w) {
-                Some(ws) => layout_panes(self.content, ws.panes.len(), ws.split),
+                Some(ws) => ws.rects(self.content).into_iter().map(|(_, r)| r).collect(),
                 None => Vec::new(),
             },
         }
@@ -356,7 +355,11 @@ impl App {
     fn visible_pane_mut(&mut self, index: usize) -> Option<&mut Pane> {
         match self.session.focus {
             Focus::Page(i) => self.session.pages.get_mut(i)?.pane.as_mut(),
-            Focus::Ws { p, w } => self.session.workspace_mut(p, w)?.panes.get_mut(index),
+            Focus::Ws { p, w } => {
+                let ws = self.session.workspace_mut(p, w)?;
+                let id = *ws.tree.leaves().get(index)?;
+                ws.pane_mut(id)
+            }
         }
     }
 
@@ -416,7 +419,8 @@ impl App {
             Focus::Page(_) => rects.first().copied(),
             Focus::Ws { p, w } => {
                 let ws = self.session.workspace(p, w)?;
-                rects.get(ws.active).copied()
+                let at = ws.tree.leaves().iter().position(|&id| id == ws.focus)?;
+                rects.get(at).copied()
             }
         }
     }
@@ -476,12 +480,8 @@ impl App {
             }
             KeyCode::Char('o') => self.open_picker(),
             KeyCode::Char('x') => self.session.close_focused(),
-            KeyCode::Char('|') | KeyCode::Char('v') => {
-                self.session.split(mux::Split::Cols, rows, cols)
-            }
-            KeyCode::Char('-') | KeyCode::Char('s') => {
-                self.session.split(mux::Split::Rows, rows, cols)
-            }
+            KeyCode::Char('|') | KeyCode::Char('v') => self.session.split(Dir::Cols, rows, cols),
+            KeyCode::Char('-') | KeyCode::Char('s') => self.session.split(Dir::Rows, rows, cols),
             KeyCode::Char('d') => self.sidebar = !self.sidebar,
             KeyCode::Char(';') => self.session.cycle_pane(),
             KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.session.step_workspace(1),
@@ -602,8 +602,9 @@ impl App {
         // wants the click.
         if let MouseEventKind::Down(_) = m.kind
             && let Some(ws) = self.session.focused_workspace_mut()
+            && let Some(&id) = ws.tree.leaves().get(index)
         {
-            ws.active = index;
+            ws.focus = id;
         }
 
         let (col, row) = (m.column - r.x, m.row - r.y);
@@ -639,14 +640,16 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
             let Some(ws) = session.workspace(p, w) else {
                 return empty(buf, area, "nothing open — press ctrl-space o");
             };
-            let rects = layout_panes(area, ws.panes.len(), ws.split);
-            for (i, (pane, r)) in ws.panes.iter().zip(rects.iter()).enumerate() {
-                if let Ok(t) = pane.term.lock() {
-                    ui::pane::blit(t.screen(), *r, buf, i != ws.active);
+            let placed = ws.rects(area);
+            for (i, (id, r)) in placed.iter().enumerate() {
+                if let Some(pane) = ws.pane(*id)
+                    && let Ok(t) = pane.term.lock()
+                {
+                    ui::pane::blit(t.screen(), *r, buf, *id != ws.focus);
                 }
                 hits.push(*r, Target::Pane { index: i });
             }
-            rects
+            placed.into_iter().map(|(_, r)| r).collect::<Vec<_>>()
         }
     };
     let _ = rects;
