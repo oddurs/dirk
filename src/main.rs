@@ -70,6 +70,7 @@ use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use theme::THEME;
+use ui::nav::{Nav, Row};
 use ui::picker::Picker;
 
 const USAGE: &str = "\
@@ -201,6 +202,11 @@ struct App {
     /// Where panes live, kept so a pane can be spawned at the right size
     /// before it has ever been drawn.
     content: Rect,
+    /// Where the nav is looking, and what it last drew. The rows are kept so a
+    /// keystroke can act on the same list the pointer sees.
+    nav: Nav,
+    nav_rows: Vec<Row>,
+    side: Rect,
     quit: bool,
 }
 
@@ -218,6 +224,9 @@ impl App {
             sidebar: true,
             status: String::new(),
             status_at: Instant::now(),
+            nav: Nav::default(),
+            nav_rows: Vec::new(),
+            side: Rect::ZERO,
             content: Rect {
                 x: sidebar_w,
                 y: 0,
@@ -376,9 +385,11 @@ impl App {
         self.content = content;
         self.session.resize_visible(content);
 
+        self.side = side;
         let buf = f.buffer_mut();
         if side.width > 0 {
-            ui::sidebar::render(buf, side, &self.session, &mut self.hits);
+            self.nav_rows =
+                ui::nav::render(buf, side, &self.session, &mut self.nav, &mut self.hits);
         }
         draw_content(buf, content, &self.session, &mut self.hits);
 
@@ -438,11 +449,55 @@ impl App {
         }
     }
 
+    /// Do the thing the user pointed at, however they pointed at it.
+    ///
+    /// Clicking a row and pressing Enter on it arrive here with the same value,
+    /// which is the only reason the two cannot drift apart.
+    fn act(&mut self, target: Target) {
+        let area = self.content;
+        match target {
+            Target::Layout(i) => self.session.open_layout(i, area),
+            Target::ProjectFold(p) => {
+                if let Some(proj) = self.session.projects.get_mut(p) {
+                    proj.expanded = !proj.expanded;
+                }
+                // Folding is not going anywhere, so the nav keeps the keyboard.
+                return;
+            }
+            Target::Workspace { p, w } => self.session.focus = Focus::Ws { p, w },
+            Target::NewWorkspace(p) => {
+                self.session.new_workspace(p, area.height, area.width);
+            }
+            Target::OpenProject => {
+                self.open_picker();
+                return;
+            }
+            Target::PickerRow(i) => {
+                let path = self
+                    .picker
+                    .as_ref()
+                    .and_then(|p| p.path(i))
+                    .map(|p| p.to_path_buf());
+                self.picker = None;
+                if let Some(path) = path {
+                    self.open(&path);
+                }
+            }
+            Target::Pane { .. } => return,
+        }
+        // Anything that moved you somewhere hands the keyboard back, because
+        // that is what you went there for.
+        self.nav.active = false;
+    }
+
     // ── Keys ────────────────────────────────────────────────────────────
 
     fn on_key(&mut self, k: KeyEvent) {
         if self.picker.is_some() {
             return self.picker_key(k);
+        }
+        if self.nav.active && !self.prefix {
+            return self.nav_key(k);
         }
         if self.prefix {
             self.prefix = false;
@@ -458,6 +513,28 @@ impl App {
             return;
         }
         self.send_key(k);
+    }
+
+    /// Keys while the nav holds them. No prefix: a nav that needs one before
+    /// every `j` is not a nav.
+    fn nav_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.nav.active = false,
+            KeyCode::Char('j') | KeyCode::Down => self.nav.step(&self.nav_rows, 1),
+            KeyCode::Char('k') | KeyCode::Up => self.nav.step(&self.nav_rows, -1),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(t) = self.nav.selection(&self.nav_rows).and_then(Row::target) {
+                    self.act(t);
+                }
+            }
+            KeyCode::Char('n') => {
+                if let Focus::Ws { p, .. } = self.session.focus {
+                    self.act(Target::NewWorkspace(p));
+                }
+            }
+            KeyCode::Char('o') => self.act(Target::OpenProject),
+            _ => {}
+        }
     }
 
     fn send_key(&mut self, k: KeyEvent) {
@@ -496,6 +573,13 @@ impl App {
             KeyCode::Char('|') | KeyCode::Char('v') => self.session.split(Dir::Cols, rows, cols),
             KeyCode::Char('-') | KeyCode::Char('s') => self.session.split(Dir::Rows, rows, cols),
             KeyCode::Char('d') => self.sidebar = !self.sidebar,
+            KeyCode::Char('w') => {
+                self.nav.active = !self.nav.active;
+                if self.nav.active {
+                    // Start where the eye already is.
+                    self.nav.sync(&self.nav_rows, self.session.focus);
+                }
+            }
             KeyCode::Char(';') => self.session.cycle_pane(),
             KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.session.step_workspace(1),
             KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => self.session.step_workspace(-1),
@@ -526,12 +610,8 @@ impl App {
         match k.code {
             KeyCode::Esc => self.picker = None,
             KeyCode::Enter => {
-                let chosen = p.matches().get(p.selected).map(|(i, _)| *i);
-                if let Some(i) = chosen
-                    && let Some(path) = p.path(i).map(|x| x.to_path_buf())
-                {
-                    self.picker = None;
-                    self.open(&path);
+                if let Some(i) = p.matches().get(p.selected).map(|(i, _)| *i) {
+                    self.act(Target::PickerRow(i));
                 }
             }
             KeyCode::Backspace => {
@@ -565,40 +645,27 @@ impl App {
 
     fn on_mouse(&mut self, m: MouseEvent) {
         let target = self.hits.at(m.column, m.row);
-        let (rows, cols) = (self.content.height, self.content.width);
 
-        if let MouseEventKind::Down(MouseButton::Left) = m.kind {
-            match target {
-                Some(Target::Layout(i)) => return self.session.open_layout(i, self.content),
-                Some(Target::ProjectFold(p)) => {
-                    if let Some(proj) = self.session.projects.get_mut(p) {
-                        proj.expanded = !proj.expanded;
-                    }
-                    return;
-                }
-                Some(Target::Workspace { p, w }) => {
-                    self.session.focus = Focus::Ws { p, w };
-                    return;
-                }
-                Some(Target::NewWorkspace(p)) => {
-                    self.session.new_workspace(p, rows, cols);
-                    return;
-                }
-                Some(Target::OpenProject) => return self.open_picker(),
-                Some(Target::PickerRow(i)) => {
-                    let path = self
-                        .picker
-                        .as_ref()
-                        .and_then(|p| p.path(i))
-                        .map(|p| p.to_path_buf());
-                    self.picker = None;
-                    if let Some(path) = path {
-                        self.open(&path);
-                    }
-                    return;
-                }
-                _ => {}
+        // The wheel over the nav scrolls the nav, not whatever pane is behind
+        // the pointer.
+        if m.column < self.side.right() && self.side.width > 0 {
+            let delta = match m.kind {
+                MouseEventKind::ScrollDown => 1,
+                MouseEventKind::ScrollUp => -1,
+                _ => 0,
+            };
+            if delta != 0 {
+                self.nav
+                    .scroll_by(delta, self.nav_rows.len(), self.side.height as usize);
+                return;
             }
+        }
+
+        if let MouseEventKind::Down(MouseButton::Left) = m.kind
+            && let Some(t) = target
+            && !matches!(t, Target::Pane { .. })
+        {
+            return self.act(t);
         }
 
         // Anything else in the content area belongs to the pane under it.

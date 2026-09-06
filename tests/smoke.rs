@@ -30,6 +30,12 @@ use std::time::{Duration, Instant};
 const ROWS: u16 = 24;
 const COLS: u16 = 80;
 
+/// dirk has come up when the nav has drawn. The `+ workspace` row is the
+/// signal rather than a heading, because it appears only in the nav — the rail
+/// carries the word "spaces" too, and matching that would pass before the nav
+/// had drawn anything.
+const READY: &str = "+ workspace";
+
 /// Unique per config directory, so concurrent tests do not share one.
 fn next_config_id() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -181,11 +187,10 @@ impl Drop for Harness {
 fn it_comes_up_and_draws_its_chrome() {
     let mut h = Harness::start();
 
-    // The sidebar's section headings are letter-spaced, so this also proves
-    // the heading helper ran rather than a raw string being echoed.
+    // The nav's three sections, as plain words.
     assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "no projects heading; dirk drew:\n{}",
+        h.wait_for(READY, Duration::from_secs(10)),
+        "the nav never drew; dirk drew:\n{}",
         h.drawn()
     );
     // The brand, in the rail. This is the only place it appears.
@@ -198,10 +203,7 @@ fn it_comes_up_and_draws_its_chrome() {
 #[test]
 fn a_shell_in_a_pane_runs_and_echoes() {
     let mut h = Harness::start();
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     // Straight through to the pane: no prefix, so this is the focused shell.
     h.send(b"echo dirk-is-alive\r");
@@ -215,10 +217,7 @@ fn a_shell_in_a_pane_runs_and_echoes() {
 #[test]
 fn the_prefix_opens_the_picker_and_escape_closes_it() {
     let mut h = Harness::start();
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     // Ctrl-Space, then o.
     h.send(&[0]);
@@ -234,10 +233,7 @@ fn the_prefix_opens_the_picker_and_escape_closes_it() {
 #[test]
 fn prefix_q_quits() {
     let mut h = Harness::start();
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     h.send(&[0]);
     h.send(b"q");
@@ -268,10 +264,7 @@ impl Harness {
 #[test]
 fn splitting_twice_gives_three_side_by_side_columns() {
     let mut h = Harness::start();
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     // The sidebar is hidden so the panes are wide enough that neither the
     // echoed command nor the marker wraps; a wrapped marker is not a layout
@@ -329,10 +322,7 @@ fn splitting_twice_gives_three_side_by_side_columns() {
 #[test]
 fn closing_a_split_pane_gives_the_whole_width_back() {
     let mut h = Harness::start();
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     h.prefix(b"|");
     h.prefix(b"x");
@@ -374,10 +364,7 @@ title = "lower"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     // The configured layout replaces the built-in ones, so it is the only entry
     // in the section above the tree.
@@ -415,10 +402,7 @@ key = "9"
 command = ["definitely-not-installed-anywhere"]
 "#,
     );
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
 
     // An entry that could only ever show `command not found` is worse than no
     // entry, so it is dropped at startup rather than left to fail on first use.
@@ -450,10 +434,7 @@ title = "right"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(
-        h.wait_for("P R O J E C T S", Duration::from_secs(10)),
-        "never started"
-    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
     h.prefix(b"9");
     assert!(
         h.wait_for("left", Duration::from_secs(10)),
@@ -478,6 +459,78 @@ command = ["/bin/sh"]
     assert!(
         a < b,
         "the two markers should be in different panes, got {a} and {b}\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_nav_takes_keys_of_its_own_and_gives_them_back() {
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Solo"
+key = "9"
+command = ["/bin/sh"]
+"#,
+    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(
+        h.wait_for("Solo", Duration::from_secs(5)),
+        "layout not listed\n{}",
+        h.drawn()
+    );
+
+    // Entering the nav starts on the focused workspace, so two steps up reach
+    // the layout: workspace -> project -> layout.
+    h.prefix(b"w");
+    h.send(b"k");
+    std::thread::sleep(Duration::from_millis(150));
+    h.send(b"k");
+    std::thread::sleep(Duration::from_millis(150));
+    h.send(b"\r");
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            // The layout is open once its own pane is running, which the dot
+            // beside the name reports.
+            h.rows().iter().any(|r| r.contains("• Solo"))
+        }),
+        "Enter in the nav did not open the layout\n{}",
+        h.drawn()
+    );
+
+    // Opening something hands the keyboard back, so this reaches the shell
+    // rather than being read as nav movement.
+    h.send(b"printf 'zz%s' Q\r");
+    assert!(
+        h.wait_for("zzQ", Duration::from_secs(10)),
+        "keys did not return to the pane\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn escape_leaves_the_nav_without_going_anywhere() {
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+
+    h.prefix(b"w");
+    h.send(b"j");
+    std::thread::sleep(Duration::from_millis(150));
+    h.send(&[0x1b]);
+    std::thread::sleep(Duration::from_millis(150));
+
+    // `j` was nav movement and must not have reached the shell; the shell only
+    // starts hearing keys again after Escape.
+    h.send(b"printf 'zz%s' R\r");
+    assert!(
+        h.wait_for("zzR", Duration::from_secs(10)),
+        "keys did not come back\n{}",
+        h.drawn()
+    );
+    assert!(
+        !h.rows().iter().any(|r| r.contains("jprintf")),
+        "the nav leaked a keystroke into the pane\n{}",
         h.drawn()
     );
 }

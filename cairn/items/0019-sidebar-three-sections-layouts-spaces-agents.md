@@ -2,8 +2,9 @@
 id: 19
 title: 'Sidebar: three sections — layouts, spaces, agents'
 type: feature
-status: planned
+status: done
 milestone: v0.2
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p0
@@ -40,8 +41,32 @@ spaces answers 'what is open, and where', agents answers 'what needs me', and
 they sort differently for that reason.
 
 ## Acceptance criteria
-- [ ] Three sections, each independently collapsible
-- [ ] A count per section header
-- [ ] Sections keep their proportions when the terminal is short, rather than
+- [x] Three sections, each independently collapsible
+- [x] A count per section header
+- [x] Sections keep their proportions when the terminal is short, rather than
       the last one being cut off entirely
-- [ ] Every row in all three is a click target
+- [x] Every row in all three is a click target
+
+## Plan
+
+The sidebar renders in one pass with a moving `y` cursor, which is why it has no
+scrolling and no selection: there is nothing to scroll or select, only a cursor
+that has already moved on.
+
+Replace it with a flat `Vec<Row>` built from the session, then render a window
+of that. Scrolling becomes an offset, selection becomes an index, and hit
+testing becomes the same lookup the renderer already does — three features that
+were each awkward alone fall out of one list.
+
+Keyboard and pointer converge on `Target`, the vocabulary the hit map already
+speaks: pressing Enter on a row and clicking it produce the same value and go
+through the same `act`. Without that they are two implementations of every
+action, which is how they drift.
+
+Selection is distinct from focus and needs somewhere to live, so the nav takes
+keys directly while it holds them — `ctrl-space w` in, Escape out. A nav that
+needs the prefix before every `j` is not a nav.
+
+The agents section lists workspaces whose pane has published an intent, which
+is the same crude signal the state glyph uses today. 0021 orders it by what is
+owed and 0031 makes the states real; this ships the shape.

@@ -7,21 +7,22 @@ A terminal multiplexer that knows what its sessions are for.
 
 ```
 ┌──────────────┬──────────────────────────────────────────────────┐
-│  P A G E S   │                                                  │
-│  1 • ptop    │                                                  │
-│  2   lazygit │                                                  │
-│  3   cairn   │                the focused pane                  │
-│              │                                                  │
-│ P R O J E C… │                                                  │
+│ layouts    1 │                                                  │
+│ 1 • Overview │                                                  │
+│   ↵ open     │                                                  │
+│              │                the focused pane                  │
+│ spaces     3 │                                                  │
 │ ▾ dirk       │                                                  │
 │   * mux core │                                                  │
 │   · shell    │                                                  │
 │   + workspace│                                                  │
-│ ▸ smali    3 │                                                  │
+│   n new · o …│                                                  │
+│ ▸ smali    2 │                                                  │
 │              │                                                  │
-│ o open proj… │                                                  │
+│ agents     1 │                                                  │
+│   * mux core │                                                  │
 ├──────────────┴──────────────────────────────────────────────────┤
-│ ◆ dirk   ▊1 mux core  ▏2 shell  ▏3 smali        3 spaces  14:22 │
+│ ◆ dirk   ▊1 mux core  ▏2 shell           3 spaces  ·  14:22     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -30,7 +31,14 @@ the opposite end: the sidebar is the product, and the panes hang off it.
 
 ## Three ideas, and keeping them apart is the whole design
 
-**The sidebar is the nav, and it lists what is open.** Not what exists —
+**The nav is three lists, and the order is the argument.** Layouts are places
+you go, spaces are where work lives, agents are what is asking for you.
+Attention flows down the column. The same workspace appears under spaces and
+under agents — that is not duplication: spaces answers "what is open, and
+where", agents answers "what needs me", and they sort differently for exactly
+that reason.
+
+**The nav lists what is open.** Not what exists —
 `~/Code` has ninety directories in it and a list of ninety things is a file
 browser. A project appears once it has a workspace, and disappears when its last
 one closes. `o` opens something new.
@@ -79,7 +87,8 @@ literal one through.
 | `;` | next pane in this workspace |
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
 | `1` `2` `3` | jump to a page |
-| `d` | hide the sidebar |
+| `d` | hide the nav |
+| `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `q` | quit |
 
 Everything else goes straight through to the program in the pane.

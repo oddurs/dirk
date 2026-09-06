@@ -17,26 +17,22 @@
 
 //! The chrome: everything dirk draws that is not a pane.
 
+pub mod nav;
 pub mod pane;
 pub mod picker;
 pub mod rail;
-pub mod sidebar;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
-/// A section heading: upper-cased and letter-spaced, so it reads as structure
-/// rather than as the first row of the list under it.
+/// A section heading.
+///
+/// Plain text in the accent colour. These were letter-spaced upper case once,
+/// which reads as decoration rather than as a label and makes every heading
+/// twice as wide as the word in it — expensive in a column this narrow.
 pub fn heading(buf: &mut Buffer, area: Rect, text: &str, style: Style) {
-    let spaced: String = text
-        .to_uppercase()
-        .chars()
-        .flat_map(|c| [c, ' '])
-        .collect::<String>()
-        .trim_end()
-        .into();
-    write_str(buf, area.x, area.y, &spaced, style, area.width);
+    write_str(buf, area.x, area.y, text, style, area.width);
 }
 
 /// Write a string into the buffer, clipped to `max` columns.

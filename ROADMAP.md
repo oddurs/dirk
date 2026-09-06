@@ -23,7 +23,7 @@ closing the terminal ends the session. Shipped.
 
 ## v0.2 — The nav
 
-`##········` 13% · 2 of 15 done · due 2026-10-15
+`####······` 33% · 5 of 15 done · due 2026-10-15
 
 The sidebar becomes the product. Three sections — layouts, spaces, agents — with
 two-line rows carrying project, worktree, branch and intent. Static layouts, and
@@ -35,7 +35,6 @@ the split tree they need underneath. This is the milestone dirk is for.
 - [ ] `0023` The dashboard layout <sup>feature · p1 · layout</sup>
 - [ ] `0024` Where do the dashboard panels come from? <sup>spike · p0 · layout</sup>
 - [ ] `0025` Expand a space to its tabs and panes <sup>feature · p1 · nav</sup>
-- [ ] `0027` Section footers: the actions each list offers <sup>feature · p1 · nav</sup>
 - [ ] `0028` Age, right-aligned <sup>feature · p2 · nav</sup>
 - [ ] `0029` Drag the sidebar divider <sup>feature · p2 · nav</sup>
 - [ ] `0049` A layout pane whose program exits should not vanish <sup>bug · p1 · layout</sup>
@@ -43,15 +42,16 @@ the split tree they need underneath. This is the milestone dirk is for.
 ### planned
 
 - [ ] `0010` Git branch and worktree awareness <sup>feature · p1 · git</sup>
-- [ ] `0019` Sidebar: three sections — layouts, spaces, agents <sup>feature · p0 · nav</sup>
 - [ ] `0020` Two-line rows: identity above, intent below <sup>feature · p0 · nav</sup>
 - [ ] `0021` The agents section, ordered by attention <sup>feature · p0 · nav</sup>
-- [ ] `0026` Sidebar scrolling and keyboard selection <sup>feature · p0 · nav</sup>
 
 ### done
 
 - [x] `0011` Nested splits <sup>feature · p0 · layout</sup>
+- [x] `0019` Sidebar: three sections — layouts, spaces, agents <sup>feature · p0 · nav</sup>
 - [x] `0022` Static layouts, declared in configuration <sup>feature · p0 · layout</sup>
+- [x] `0026` Sidebar scrolling and keyboard selection <sup>feature · p0 · nav</sup>
+- [x] `0027` Section footers: the actions each list offers <sup>feature · p1 · nav</sup>
 
 ## v0.3 — It knows what the agents are doing
 
