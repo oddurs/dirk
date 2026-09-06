@@ -147,43 +147,46 @@ impl Node {
     /// Take `id` out of the tree.
     ///
     /// Returns true when this node is now empty and its parent should drop it —
-    /// which for a leaf means it was the one being removed. Callers holding the
-    /// root should treat true as "the workspace has no panes left".
+    /// which for a leaf means it was the one being removed. A caller holding the
+    /// root should read true as "the workspace has no panes left".
     pub fn remove(&mut self, id: PaneId) -> bool {
-        if let Node::Leaf(x) = self {
-            return *x == id;
-        }
+        // The collapse cannot happen inside the match: `children` is borrowed
+        // from `self` there, and replacing `self` with one of its own children
+        // needs that borrow to have ended first.
+        let mut collapse_to = None;
 
-        let collapse = {
-            let Node::Split { children, .. } = self else {
-                unreachable!()
-            };
-            let mut removed = false;
-            let mut i = 0;
-            while i < children.len() {
-                if children[i].1.remove(id) {
-                    children.remove(i);
-                    removed = true;
-                    break;
+        let empty = match self {
+            Node::Leaf(x) => return *x == id,
+            Node::Split { children, .. } => {
+                let mut hit = None;
+                for (i, (_, child)) in children.iter_mut().enumerate() {
+                    if child.remove(id) {
+                        hit = Some(i);
+                        break;
+                    }
                 }
-                i += 1;
-            }
-            if !removed {
-                return false;
-            }
-            match children.len() {
-                0 => return true,
-                1 => true,
-                _ => false,
+                // Either the id is not in this subtree, or a descendant removed
+                // it and is still holding panes of its own. Neither is our
+                // business.
+                let Some(i) = hit else { return false };
+                children.remove(i);
+
+                match children.len() {
+                    0 => true,
+                    1 => {
+                        collapse_to = Some(children.remove(0).1);
+                        false
+                    }
+                    _ => false,
+                }
             }
         };
 
         // A split holding one child is that child.
-        if collapse && let Node::Split { children, .. } = self {
-            let (_, only) = children.remove(0);
+        if let Some(only) = collapse_to {
             *self = only;
         }
-        false
+        empty
     }
 }
 
