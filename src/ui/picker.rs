@@ -50,7 +50,9 @@ impl Picker {
                 (!name.starts_with('.')).then(|| (name, e.path()))
             })
             .collect();
-        entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        // Cached, not plain sort_by_key: the key allocates, and sort_by_key
+        // would recompute it on every comparison.
+        entries.sort_by_cached_key(|(name, _)| name.to_lowercase());
         Self {
             query: String::new(),
             entries,
