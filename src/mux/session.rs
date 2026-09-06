@@ -28,17 +28,12 @@
 //! actually open, which is a different and much shorter list.
 
 use crate::config::{Config, PageDef};
+use crate::mux::tree::{Dir, Node};
 use crate::mux::{Ev, Pane, PaneId};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::Instant;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Split {
-    Cols,
-    Rows,
-}
 
 /// What `name.rs` needs to remember between titles.
 #[derive(Debug, Default)]
@@ -53,18 +48,55 @@ pub struct NameState {
 
 pub struct Workspace {
     pub label: String,
+    /// The panes themselves. The tree refers to them by id, so this is an arena
+    /// rather than a layout.
     pub panes: Vec<Pane>,
-    pub active: usize,
-    pub split: Split,
+    pub tree: Node,
+    /// Which pane has the keyboard. An id rather than an index, because indices
+    /// shift when a pane is removed and focus would silently move with them.
+    pub focus: PaneId,
     pub naming: NameState,
 }
 
 impl Workspace {
+    pub fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.id == id)
+    }
+    pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        self.panes.iter_mut().find(|p| p.id == id)
+    }
+
     pub fn active_pane(&self) -> Option<&Pane> {
-        self.panes.get(self.active)
+        self.pane(self.focus)
     }
     pub fn active_pane_mut(&mut self) -> Option<&mut Pane> {
-        self.panes.get_mut(self.active)
+        self.pane_mut(self.focus)
+    }
+
+    /// Where every pane goes, in draw order.
+    pub fn rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+        self.tree.rects(area)
+    }
+
+    /// Move focus to the next pane in draw order.
+    pub fn cycle(&mut self) {
+        let order = self.tree.leaves();
+        if order.is_empty() {
+            return;
+        }
+        let at = order.iter().position(|&id| id == self.focus).unwrap_or(0);
+        self.focus = order[(at + 1) % order.len()];
+    }
+
+    /// Put focus on a pane that exists. Called after a removal, where the pane
+    /// that had focus may be the one that went.
+    fn refocus(&mut self) {
+        if self.pane(self.focus).is_some() {
+            return;
+        }
+        if let Some(&first) = self.tree.leaves().first() {
+            self.focus = first;
+        }
     }
 }
 
@@ -154,11 +186,12 @@ impl Session {
         let pane = self.spawn_shell(&path, rows, cols)?;
         let proj = self.projects.get_mut(p)?;
         proj.expanded = true;
+        let root = pane.id;
         proj.workspaces.push(Workspace {
             label: name,
             panes: vec![pane],
-            active: 0,
-            split: Split::Cols,
+            tree: Node::Leaf(root),
+            focus: root,
             naming: NameState::default(),
         });
         self.focus = Focus::Ws {
@@ -180,8 +213,8 @@ impl Session {
         }
     }
 
-    /// Split the focused workspace, putting a second shell beside the first.
-    pub fn split(&mut self, dir: Split, rows: u16, cols: u16) {
+    /// Split the focused pane, putting a second shell beside it.
+    pub fn split(&mut self, dir: Dir, rows: u16, cols: u16) {
         let Focus::Ws { p, w } = self.focus else {
             return;
         };
@@ -195,11 +228,19 @@ impl Session {
         let Some(pane) = self.spawn_shell(&cwd, rows, cols) else {
             return;
         };
-        if let Some(ws) = self.workspace_mut(p, w) {
-            ws.split = dir;
-            ws.panes.push(pane);
-            ws.active = ws.panes.len() - 1;
+        let Some(ws) = self.workspace_mut(p, w) else {
+            return;
+        };
+
+        let new = pane.id;
+        let target = ws.focus;
+        if !ws.tree.split(target, dir, new) {
+            // The focused pane is not in the tree, which should be impossible.
+            // Dropping the pane beats leaking a process nothing draws.
+            return;
         }
+        ws.panes.push(pane);
+        ws.focus = new;
     }
 
     pub fn workspace(&self, p: usize, w: usize) -> Option<&Workspace> {
@@ -283,8 +324,9 @@ impl Session {
                 let ws = &mut self.projects[p].workspaces[w];
                 if let Some(k) = ws.panes.iter().position(|x| x.id == id) {
                     ws.panes.remove(k);
-                    ws.active = ws.active.min(ws.panes.len().saturating_sub(1));
-                    if ws.panes.is_empty() {
+                    let empty = ws.tree.remove(id);
+                    ws.refocus();
+                    if empty || ws.panes.is_empty() {
                         self.projects[p].workspaces.remove(w);
                         if self.projects[p].workspaces.is_empty() {
                             self.projects.remove(p);
@@ -334,10 +376,8 @@ impl Session {
 
     /// Cycle focus through panes inside the focused workspace.
     pub fn cycle_pane(&mut self) {
-        if let Some(ws) = self.focused_workspace_mut()
-            && !ws.panes.is_empty()
-        {
-            ws.active = (ws.active + 1) % ws.panes.len();
+        if let Some(ws) = self.focused_workspace_mut() {
+            ws.cycle();
         }
     }
 
@@ -382,47 +422,12 @@ impl Session {
                 let Some(ws) = self.workspace_mut(p, w) else {
                     return;
                 };
-                let rects = layout_panes(area, ws.panes.len(), ws.split);
-                for (pane, r) in ws.panes.iter_mut().zip(rects) {
-                    pane.resize(r.height, r.width);
+                for (id, r) in ws.tree.rects(area) {
+                    if let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) {
+                        pane.resize(r.height, r.width);
+                    }
                 }
             }
         }
     }
-}
-
-/// Equal splits along one axis. Deliberately not a binary tree: a workspace is
-/// a unit of work, and the moment it needs nested splits it wanted to be two
-/// workspaces. Nested layouts are in the backlog, not in the way.
-pub fn layout_panes(area: Rect, n: usize, split: Split) -> Vec<Rect> {
-    if n == 0 {
-        return Vec::new();
-    }
-    let n16 = n as u16;
-    (0..n16)
-        .map(|i| match split {
-            Split::Cols => {
-                let w = area.width / n16;
-                let x = area.x + w * i;
-                let w = if i == n16 - 1 { area.width - w * i } else { w };
-                Rect {
-                    x,
-                    y: area.y,
-                    width: w,
-                    height: area.height,
-                }
-            }
-            Split::Rows => {
-                let h = area.height / n16;
-                let y = area.y + h * i;
-                let h = if i == n16 - 1 { area.height - h * i } else { h };
-                Rect {
-                    x: area.x,
-                    y,
-                    width: area.width,
-                    height: h,
-                }
-            }
-        })
-        .collect()
 }

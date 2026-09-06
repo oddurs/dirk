@@ -19,9 +19,11 @@
 
 pub mod pty;
 pub mod session;
+pub mod tree;
 
 pub use pty::{Pane, PaneId};
-pub use session::{Focus, Session, Split, Workspace};
+pub use session::{Focus, Session, Workspace};
+pub use tree::Dir;
 
 /// Everything the event loop can be woken by. One channel, three producers:
 /// the terminal reader, one thread per pane, and the ticker. The loop blocks on
