@@ -59,24 +59,34 @@ fn main() {
         }
     });
 
-    // Let it come up, then give it something to look at: a second workspace,
-    // and a title so naming has something to do.
+    // Let it come up, then give it something to look at: two workspaces with
+    // titles for naming to work from, and a split to show the layout tree.
+    //
+    // The split comes last on purpose. `name::decide` skips a workspace holding
+    // more than one pane -- two panes have no single intent -- so splitting
+    // before the title has settled would leave that workspace showing its
+    // project name forever, and the shot would quietly stop demonstrating the
+    // one feature it was written for.
+    let title = |t: &str| format!("printf '\\033]2;{t}\\007'\r");
+    let prefix = |k: &[u8]| [&[0u8][..], k].concat();
+
     std::thread::sleep(Duration::from_millis(700));
     writer
-        .write_all(b"printf '\\033]2;Building the mux core\\007'\r")
+        .write_all(title("Building the mux core").as_bytes())
         .unwrap();
     std::thread::sleep(Duration::from_millis(400));
-    writer.write_all(&[0]).unwrap();
-    writer.write_all(b"n").unwrap();
+
+    writer.write_all(&prefix(b"n")).unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    // A split, so the shot shows the layout tree doing its job.
-    writer.write_all(&[0]).unwrap();
-    writer.write_all(b"|").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
     writer
-        .write_all(b"printf '\\033]2;Reading the vt100 grid\\007'\r")
+        .write_all(title("Reading the vt100 grid").as_bytes())
         .unwrap();
-    std::thread::sleep(Duration::from_millis(2500));
+
+    // Longer than the naming debounce, so both names are committed.
+    std::thread::sleep(Duration::from_millis(2000));
+
+    writer.write_all(&prefix(b"|")).unwrap();
+    std::thread::sleep(Duration::from_millis(700));
 
     for row in 0..rows {
         let s = screen.lock().unwrap();

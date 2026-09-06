@@ -120,11 +120,16 @@ impl Harness {
     }
 
     /// Where `needle` sits on screen, as (row, column).
+    ///
+    /// The column is counted in characters, not bytes. dirk's own chrome is
+    /// full of multi-byte glyphs — `▾ ◆ ▏ ▊` — and so is the output of
+    /// anything running in a pane, so a byte offset is not a column and using
+    /// one would shift an assertion by two for every glyph to its left.
     fn find(&self, needle: &str) -> Option<(usize, usize)> {
-        self.rows()
-            .iter()
-            .enumerate()
-            .find_map(|(r, line)| line.find(needle).map(|c| (r, c)))
+        self.rows().iter().enumerate().find_map(|(r, line)| {
+            line.find(needle)
+                .map(|byte| (r, line[..byte].chars().count()))
+        })
     }
 
     fn drawn(&self) -> String {
