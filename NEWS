@@ -1,0 +1,71 @@
+dirk NEWS — history of user-visible changes.
+
+Copyright (C) 2026 Oddur Sigurdsson.
+See the end of the file for copying conditions.
+
+Please send bug reports and suggestions through the project's issue tracker.
+
+
+* Noteworthy changes in release 0.1.0 (2026-09-06)
+
+This is the first release.  It runs as a single process: closing the terminal
+ends the session, and detaching is not implemented.  See "Known limitations".
+
+** Panes
+
+Each pane is a process on a pseudo-terminal whose output is parsed into a
+terminal grid and painted into the display.  Colours, bold, italic, underline,
+inverse and double-width characters are carried through.  Resizing propagates
+both to the kernel and to the parser, so programs inside see the size they are
+actually given.
+
+Mouse events reach the program in a pane when that program has asked for them,
+and are otherwise interpreted by dirk.  A click means "focus this pane" in a
+shell and "click this line" in a program that reports mouse input; there is no
+mode to switch between the two.
+
+** The sidebar
+
+Static pages sit above the project tree.  A page is a singleton with no project
+— one system monitor, one repository browser — spawned when first opened rather
+than kept running in the background.  A page whose program is not on PATH is
+dropped at startup rather than failing when it is opened.
+
+Below the pages, a project appears once it has a workspace and disappears when
+its last one closes.  Every row is a click target.
+
+** Naming
+
+Workspaces are named from the terminal title the program inside publishes, which
+is how coding agents report what they are working on.  No model is called and no
+credentials are required.
+
+A label dirk did not write is never overwritten.  Placeholder labels are
+adopted.  A reworded title describing the same work is not treated as new
+intent, a title must hold still before it is committed, and one workspace is
+renamed at most once per interval.  Shell prompts, bare paths, echoed command
+lines and the plain repository name are never used as names.
+
+** Configuration
+
+dirk runs with no configuration file.  ~/.config/dirk/config.toml overrides
+what it names and leaves the rest alone: the brand shown in the bar, where the
+project picker looks, the sidebar width, the scrollback depth, the shell, the
+list of pages, and the naming thresholds.
+
+** Known limitations
+
+Sessions do not survive the terminal closing.  There is no scrollback view and
+no copy mode.  Splits divide a workspace into equal columns or equal rows and
+do not nest.  The state glyph beside a workspace is inferred from whether the
+pane has ever published a title, so an agent waiting on a human is not
+distinguished from one that is working.  Keybindings are not configurable.
+
+Each of these is recorded in the roadmap; see ROADMAP.md.
+
+----------------------------------------------------------------------
+Copyright (C) 2026 Oddur Sigurdsson.
+
+Copying and distribution of this file, with or without modification, are
+permitted in any medium without royalty provided the copyright notice and this
+notice are preserved.

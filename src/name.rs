@@ -1,0 +1,628 @@
+// dirk — a terminal multiplexer that knows what its sessions are for.
+//
+// Copyright (C) 2026 Oddur Sigurdsson
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
+//! Naming workspaces from the agent's own intent — namesync, in process.
+//!
+//! This is a port of the `namesync` plugin's `policy.js` and `naming.js`. The
+//! policy is unchanged; what changed is everything around it. As a herdr plugin
+//! it had to subscribe to a socket, diff titles it was handed, and write names
+//! back through an API. Inside dirk the title arrives from the pane's own OSC
+//! callback and the label is a `String` two structs away, so the plugin's
+//! daemon, client, state store and sinks all disappear. What is left is the
+//! part that was ever interesting: deciding *when* a name should change.
+//!
+//! The one rule worth restating, because it is what stops the thing fighting
+//! you: **if the label is not the one dirk last wrote, a human wrote it**, and
+//! it is never touched again.
+//!
+//! No regex crate. Every pattern here is a handful of character tests, and a
+//! regex engine to run them would be more dependency than policy.
+
+use crate::config::Naming;
+use crate::mux::session::NameState;
+use std::time::Instant;
+
+/// Words that survive in a title but say nothing about what the work *is*.
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "for", "to", "of", "in", "on", "at", "by", "with",
+    "from", "into", "via", "is", "are", "was", "be", "this", "that", "it", "its", "my", "our",
+    "your", "some", "new", "up", "out",
+];
+
+/// Commands a pane shows as its title before an agent takes over.
+const COMMAND_VERBS: &[&str] = &[
+    "cd", "ls", "ll", "cat", "tail", "head", "less", "man", "git", "gh", "npm", "npx", "pnpm",
+    "yarn", "bun", "node", "deno", "python", "python3", "pip", "cargo", "rustc", "go", "make",
+    "just", "docker", "kubectl", "ssh", "scp", "sudo", "brew", "apt", "vim", "nvim", "emacs", "hx",
+    "code", "claude", "codex", "pi", "tmux", "herdr", "dirk", "clear", "exit",
+];
+
+/// herdr's placeholder shapes, kept because dirk generates the same kinds.
+const PLACEHOLDER_NOUNS: &[&str] = &["tab", "window", "pane", "workspace", "shell", "terminal"];
+
+/// Strip the spinner braille and state glyphs agents prefix to their titles,
+/// then collapse whitespace.
+pub fn normalize(title: &str) -> String {
+    let trimmed = title.trim_start_matches(|c: char| {
+        c.is_whitespace()
+            || c == '*'
+            || ('\u{2800}'..='\u{28FF}').contains(&c)   // braille spinners
+            || ('\u{2500}'..='\u{27BF}').contains(&c) // box drawing, dingbats
+    });
+    trimmed.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Crude stemming only: enough that "plugin"/"plugins" and "rename"/"renaming"
+/// compare equal, so a reworded title is not mistaken for a new intent.
+fn stem(word: &str) -> String {
+    let mut w = word.to_string();
+    if w.len() > 4 && w.ends_with("ing") {
+        w.truncate(w.len() - 3);
+    } else if w.len() > 4 && w.ends_with("ed") {
+        w.truncate(w.len() - 2);
+    }
+    if w.len() > 3 && w.ends_with("es") {
+        w.truncate(w.len() - 2);
+    } else if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") {
+        w.truncate(w.len() - 1);
+    }
+    // Collapse the silent -e so "rename" and "renaming" land on one stem.
+    if w.len() > 4 && w.ends_with('e') {
+        w.truncate(w.len() - 1);
+    }
+    w
+}
+
+fn tokens(text: &str) -> Vec<String> {
+    normalize(text)
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() > 1 && !STOP_WORDS.contains(t))
+        .map(stem)
+        .collect()
+}
+
+/// Jaccard overlap of significant tokens. 1 = same intent, 0 = unrelated.
+pub fn similarity(a: &str, b: &str) -> f32 {
+    let (mut x, mut y) = (tokens(a), tokens(b));
+    x.sort_unstable();
+    x.dedup();
+    y.sort_unstable();
+    y.dedup();
+    if x.is_empty() && y.is_empty() {
+        return 1.0;
+    }
+    if x.is_empty() || y.is_empty() {
+        return 0.0;
+    }
+    let shared = x.iter().filter(|t| y.contains(t)).count();
+    shared as f32 / (x.len() + y.len() - shared) as f32
+}
+
+/// True when a title says nothing about intent and must never become a name.
+pub fn is_junk(title: &str, repo: &str) -> bool {
+    let t = normalize(title);
+    if t.is_empty() {
+        return true;
+    }
+    let lower = t.to_lowercase();
+
+    // A shell prompt: "oddurs@Oddurs-MacBook-Pro:~/Code/perfect".
+    if let Some(colon) = t.find(':') {
+        let head = &t[..colon];
+        if !head.contains(char::is_whitespace) && head.contains('@') {
+            return true;
+        }
+        // A Windows drive letter: "c:\src".
+        if colon == 1 && t[colon + 1..].starts_with(['\\', '/']) {
+            return true;
+        }
+    }
+
+    // A bare path or filename is location, not intent.
+    if t.starts_with(['~', '/', '.']) {
+        return true;
+    }
+
+    // A command line the shell echoed before the agent started. The verb alone
+    // is not enough — "go", "make" and "less" are ordinary words, and "go
+    // routine leak fix" is a perfectly good intent — so the title must also
+    // *look* like an invocation: short, or carrying a flag, path or path-ish
+    // character.
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if let Some(first) = words.first() {
+        let verb = first.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+        if COMMAND_VERBS.contains(&verb.to_lowercase().as_str())
+            && (words.len() <= 2 || has_flag(&t) || t.contains(['/', '~', '=']))
+        {
+            return true;
+        }
+    }
+    if has_long_flag(&t) {
+        return true;
+    }
+
+    // The repo name alone is what dirk already defaults to.
+    if !repo.is_empty() && lower == repo.to_lowercase() {
+        return true;
+    }
+
+    // Needs at least one real word.
+    tokens(&t).is_empty()
+}
+
+/// ` -x` or ` --x`
+fn has_flag(t: &str) -> bool {
+    t.split_whitespace().skip(1).any(|w| {
+        let w = w
+            .strip_prefix("--")
+            .or_else(|| w.strip_prefix('-'))
+            .unwrap_or("");
+        w.starts_with(|c: char| c.is_ascii_alphabetic())
+    })
+}
+
+/// ` --x` only
+fn has_long_flag(t: &str) -> bool {
+    t.split_whitespace().skip(1).any(|w| {
+        w.strip_prefix("--")
+            .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_lowercase()))
+    })
+}
+
+/// Distinguishes a label a human chose from the one dirk generated. Without
+/// this, every fresh workspace would look hand-named and never be claimed.
+pub fn looks_auto_generated(name: &str, repo: &str, branch: &str) -> bool {
+    let t = normalize(name);
+    if t.is_empty() {
+        return true;
+    }
+    let lower = t.to_lowercase();
+
+    if (!repo.is_empty() && lower == repo.to_lowercase())
+        || (!branch.is_empty() && lower == branch.to_lowercase())
+    {
+        return true;
+    }
+
+    // "w3", "w3:t1"
+    if let Some(rest) = lower.strip_prefix('w') {
+        let (n, t2) = match rest.split_once(":t") {
+            Some((a, b)) => (a, Some(b)),
+            None => (rest, None),
+        };
+        if !n.is_empty()
+            && n.chars().all(|c| c.is_ascii_digit())
+            && t2.is_none_or(|b| !b.is_empty() && b.chars().all(|c| c.is_ascii_digit()))
+        {
+            return true;
+        }
+    }
+
+    // "tab", "tab 2", "shell", "pane 3"
+    let mut parts = lower.split_whitespace();
+    if let Some(noun) = parts.next()
+        && PLACEHOLDER_NOUNS.contains(&noun)
+    {
+        match parts.next() {
+            None => return true,
+            Some(n) if n.chars().all(|c| c.is_ascii_digit()) && parts.next().is_none() => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    // A bare number.
+    lower.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Drop a leading project name from an intent, so a row already sitting under
+/// "ptop" does not read "ptop-adopt-remaining-lessons" underneath it. Never
+/// strips everything: "cairn" under "cairn" stays as it is.
+pub fn strip_project(text: &str, project: &str) -> String {
+    let t = normalize(text);
+    if t.is_empty() || project.is_empty() {
+        return t;
+    }
+    if !t.to_lowercase().starts_with(&project.to_lowercase()) {
+        return t;
+    }
+    let rest = t[project.len()..].trim_start_matches([' ', ':', '_', '/', '-']);
+    if rest.is_empty() || tokens(rest).is_empty() {
+        return t;
+    }
+    let mut c = rest.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => t,
+    }
+}
+
+/// Why a rename did not happen. Carried so the status line and the log can
+/// explain themselves instead of silently doing nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    Disabled,
+    NoIntent,
+    Junk,
+    Manual,
+    Unchanged,
+    Similar,
+    RateLimited,
+    Settling,
+    MultiPane,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Decision {
+    Rename(String),
+    Skip(Skip),
+}
+
+/// 0..1 token overlap above which a new intent counts as "the same thing,
+/// reworded" and is skipped.
+const SIMILARITY_THRESHOLD: f32 = 0.6;
+
+/// Decide whether `title` should become the workspace's label.
+///
+/// Pure apart from the clock, so the test suite drives it directly.
+#[allow(clippy::too_many_arguments)]
+pub fn decide(
+    cfg: &Naming,
+    state: &mut NameState,
+    current: &str,
+    title: Option<&str>,
+    repo: &str,
+    branch: &str,
+    pane_count: usize,
+    now: Instant,
+) -> Decision {
+    if !cfg.enabled {
+        return Decision::Skip(Skip::Disabled);
+    }
+    // A workspace holding two panes has no single intent, so neither title
+    // speaks for it.
+    if pane_count > 1 {
+        return Decision::Skip(Skip::MultiPane);
+    }
+    let Some(raw) = title else {
+        return Decision::Skip(Skip::NoIntent);
+    };
+    let intent = normalize(raw);
+    if intent.is_empty() {
+        return Decision::Skip(Skip::NoIntent);
+    }
+    if is_junk(&intent, repo) {
+        return Decision::Skip(Skip::Junk);
+    }
+
+    // The heart of "rename only when it makes sense": if the live label is not
+    // the one dirk last wrote, a human changed it. Back off permanently. A
+    // label dirk generated itself is nobody's choice, so it stays adoptable.
+    let cur = normalize(current);
+    if !cur.is_empty() && !looks_auto_generated(&cur, repo, branch) {
+        let ours = state.applied.as_deref().map(normalize);
+        if ours.as_deref() != Some(cur.as_str()) {
+            return Decision::Skip(Skip::Manual);
+        }
+    }
+
+    let desired = strip_project(&intent, repo);
+    if desired.is_empty() {
+        return Decision::Skip(Skip::NoIntent);
+    }
+    if cur == normalize(&desired) {
+        state.pending = None;
+        return Decision::Skip(Skip::Unchanged);
+    }
+
+    // Titles churn early in a turn. Wait for the intent to hold still rather
+    // than chasing every revision the agent publishes.
+    match &state.pending {
+        Some((t, since)) if *t == desired => {
+            if now.duration_since(*since).as_millis() < cfg.debounce_ms as u128 {
+                return Decision::Skip(Skip::Settling);
+            }
+        }
+        _ => {
+            state.pending = Some((desired.clone(), now));
+            return Decision::Skip(Skip::Settling);
+        }
+    }
+
+    if let Some(last) = state.last_rename
+        && now.duration_since(last).as_millis() < cfg.min_interval_ms as u128
+    {
+        return Decision::Skip(Skip::RateLimited);
+    }
+
+    // A reworded title describing the same work is not a new intent.
+    if !cur.is_empty() && similarity(&cur, &desired) >= SIMILARITY_THRESHOLD {
+        state.pending = None;
+        return Decision::Skip(Skip::Similar);
+    }
+
+    state.pending = None;
+    state.last_rename = Some(now);
+    state.applied = Some(desired.clone());
+    Decision::Rename(desired)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn cfg() -> Naming {
+        Naming {
+            enabled: true,
+            debounce_ms: 0,
+            min_interval_ms: 0,
+        }
+    }
+
+    fn decide_once(state: &mut NameState, current: &str, title: &str, repo: &str) -> Decision {
+        let now = Instant::now();
+        // Debounce needs two passes: the first records the title, the second
+        // finds it unchanged and commits.
+        decide(&cfg(), state, current, Some(title), repo, "", 1, now);
+        decide(&cfg(), state, current, Some(title), repo, "", 1, now)
+    }
+
+    #[test]
+    fn adopts_an_intent_over_a_default_label() {
+        let mut st = NameState::default();
+        assert_eq!(
+            decide_once(
+                &mut st,
+                "bedreader",
+                "Open source wifi e-reader",
+                "bedreader"
+            ),
+            Decision::Rename("Open source wifi e-reader".into())
+        );
+    }
+
+    #[test]
+    fn a_hand_written_name_is_never_touched() {
+        let mut st = NameState::default();
+        // dirk never wrote this label, and it is not a default shape.
+        assert_eq!(
+            decide_once(
+                &mut st,
+                "my careful name",
+                "Open source wifi e-reader",
+                "bedreader"
+            ),
+            Decision::Skip(Skip::Manual)
+        );
+    }
+
+    #[test]
+    fn labels_dirk_wrote_stay_adoptable() {
+        let mut st = NameState {
+            applied: Some("Old intent".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            decide_once(&mut st, "Old intent", "Totally different work now", "repo"),
+            Decision::Rename(_)
+        ));
+    }
+
+    #[test]
+    fn placeholders_are_adoptable() {
+        for label in ["w3", "tab 2", "shell", "7", "bedreader"] {
+            let mut st = NameState::default();
+            assert!(
+                matches!(
+                    decide_once(&mut st, label, "Open source wifi e-reader", "bedreader"),
+                    Decision::Rename(_)
+                ),
+                "{label} should have been claimed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rewording_is_not_a_new_intent() {
+        // The plugin's own example: "naming plugin" -> "naming plugins".
+        assert!(
+            similarity(
+                "Herdr session naming plugin",
+                "Herdr session naming plugins"
+            ) >= 0.6
+        );
+        // The label has to be one dirk wrote, or the manual-name guard fires
+        // first — which is the correct order, and the order policy.js uses.
+        let mut st = NameState {
+            applied: Some("Herdr session naming plugin".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            decide_once(
+                &mut st,
+                "Herdr session naming plugin",
+                "Herdr session naming plugins",
+                "x"
+            ),
+            Decision::Skip(Skip::Similar)
+        );
+    }
+
+    #[test]
+    fn junk_never_becomes_a_name() {
+        let junk = [
+            "oddurs@Oddurs-MacBook-Pro:~/Code/perfect", // a prompt
+            "~/Code/dirk",                              // a path
+            "./run.sh",
+            "cd namesync", // an echoed command
+            "claude --dangerously-skip-permissions",
+            "git",
+            "bedreader", // the repo name is what dirk already defaults to
+        ];
+        for t in junk {
+            assert!(is_junk(t, "bedreader"), "{t} should be junk");
+        }
+    }
+
+    #[test]
+    fn ordinary_words_that_happen_to_be_commands_are_kept() {
+        // The policy's own caveat: "go", "make" and "less" are English too.
+        for t in ["go routine leak fix", "make the sidebar clickable"] {
+            assert!(!is_junk(t, "dirk"), "{t} should have survived");
+        }
+    }
+
+    #[test]
+    fn the_project_name_is_stripped_from_the_intent() {
+        // A row already sitting under "ptop" should not read "ptop-adopt-...".
+        assert_eq!(
+            strip_project("ptop-adopt-remaining-lessons", "ptop"),
+            "Adopt-remaining-lessons"
+        );
+        // But never strip everything away.
+        assert_eq!(strip_project("cairn", "cairn"), "cairn");
+    }
+
+    #[test]
+    fn a_title_must_hold_still_before_it_is_committed() {
+        let cfg = Naming {
+            enabled: true,
+            debounce_ms: 1000,
+            min_interval_ms: 0,
+        };
+        let mut st = NameState::default();
+        let t0 = Instant::now();
+
+        // First sighting only starts the clock.
+        assert_eq!(
+            decide(
+                &cfg,
+                &mut st,
+                "w1",
+                Some("Building the mux core"),
+                "dirk",
+                "",
+                1,
+                t0
+            ),
+            Decision::Skip(Skip::Settling)
+        );
+        // Still churning.
+        assert_eq!(
+            decide(
+                &cfg,
+                &mut st,
+                "w1",
+                Some("Building the mux core"),
+                "dirk",
+                "",
+                1,
+                t0
+            ),
+            Decision::Skip(Skip::Settling)
+        );
+        // Settled.
+        let later = t0 + Duration::from_millis(1500);
+        assert!(matches!(
+            decide(
+                &cfg,
+                &mut st,
+                "w1",
+                Some("Building the mux core"),
+                "dirk",
+                "",
+                1,
+                later
+            ),
+            Decision::Rename(_)
+        ));
+    }
+
+    #[test]
+    fn one_rename_per_workspace_per_interval() {
+        let cfg = Naming {
+            enabled: true,
+            debounce_ms: 0,
+            min_interval_ms: 30_000,
+        };
+        let mut st = NameState::default();
+        let t0 = Instant::now();
+        decide(&cfg, &mut st, "w1", Some("First intent"), "dirk", "", 1, t0);
+        assert!(matches!(
+            decide(&cfg, &mut st, "w1", Some("First intent"), "dirk", "", 1, t0),
+            Decision::Rename(_)
+        ));
+
+        // A second, unrelated intent arriving immediately is rate limited.
+        decide(
+            &cfg,
+            &mut st,
+            "First intent",
+            Some("Wholly unrelated topic"),
+            "dirk",
+            "",
+            1,
+            t0,
+        );
+        assert_eq!(
+            decide(
+                &cfg,
+                &mut st,
+                "First intent",
+                Some("Wholly unrelated topic"),
+                "dirk",
+                "",
+                1,
+                t0
+            ),
+            Decision::Skip(Skip::RateLimited)
+        );
+    }
+
+    #[test]
+    fn a_workspace_holding_two_panes_has_no_single_intent() {
+        let mut st = NameState::default();
+        assert_eq!(
+            decide(
+                &cfg(),
+                &mut st,
+                "w1",
+                Some("Some work"),
+                "dirk",
+                "",
+                2,
+                Instant::now()
+            ),
+            Decision::Skip(Skip::MultiPane)
+        );
+    }
+
+    #[test]
+    fn spinner_braille_is_stripped_before_anything_else() {
+        assert_eq!(
+            normalize("⠹ Building the mux core"),
+            "Building the mux core"
+        );
+        assert_eq!(
+            normalize("  ✳ Thinking about naming  "),
+            "Thinking about naming"
+        );
+    }
+}
