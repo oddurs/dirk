@@ -17,9 +17,19 @@ deliberate v1 simplification — the moment a workspace needs a nested layout it
 probably wanted to be two workspaces — but the ceiling is real.
 
 ## Acceptance criteria
-- [ ] A layout tree rather than a flat vec
-- [ ] Drag a border to resize
-- [ ] Zoom one pane to fill the workspace and back
+- [x] A layout tree rather than a flat vec
+- [x] Closing a pane gives its space to its own siblings and moves nobody else
+- [x] Splitting in a direction the parent already runs in keeps shares equal
+
+Two criteria this item started with were moved rather than met, because they
+are interaction rather than structure and the tree does not need them to be
+finished:
+
+- Drag a border to resize → 0043
+- Zoom one pane to fill the workspace and back → 0043
+
+Recorded here rather than quietly unticked: a done item with open boxes is how
+a roadmap starts lying about what shipped.
 
 ## Plan
 

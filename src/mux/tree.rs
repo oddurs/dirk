@@ -149,6 +149,17 @@ impl Node {
     /// Returns true when this node is now empty and its parent should drop it —
     /// which for a leaf means it was the one being removed. A caller holding the
     /// root should read true as "the workspace has no panes left".
+    ///
+    /// A split left holding one child collapses to that child **in the slot the
+    /// split occupied**, and is deliberately not flattened into the grandparent
+    /// even when the directions match. Closing a pane therefore gives its space
+    /// to its own siblings and never resizes panes elsewhere in the tree.
+    ///
+    /// The cost is that a same-direction split can end up nested inside
+    /// another, so a tree's shape depends on the order it was built in. That is
+    /// the right trade: flattening would make closing one pane silently resize
+    /// unrelated ones, and a pane changing width because something far away
+    /// closed is much harder to understand than a slightly deeper tree.
     pub fn remove(&mut self, id: PaneId) -> bool {
         // The collapse cannot happen inside the match: `children` is borrowed
         // from `self` there, and replacing `self` with one of its own children
@@ -291,6 +302,35 @@ mod tests {
         assert!(matches!(t, Node::Split { .. }));
         t.remove(2);
         assert!(matches!(t, Node::Leaf(1)), "got {t:?}");
+    }
+
+    #[test]
+    fn closing_a_pane_gives_its_space_to_its_siblings_and_nobody_else() {
+        // A | B | C, then B split into rows, then its lower half into columns,
+        // then B closed. D and E should inherit B's column; A and C should not
+        // move at all.
+        let mut t = leaf(1);
+        t.split(1, Dir::Cols, 2);
+        t.split(2, Dir::Cols, 3);
+        let thirds = t.rects(area());
+        let (a_before, b_before, c_before) = (thirds[0].1, thirds[1].1, thirds[2].1);
+
+        t.split(2, Dir::Rows, 4);
+        t.split(4, Dir::Cols, 5);
+        t.remove(2);
+
+        let after = t.rects(area());
+        let at = |id: PaneId| after.iter().find(|(i, _)| *i == id).unwrap().1;
+
+        assert_eq!(at(1), a_before, "A moved because something else closed");
+        assert_eq!(at(3), c_before, "C moved because something else closed");
+        assert_eq!(
+            at(4).width + at(5).width,
+            b_before.width,
+            "D and E should share exactly the column B had"
+        );
+        assert_eq!(at(4).x, b_before.x, "and start where it started");
+        assert_eq!(at(4).height, area().height, "and get its full height back");
     }
 
     #[test]
