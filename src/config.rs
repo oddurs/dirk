@@ -143,6 +143,7 @@ pub struct Config {
     pub scrollback: usize,
     pub naming: Naming,
     pub notify: Notify,
+    pub sound: Sound,
     pub nav: Nav,
     /// Harnesses dirk should recognise, on top of the ones it ships with.
     #[serde(rename = "agent")]
@@ -162,6 +163,64 @@ pub struct ProjectDef {
     /// Which agent `a` starts here.
     #[serde(default)]
     pub agent: String,
+    /// Whether this project may make a noise. The repository you are
+    /// babysitting should be able to be quiet without silencing the one you
+    /// are not.
+    #[serde(default = "yes")]
+    pub sound: bool,
+}
+
+/// A noise when an agent blocks, and a different one when it finishes.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sound {
+    /// Off unless asked for. It is an interruption, and one nobody chose is
+    /// one they turn off rather than tune.
+    pub enabled: bool,
+    /// The command for each. Empty means the terminal's own bell, which needs
+    /// no file and no player.
+    pub blocked: Vec<String>,
+    pub done: Vec<String>,
+}
+
+impl Sound {
+    /// What to run for one of the two, after the shipped answer.
+    pub fn command(&self, which: crate::sound::Alert) -> Vec<String> {
+        let named = match which {
+            crate::sound::Alert::Blocked => &self.blocked,
+            crate::sound::Alert::Done => &self.done,
+        };
+        if !named.is_empty() {
+            return named
+                .iter()
+                .map(|a| expand(a).to_string_lossy().into())
+                .collect();
+        }
+        shipped(which)
+    }
+}
+
+/// Two sounds that exist on the machine already, so this works with no file to
+/// find and no configuration to write.
+///
+/// Distinguishable on purpose: one rises and one lands. Elsewhere there is no
+/// set of sounds anybody can count on, and an empty command falls through to
+/// the bell rather than to a player that may not be installed.
+#[cfg(target_os = "macos")]
+fn shipped(which: crate::sound::Alert) -> Vec<String> {
+    let file = match which {
+        crate::sound::Alert::Blocked => "/System/Library/Sounds/Funk.aiff",
+        crate::sound::Alert::Done => "/System/Library/Sounds/Glass.aiff",
+    };
+    match std::path::Path::new(file).exists() {
+        true => vec!["afplay".into(), file.into()],
+        false => Vec::new(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn shipped(_which: crate::sound::Alert) -> Vec<String> {
+    Vec::new()
 }
 
 /// One harness, as a configuration file describes it.
@@ -540,6 +599,7 @@ impl Default for Config {
             scrollback: 5000,
             naming: Naming::default(),
             notify: Notify::default(),
+            sound: Sound::default(),
             nav: Nav::default(),
             agents: Vec::new(),
             default_agent: String::new(),

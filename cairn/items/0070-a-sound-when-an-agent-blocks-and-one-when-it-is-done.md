@@ -2,7 +2,7 @@
 id: 70
 title: A sound when an agent blocks, and one when it is done
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 depends_on:
 - 68

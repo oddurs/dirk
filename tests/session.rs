@@ -63,6 +63,18 @@ impl Client {
         Self::attach_sized(session, COLS, ROWS)
     }
 
+    /// A client with a configuration directory of its own.
+    ///
+    /// Sound is performed by whichever end has the speakers, so testing it
+    /// means giving this end a configuration the rest of the run does not
+    /// share.
+    fn with_config(session: &str, dir: &std::path::Path) -> Self {
+        let dir = dir.to_path_buf();
+        Self::spawn(session, COLS, ROWS, &move |cmd| {
+            cmd.env("XDG_CONFIG_HOME", &dir);
+        })
+    }
+
     /// The way `--remote` reaches a session, with a stand-in for ssh.
     ///
     /// Not a network: what is being tested is the transport -- a pipe pair
@@ -1076,6 +1088,21 @@ fn an_agent_nobody_configured_is_refused_by_name() {
     quit(&session);
 }
 
+/// Every workspace id in an answer, in the order they appear.
+fn ids(json: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = json;
+    while let Some(at) = rest.find("\"id\"") {
+        rest = &rest[at + 4..];
+        let Some(open) = rest.find('"') else { break };
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('"') else { break };
+        out.push(rest[..close].to_string());
+        rest = &rest[close..];
+    }
+    out
+}
+
 /// The first value of a field in a JSON answer, without a parser.
 fn first_field(json: &str, field: &str) -> String {
     let at = json
@@ -1085,4 +1112,92 @@ fn first_field(json: &str, field: &str) -> String {
     let open = rest.find('"').expect("a value");
     let rest = &rest[open + 1..];
     rest[..rest.find('"').expect("a close")].to_string()
+}
+
+// ── Being told, where you are ───────────────────────────────────────────
+
+/// A configuration directory whose sound command leaves a file behind.
+fn noisy(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = config_home().join(format!("noisy-{name}"));
+    std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+    let rang = dir.join("rang");
+    let _ = std::fs::remove_file(&rang);
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        format!(
+            "[sound]\nenabled = true\nblocked = [\"sh\", \"-c\", \"touch {}\"]\n",
+            rang.display()
+        ),
+    )
+    .expect("config");
+    (dir, rang)
+}
+
+fn appears(path: &std::path::Path, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn the_noise_is_made_where_the_human_is() {
+    // The session decides whether; the end with the speakers decides how. That
+    // split is what makes a remote attach ring on the laptop somebody is
+    // sitting at rather than on the build box -- and `notify.rs` used to run
+    // `osascript` in the server, which is the same bug with a different output
+    // device.
+    let session = unique("noise");
+    let (dir, rang) = noisy("here");
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    // Somewhere else to be looking, because a workspace on your screen is one
+    // you already know about.
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let all = ids(&list);
+    assert_eq!(all.len(), 2, "expected two workspaces: {list}");
+    let (ok, _) = ask(&session, &["workspace", "focus", &all[1]]);
+    assert!(ok, "workspace focus failed");
+
+    let (ok, out) = ask(&session, &["agent", "state", "blocked", &all[0]]);
+    assert!(ok, "the report was refused: {out}");
+    assert!(
+        appears(&rang, START),
+        "nothing rang on the machine with the speakers\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn nothing_rings_about_the_workspace_you_are_looking_at() {
+    // The rule that decides whether this is loved or muted within a week. If
+    // the thing that just finished is the one on your screen, you know.
+    let session = unique("quiet");
+    let (dir, rang) = noisy("focused");
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["agent", "state", "blocked"]);
+    assert!(ok, "the report was refused: {out}");
+    // Long enough that it would have rung by now if it were going to.
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        !rang.exists(),
+        "it made a noise about the workspace on screen\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
 }

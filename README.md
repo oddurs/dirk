@@ -174,6 +174,41 @@ or until the pane produces output — because a pane producing text is not
 finished, whatever it said a minute ago. Without that rule a harness whose hook
 fires on stop but not on start sticks on `done` while it grinds.
 
+### Being told
+
+Two events are worth hearing — an agent blocking, and an agent finishing — and
+they have to be distinguishable with your back to the screen, because that is
+the point. One interrupts and one satisfies.
+
+Everything else is a rule about when to stay quiet, and those decide whether
+this is a feature or something you mute in a week:
+
+- **Nothing about the workspace you are looking at.** If the thing that just
+  finished is the one on your screen, you know.
+- **Not more often than `notify.min_interval_ms`.** An agent that blocks,
+  unblocks and blocks again inside a minute is one interruption.
+- **Not at all for a project that asked to be quiet.** The repository you are
+  babysitting should be able to be silent without silencing the one you are not.
+
+```toml
+[sound]
+enabled = true               # off unless asked for; it is an interruption
+blocked = []                 # empty takes a sound the system already has
+done    = []
+```
+
+On macOS an empty command finds two sounds that ship with the machine, so this
+works with no file to hunt for. Elsewhere it falls through to the terminal's own
+bell — twice for waiting, once for finished, which is as much distinction as a
+bell can carry and enough to tell them apart without looking.
+
+**The noise is made where you are.** The session decides *whether* — it holds
+the state machine, the seen rule and the floor — and the end with the speakers
+decides *how*, from its own configuration. So `dirk --remote build-box` rings
+the laptop you are sitting at rather than a machine in a rack. (Desktop
+notifications now travel the same way; they used to be delivered by the
+session, which was the same bug with a different output device.)
+
 ### Starting one
 
 `a` starts an agent where you are looking, making a workspace for it if the pane
@@ -250,6 +285,7 @@ rows      = "tall"           # tall gives a workspace its branch on a second lin
 [[project]]
 path  = "~/Code/dirk"
 agent = "claude"             # twelve repositories do not want one answer
+sound = true
 
 # A layout whose programs are not all on PATH is dropped at startup: an entry
 # that could only ever show `command not found` is worse than no entry.
