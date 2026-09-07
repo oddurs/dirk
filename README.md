@@ -92,15 +92,22 @@ literal one through.
 | `;` | next pane in this workspace |
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
 | `1` `2` `3` | jump to a page |
-| `d` | hide the nav |
+| `b` | hide the nav |
 | `u` | release a held name, so naming may claim the workspace again |
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
-| `q` | quit |
+| `d` | **detach** — leave, and let everything keep running |
+| `q` | **quit** — end every shell and every agent |
 
-The `✕` at the right of the bar quits too, and takes two clicks: it ends every
-shell and every agent in the session, and it sits at the edge of the screen
-where a stray click is most likely.
+**Leaving and quitting are different things.** A session outlives the terminal it
+was started in, so detaching is the ordinary way out: press `d`, or click
+`detach` in the bar, and come back to the same panes with `dirk`. Quitting ends
+the work. The bar carries both in words for that reason — a single `✕` cannot
+say which one it is — and `✕ quit` takes two clicks, because it sits at the edge
+of the screen where a stray click is most likely.
+
+<kbd>Esc</kbd> never leaves. It closes the picker, or hands the keyboard back
+from the nav, and does nothing else.
 
 Everything else goes straight through to the program in the pane.
 

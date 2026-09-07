@@ -79,11 +79,15 @@ pub fn render(
         area.width,
     );
 
-    // ── Quit, at the far right ──────────────────────────────────────────
-    // Two clicks, not one. This ends every shell and every agent in the
-    // session, and it sits at the edge of the screen where a stray click is
-    // most likely -- a button that does that on one click is a trap.
-    let quit = if armed { " quit? " } else { " ✕ " };
+    // ── The two ways out, at the far right ──────────────────────────────
+    // In words, because since a session outlives its terminal these are
+    // different things and a glyph cannot say which. Detaching parks the work;
+    // quitting ends every shell and every agent in the session.
+    //
+    // Quit takes two clicks. It sits at the edge of the screen where a stray
+    // click is most likely, and a button that ends a day's work on one click is
+    // a trap.
+    let quit = if armed { " quit? " } else { " ✕ quit " };
     let quit_w = quit.chars().count() as u16;
     let quit_x = area.right().saturating_sub(quit_w);
     let quit_style = if armed {
@@ -102,6 +106,30 @@ pub fn render(
         Target::Quit,
     );
 
+    // The safe one, left of it and not dimmed to match: leaving is the ordinary
+    // thing you do several times a day, and it should not look like the
+    // dangerous one's quieter sibling.
+    let detach = " detach ";
+    let detach_w = detach.chars().count() as u16;
+    let detach_x = quit_x.saturating_sub(detach_w);
+    write_str(
+        buf,
+        detach_x,
+        area.y,
+        detach,
+        THEME.dim().patch(THEME.rail()),
+        detach_w,
+    );
+    hits.push(
+        Rect {
+            x: detach_x,
+            y: area.y,
+            width: detach_w,
+            height: 1,
+        },
+        Target::Detach,
+    );
+
     // ── Right edge, measured before the chips so they cannot overrun it ──
     let right = {
         let mut parts: Vec<String> = Vec::new();
@@ -118,7 +146,7 @@ pub fn render(
         parts.join("  ·  ")
     };
     let right_w = right.chars().count() as u16;
-    let mut right_x = quit_x.saturating_sub(right_w + 1);
+    let mut right_x = detach_x.saturating_sub(right_w + 1);
     write_str(
         buf,
         right_x,

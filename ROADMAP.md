@@ -104,7 +104,7 @@ dirk replace herdr rather than sit beside it.
 
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`#·········` 5% · 1 of 21 done · due 2027-02-15
+`#·········` 10% · 2 of 21 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 and configurable keys. The unglamorous half, and the half that decides whether
@@ -123,7 +123,6 @@ this is usable all day.
 - [ ] `0061` agent start: launch an agent, not just recognise one <sup>feature · p1 · agents</sup>
 - [ ] `0063` Nothing removes a socket its server has left behind <sup>feature · p3 · server</sup>
 - [ ] `0064` Tests leave a session running when they fail <sup>bug · p2 · server</sup>
-- [ ] `0065` Detach, and two exits that say which is which <sup>bug · p0 · nav</sup>
 - [ ] `0066` One glyph table, with cell widths <sup>feature · p1 · chrome</sup>
 - [ ] `0067` Harnesses are configuration, not a table in agent.rs <sup>feature · p1 · agents</sup>
 - [ ] `0068` An agent that reports its own state <sup>feature · p0 · agents</sup>
@@ -136,6 +135,7 @@ this is usable all day.
 ### done
 
 - [x] `0062` A CLI answer through a closed pipe should not panic <sup>bug · p1 · server</sup>
+- [x] `0065` Detach, and two exits that say which is which <sup>bug · p0 · nav</sup>
 
 ## v1.0 — Production
 
