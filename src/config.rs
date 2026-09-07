@@ -210,6 +210,9 @@ pub struct Config {
     pub naming: Naming,
     pub notify: Notify,
     pub sound: Sound,
+    /// What to pipe a selection into. Empty means whatever this platform is
+    /// likely to have -- `pbcopy`, `wl-copy`, `xclip`.
+    pub clipboard: Vec<String>,
     pub nav: Nav,
     /// Harnesses dirk should recognise, on top of the ones it ships with.
     #[serde(rename = "agent")]
@@ -666,6 +669,7 @@ impl Default for Config {
             naming: Naming::default(),
             notify: Notify::default(),
             sound: Sound::default(),
+            clipboard: Vec::new(),
             nav: Nav::default(),
             agents: Vec::new(),
             default_agent: String::new(),
@@ -769,7 +773,7 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
         // Command keys win, so a layout bound to one is unreachable. Silently
         // is the problem: the entry is listed with a key that does nothing.
         const RESERVED: &[char] = &[
-            'n', 'o', 'a', 'x', 'r', 'v', 's', 'd', 'b', 'w', 'q', 'j', 'k', ';',
+            'n', 'o', 'a', 'x', 'r', 'v', 's', 'd', 'b', 'w', 'q', 'j', 'k', ';', '[', '/',
         ];
         if let Some(k) = l.key.filter(|k| RESERVED.contains(k)) {
             out.push(format!(

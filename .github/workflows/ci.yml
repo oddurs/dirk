@@ -57,3 +57,19 @@ jobs:
         with:
           key: msrv
       - run: cargo check --all-targets
+
+  # Almost every type in dirk carries an argument for why it is shaped the way
+  # it is, so the documentation is load-bearing rather than decorative. This
+  # catches the ways it rots quietly: a link to something that was renamed, a
+  # code block that stopped compiling, a doc comment on an item that went.
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs
+      - run: cargo doc --no-deps --document-private-items

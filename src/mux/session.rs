@@ -640,6 +640,107 @@ impl Session {
         self.refocus();
     }
 
+    /// Everything every pane has said, as of now.
+    ///
+    /// Read once because reading it is not cheap: vt100 keeps the scrollback
+    /// but only shows a window onto it, so the whole of a pane is a walk of
+    /// that window. Doing this per keystroke, on the thread that draws, is the
+    /// version of search that makes typing stutter.
+    ///
+    /// The pane's own reading position is put back afterwards. Searching should
+    /// not move what you were looking at.
+    pub fn everything_said(&self) -> Vec<crate::find::Line> {
+        let mut out = Vec::new();
+        for (p, w) in self.flat() {
+            let Some(ws) = self.workspace(p, w) else {
+                continue;
+            };
+            for pane in &ws.panes {
+                read_pane(pane, &ws.label, &mut out);
+            }
+        }
+        for layout in &self.layouts {
+            let Some(ws) = layout.ws.as_ref() else {
+                continue;
+            };
+            for pane in &ws.panes {
+                read_pane(pane, &layout.def.name, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Move the focused pane's view through its scrollback.
+    ///
+    /// Positive is towards the past. Answers where it ended up, so the caller
+    /// can tell a scroll that did something from one that hit the end.
+    pub fn scroll_focused(&mut self, delta: isize) -> usize {
+        let Some(pane) = self.active_pane_mut() else {
+            return 0;
+        };
+        let want = (pane.scroll as isize).saturating_sub(-delta).max(0) as usize;
+        let Ok(mut term) = pane.term.lock() else {
+            return pane.scroll;
+        };
+        // vt100 clamps to what scrollback there actually is, so the answer to
+        // "how far back am I" comes from it rather than from what was asked.
+        term.screen_mut().set_scrollback(want);
+        pane.scroll = term.screen().scrollback();
+        pane.scroll
+    }
+
+    /// Put one pane's view at a given depth, whichever workspace holds it.
+    ///
+    /// By pane rather than by focus because a search result is somewhere else
+    /// by definition -- the line you are looking for is usually in the pane you
+    /// were not watching.
+    pub fn scroll_to(&mut self, id: PaneId, back: usize) {
+        let set = |ws: &mut Workspace| -> bool {
+            let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) else {
+                return false;
+            };
+            let Ok(mut term) = pane.term.lock() else {
+                return true;
+            };
+            term.screen_mut().set_scrollback(back);
+            pane.scroll = term.screen().scrollback();
+            true
+        };
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if set(ws) {
+                    return;
+                }
+            }
+        }
+        for layout in &mut self.layouts {
+            if let Some(ws) = layout.ws.as_mut()
+                && set(ws)
+            {
+                return;
+            }
+        }
+    }
+
+    /// Back to the live screen. What typing means.
+    pub fn unscroll_focused(&mut self) {
+        let Some(pane) = self.active_pane_mut() else {
+            return;
+        };
+        if pane.scroll == 0 {
+            return;
+        }
+        pane.scroll = 0;
+        if let Ok(mut term) = pane.term.lock() {
+            term.screen_mut().set_scrollback(0);
+        }
+    }
+
+    /// How far back the focused pane is being read.
+    pub fn scrolled(&self) -> usize {
+        self.active_pane().map_or(0, |p| p.scroll)
+    }
+
     /// Start the focused pane's program again, in place.
     ///
     /// Only for a pane that has stopped. The tree keeps its shape, so the panel
@@ -895,6 +996,12 @@ impl Session {
     /// Both the pane's own clock and the workspace's: the pane's decides
     /// whether its agent is working, and the workspace's is the age in the nav,
     /// which is about the workspace as a whole.
+    ///
+    /// Deliberately does *not* return a scrolled pane to the bottom. Being
+    /// scrolled back is a thing you asked for, and a build that prints a line
+    /// every second would otherwise drag you out of what you were reading --
+    /// which is the reason to be reading it. Typing is what brings you back,
+    /// because typing is a statement about the live screen.
     pub fn touch(&mut self, id: PaneId) {
         let now = Instant::now();
         let mark = |ws: &mut Workspace| -> bool {
@@ -1452,6 +1559,65 @@ fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
         _ => Source::None,
     };
     ws.state = next_state(observed, ws.seen);
+}
+
+/// Every line one pane has, oldest first.
+fn read_pane(pane: &Pane, space: &str, out: &mut Vec<crate::find::Line>) {
+    let Ok(mut term) = pane.term.lock() else {
+        return;
+    };
+    let (rows, cols) = term.screen().size();
+    if rows == 0 {
+        return;
+    }
+    let was = term.screen().scrollback();
+
+    // How far back there is to go. vt100 clamps, so asking for everything and
+    // reading back what was given is the only way to find out.
+    term.screen_mut().set_scrollback(usize::MAX);
+    let depth = term.screen().scrollback();
+
+    let step = rows as usize;
+    let total = depth + step;
+    let mut text = vec![String::new(); total];
+    let mut back = depth;
+    loop {
+        term.screen_mut().set_scrollback(back);
+        for (r, line) in term.screen().rows(0, cols).enumerate() {
+            // The window at this offset shows the lines ending `back` from the
+            // end, so its first row is that far from the start.
+            let at = total - back - step + r;
+            if let Some(slot) = text.get_mut(at) {
+                *slot = line;
+            }
+        }
+        if back == 0 {
+            break;
+        }
+        back = back.saturating_sub(step);
+    }
+    term.screen_mut().set_scrollback(was);
+
+    let name = match &pane.label {
+        Some(label) => format!("{space} · {label}"),
+        None => space.to_string(),
+    };
+    for (at, line) in text.into_iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        // What `scroll` has to be for this line to be on screen, and where on
+        // it: the two halves of "take me to it".
+        let from_end = total - 1 - at;
+        let back = from_end.saturating_sub(step - 1);
+        out.push(crate::find::Line {
+            pane: pane.id,
+            where_from: name.clone(),
+            back,
+            row: (step - 1 - (from_end - back)) as u16,
+            text: line,
+        });
+    }
 }
 
 /// How long ago, coarsely.
