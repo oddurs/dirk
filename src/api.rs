@@ -205,6 +205,20 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
     })
 }
 
+/// The nouns a session answers to.
+///
+/// Here rather than beside the argument parser so the table below and the
+/// routing cannot disagree -- which they did, silently, the moment a noun was
+/// added to one of them.
+pub const NOUNS: &[&str] = &[
+    "workspace",
+    "pane",
+    "layout",
+    "agent",
+    "session",
+    "worktree",
+];
+
 /// Every command, with what it takes. Kept beside the handlers so the two
 /// cannot drift without somebody noticing.
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -221,6 +235,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("pane.close", "<pane>"),
     ("layout.list", ""),
     ("layout.open", "<name>"),
+    ("worktree.list", ""),
+    ("worktree.add", "<branch>"),
+    ("worktree.remove", "<branch|path> [--force]"),
     ("agent.list", ""),
     (
         "agent.state",
@@ -278,7 +295,7 @@ mod tests {
             assert!(name.contains('.'), "{name} is not a noun and a verb");
             let (noun, _) = name.split_once('.').unwrap();
             assert!(
-                ["workspace", "pane", "layout", "agent", "session"].contains(&noun),
+                NOUNS.contains(&noun),
                 "{name} has a noun the CLI does not route"
             );
         }

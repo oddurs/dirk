@@ -94,7 +94,7 @@ A daemon, detach and reattach, persistence across restarts, and a socket API
 
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`########··` 76% · 16 of 21 done · due 2027-02-15
+`#########·` 81% · 17 of 21 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
@@ -103,7 +103,6 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 - [ ] `0014` Configurable keybindings <sup>feature · p2 · config</sup>
 - [ ] `0041` Tabs: the level between a space and its panes <sup>feature · p1 · mux</sup>
 - [ ] `0042` Command palette <sup>feature · p1 · nav</sup>
-- [ ] `0044` Create and manage worktrees from the nav <sup>feature · p1 · git</sup>
 - [ ] `0060` A view per client, rather than one client at a time <sup>feature · p2 · server</sup>
 
 ### done
@@ -111,6 +110,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 - [x] `0008` Scrollback and copy mode <sup>feature · p0 · mux</sup>
 - [x] `0040` Search the scrollback <sup>feature · p1 · mux</sup>
 - [x] `0043` Pane zoom, move and swap <sup>feature · p2 · mux</sup>
+- [x] `0044` Create and manage worktrees from the nav <sup>feature · p1 · git</sup>
 - [x] `0061` agent start: launch an agent, not just recognise one <sup>feature · p1 · agents</sup>
 - [x] `0062` A CLI answer through a closed pipe should not panic <sup>bug · p1 · server</sup>
 - [x] `0063` Nothing removes a socket its server has left behind <sup>feature · p3 · server</sup>

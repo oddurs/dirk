@@ -50,6 +50,8 @@ pub enum Target {
     NewWorkspace(usize),
     /// Start an agent where you are looking, making somewhere for it if need be.
     NewAgent,
+    /// A worktree, and a space open in it.
+    NewWorktree,
     OpenProject,
     PickerRow(usize),
     /// One result of a search, by position in the list.

@@ -1328,3 +1328,120 @@ fn a_socket_nothing_is_listening_on_can_be_swept_up() {
     );
     drop(client);
 }
+
+// ── Worktrees ───────────────────────────────────────────────────────────
+
+/// A repository with one commit in it, somewhere disposable.
+fn a_repo(name: &str) -> std::path::PathBuf {
+    let dir = config_home().join(format!("repo-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("repo dir");
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git")
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("a.txt"), b"one\n").expect("a file");
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "one"]);
+    dir
+}
+
+#[test]
+fn a_worktree_and_somewhere_to_work_in_it_are_one_action() {
+    // Doing it by hand is: leave dirk, `git worktree add`, come back, open the
+    // project. The reason parallel agents on one repository are practical is
+    // that this is the thing you do to start each of them.
+    let repo = a_repo("wt");
+    let session = unique("wt");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let (ok, out) = ask(&session, &["worktree", "add", "feat/parallel"]);
+    assert!(ok, "worktree add failed: {out}");
+
+    let at = repo.parent().expect("a parent").join(format!(
+        "{}-feat-parallel",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+    assert!(at.is_dir(), "no worktree at {}: {out}", at.display());
+
+    // And a space open in it, on the branch, named from it.
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    assert!(
+        list.contains("feat-parallel") || list.contains("feat/parallel"),
+        "no space opened in the new worktree: {list}"
+    );
+
+    // Listing does not require leaving dirk, and says which one you are in.
+    let (ok, trees) = ask(&session, &["worktree", "list"]);
+    assert!(ok, "worktree list failed: {trees}");
+    assert!(
+        trees.contains("feat/parallel"),
+        "the new one is missing: {trees}"
+    );
+    assert!(
+        trees.contains("\"main\": true"),
+        "nothing said which is the repository"
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&at);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn removing_a_worktree_refuses_while_it_holds_uncommitted_work() {
+    // git refuses that by default, and the refusal is passed along rather than
+    // decided for you: the case for removing it anyway is one only you can make.
+    let repo = a_repo("wtrm");
+    let session = unique("wtrm");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["worktree", "add", "scratch"]);
+    assert!(ok, "worktree add failed: {out}");
+    let at = repo.parent().expect("a parent").join(format!(
+        "{}-scratch",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(at.join("a.txt"), b"changed\n").expect("dirty it");
+
+    let (ok, why) = ask(&session, &["worktree", "remove", "scratch"]);
+    assert!(!ok, "it removed work nobody had committed: {why}");
+    assert!(at.is_dir(), "it went anyway");
+
+    let (ok, out) = ask(&session, &["worktree", "remove", "scratch", "--force"]);
+    assert!(ok, "forcing did not work: {out}");
+    assert!(!at.is_dir(), "it is still there: {out}");
+
+    // And the repository itself is not a worktree of itself.
+    let (ok, why) = ask(&session, &["worktree", "remove", "main"]);
+    assert!(!ok, "it offered to remove the repository: {why}");
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&repo);
+}

@@ -695,6 +695,34 @@ impl Session {
         self.refocus();
     }
 
+    /// The directory whatever is focused is standing in.
+    ///
+    /// The focused pane's, not the project's: in a worktree the two differ, and
+    /// what git should be asked about is where you are.
+    pub fn focused_dir(&self) -> Option<PathBuf> {
+        self.focused_workspace()
+            .and_then(|ws| ws.active_pane())
+            .map(|p| p.cwd.clone())
+    }
+
+    /// Close a project and everything in it, by path.
+    ///
+    /// For a directory that is about to stop existing: the panes in it are
+    /// standing in something that will not be there, and leaving them is
+    /// leaving shells whose working directory has been deleted underneath them.
+    pub fn close_project(&mut self, path: &Path) {
+        let Some(p) = self.projects.iter().position(|x| x.path == path) else {
+            return;
+        };
+        for ws in std::mem::take(&mut self.projects[p].workspaces) {
+            for mut pane in ws.panes {
+                pane.close();
+            }
+        }
+        self.projects.remove(p);
+        self.refocus();
+    }
+
     /// Everything every pane has said, as of now.
     ///
     /// Read once because reading it is not cheap: vt100 keeps the scrollback

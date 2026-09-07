@@ -66,6 +66,7 @@ mod tokens;
 mod ui;
 mod wire;
 
+use api::NOUNS;
 use config::Config;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -110,6 +111,7 @@ JSON; `--current` means the pane you are in.
   pane      list|focus|split|read|send-keys|close
   layout    list|open
   agent     list|start|state|hooks
+  worktree  list|add|remove
   session   info|list|reload|commands|quit|prune
 
 Options:
@@ -401,9 +403,6 @@ fn words(args: &[String]) -> Vec<&str> {
     out
 }
 
-/// The nouns a session answers to.
-const NOUNS: &[&str] = &["workspace", "pane", "layout", "agent", "session"];
-
 /// Read `dirk pane split w1:p2 rows` as a request, or `None` if this is not one.
 ///
 /// `--current` becomes the pane the caller is in, which is what makes the
@@ -604,6 +603,24 @@ fn run_status(run: &[String], cap: Duration) -> Option<String> {
     Some(text.lines().next().unwrap_or_default().trim().to_string())
 }
 
+/// A question dirk is waiting on one line of text for.
+///
+/// Small on purpose. The project picker is the right shape for choosing from a
+/// list that exists; this is for the case where the answer is a thing you are
+/// about to make, and there is nothing to list.
+struct Ask {
+    /// What is being asked, shown before the text.
+    what: &'static str,
+    text: String,
+    then: Then,
+}
+
+/// What to do with the answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Then {
+    Worktree,
+}
+
 /// What a board last said about itself.
 struct Badge {
     /// The text, or nothing while it has not answered yet.
@@ -664,6 +681,8 @@ struct App {
     copy: Option<copy::Mode>,
     /// Searching, when that is.
     find: Option<find::Find>,
+    /// A question that wants one line of text back.
+    asking: Option<Ask>,
     /// Which board was focused at the end of the last turn, by name, so one
     /// that does not keep its panes can be shut when you leave it.
     ///
@@ -720,6 +739,7 @@ impl App {
             badging: false,
             copy: None,
             find: None,
+            asking: None,
             was: None,
             readonly: false,
             complained: false,
@@ -1317,6 +1337,66 @@ impl App {
                 }
             }
 
+            "worktree.list" => {
+                let Some(dir) = self.here() else {
+                    return Reply::err("no project focused");
+                };
+                let here = self.session.focused_dir();
+                Reply::ok(serde_json::json!({
+                    "worktrees": git::worktrees(&dir)
+                        .into_iter()
+                        .map(|t| serde_json::json!({
+                            "path": t.path,
+                            "branch": t.branch,
+                            "main": t.main,
+                            // Which one you are in, since the answer is a list
+                            // of directories that all look alike.
+                            "open": here.as_deref() == Some(t.path.as_path()),
+                        }))
+                        .collect::<Vec<_>>(),
+                }))
+            }
+
+            "worktree.add" => {
+                let branch = arg(0);
+                if branch.is_empty() {
+                    return Reply::err("which branch?");
+                }
+                match self.add_worktree(&branch) {
+                    Ok(at) => Reply::ok(serde_json::json!({
+                        "branch": branch,
+                        "path": at,
+                    })),
+                    Err(why) => Reply::err(why),
+                }
+            }
+
+            "worktree.remove" => {
+                let Some(dir) = self.here() else {
+                    return Reply::err("no project focused");
+                };
+                let want = arg(0);
+                let force = req.args.iter().any(|a| a == "--force");
+                // By branch or by path, because a branch is what you remember
+                // and a path is what `worktree list` gave you.
+                let Some(tree) = git::worktrees(&dir)
+                    .into_iter()
+                    .find(|t| t.branch == want || t.path.to_string_lossy() == want)
+                else {
+                    return Reply::err(format!("no worktree for {want}"));
+                };
+                if tree.main {
+                    return Reply::err("that is the repository, not a worktree of it");
+                }
+                match git::remove(&dir, &tree.path, force) {
+                    Ok(()) => {
+                        self.session.close_project(&tree.path);
+                        Reply::ok(serde_json::json!({ "removed": tree.path }))
+                    }
+                    Err(why) => Reply::err(why),
+                }
+            }
+
             // Rank one: the agent saying what it is doing, which is a fact
             // where everything else dirk has is a guess.
             "agent.state" => {
@@ -1812,6 +1892,9 @@ impl App {
         if let Some(f) = &self.find {
             ui::found::render(buf, content, &self.glyphs, f, &mut self.hits);
         }
+        if let Some(a) = &self.asking {
+            ui::ask::render(buf, content, &self.glyphs, a.what, &a.text);
+        }
         if let Some(p) = &self.picker {
             ui::picker::render(
                 buf,
@@ -1908,6 +1991,10 @@ impl App {
                 self.new_agent();
                 return;
             }
+            Target::NewWorktree => {
+                self.ask_for_worktree();
+                return;
+            }
             Target::NewWorkspace(p) => {
                 self.session.new_workspace(p, area.height, area.width);
             }
@@ -1969,6 +2056,9 @@ impl App {
         if self.picker.is_some() {
             return self.picker_key(k);
         }
+        if self.asking.is_some() && !self.prefix {
+            return self.ask_key(k);
+        }
         if self.find.is_some() && !self.prefix {
             return self.find_key(k);
         }
@@ -1994,6 +2084,83 @@ impl App {
             return;
         }
         self.send_key(k);
+    }
+
+    /// Ask which branch, then make a worktree for it.
+    fn ask_for_worktree(&mut self) {
+        if self.here().is_none() {
+            return self.note("no project focused");
+        }
+        self.asking = Some(Ask {
+            what: "worktree for branch",
+            text: String::new(),
+            then: Then::Worktree,
+        });
+    }
+
+    /// Keys while a question is open.
+    fn ask_key(&mut self, k: KeyEvent) {
+        let Some(ask) = self.asking.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => self.asking = None,
+            KeyCode::Backspace => {
+                ask.text.pop();
+            }
+            KeyCode::Char(c) => ask.text.push(c),
+            KeyCode::Enter => {
+                let Some(ask) = self.asking.take() else {
+                    return;
+                };
+                let answer = ask.text.trim().to_string();
+                if answer.is_empty() {
+                    return;
+                }
+                match ask.then {
+                    Then::Worktree => match self.add_worktree(&answer) {
+                        Ok(at) => {
+                            let name = at.file_name().unwrap_or_default().to_string_lossy();
+                            self.note(&format!("opened {name}"));
+                        }
+                        Err(why) => self.note(&why),
+                    },
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The directory of whatever is focused, which is what git is asked about.
+    fn here(&self) -> Option<std::path::PathBuf> {
+        self.session.focused_dir()
+    }
+
+    /// A worktree for `branch`, and a space open in it.
+    ///
+    /// One action because it is one intention. Doing it by hand is: leave
+    /// dirk, `git worktree add`, come back, open the project -- and the reason
+    /// parallel agents on one repository are practical at all is that this is
+    /// the thing you do to start each of them.
+    fn add_worktree(&mut self, branch: &str) -> Result<std::path::PathBuf, String> {
+        let Some(dir) = self.here() else {
+            return Err("no project focused".into());
+        };
+        // Beside the repository proper rather than beside whichever worktree
+        // you happen to be standing in, or they nest.
+        let main = git::worktrees(&dir)
+            .into_iter()
+            .find(|t| t.main)
+            .map_or(dir.clone(), |t| t.path);
+        let at = git::beside(&main, branch);
+        if at.exists() {
+            return Err(format!("{} is already there", at.display()));
+        }
+        let at = git::add(&dir, branch, &at)?;
+        // Opened rather than only created: a worktree with nothing in it is a
+        // directory, and what was wanted is somewhere to work.
+        self.open(&at);
+        Ok(at)
     }
 
     /// Exchange the focused pane with its neighbour.
@@ -2326,6 +2493,7 @@ impl App {
                     self.note("nothing to zoom past");
                 }
             }
+            KeyCode::Char('W') => self.ask_for_worktree(),
             KeyCode::Char('{') => self.move_pane(-1),
             KeyCode::Char('}') => self.move_pane(1),
             KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.session.step_workspace(1),
