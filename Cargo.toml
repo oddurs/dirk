@@ -11,7 +11,7 @@ keywords = ["terminal", "multiplexer", "tui", "pty", "tmux"]
 categories = ["command-line-utilities"]
 # Let-chains, which this uses throughout.
 rust-version = "1.88"
-exclude = ["/cairn", "/.github"]
+exclude = ["/cairn", "/.github", "/.claude", "/.githooks", "/scripts"]
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

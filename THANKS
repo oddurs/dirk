@@ -1,0 +1,65 @@
+dirk THANKS — work this project rests on.
+
+The hard part of a multiplexer is terminal emulation, and it is a library.
+What dirk owns is the window manager over the top; the parts underneath were
+written by other people, and doing without any one of them would have meant a
+year of someone else's debugging.
+
+  vt100          Jesse Luehrs and contributors
+                 The grid, the scrollback and the escape parsing. Everything
+                 dirk knows about what a program drew, it learned from here.
+                 <https://crates.io/crates/vt100>
+
+  portable-pty   Wez Furlong and the wezterm contributors
+                 Spawning a child on a pseudo-terminal, on both platforms,
+                 correctly. The part everyone underestimates.
+                 <https://crates.io/crates/portable-pty>
+
+  ratatui        The ratatui contributors, and tui-rs before it
+                 The chrome: layout, buffers and the widget model the sidebar
+                 and the rail are built out of.
+                 <https://ratatui.rs>
+
+  crossterm      Timon Post and contributors
+                 Raw mode, mouse reporting, and the same terminal behaviour on
+                 Linux and macOS.
+                 <https://crates.io/crates/crossterm>
+
+  serde, toml, serde_json, chrono, unicode-width, libc
+                 The unglamorous foundation. `unicode-width` in particular is
+                 the reason the glyph table has one place to ask how wide a
+                 character is, rather than several guesses.
+
+Ideas rather than code:
+
+  tmux           Nicholas Marriott
+                 The prefix key, the split model, and thirty years of evidence
+                 about which parts of a multiplexer people actually use. dirk
+                 disagrees with tmux about the sidebar and about very little
+                 else.
+
+  GNU            The layout of this repository — COPYING, AUTHORS, NEWS,
+                 INSTALL, THANKS, a ChangeLog generated rather than kept — is
+                 the GNU coding standards', and it is a better answer than
+                 anything this project would have invented.
+
+  cairn          The roadmap and the issue tracker are the same files, in the
+                 repository, reviewable in a pull request.
+                 <https://github.com/oddurs/cairn>
+
+  smali          The Gotham palette, and the sidebar and rail designs.
+  namesync       The naming policy in src/name.rs is a port of it.
+                 Both are the author's own earlier work, under the same terms;
+                 see AUTHORS.
+
+Bug reports, patches and the people who sent them are recorded in NEWS, release
+by release. If you are missing from there and should not be, that is a bug;
+please say so.
+
+
+----------------------------------------------------------------------
+Copyright (C) 2026 Oddur Sigurdsson.
+
+Copying and distribution of this file, with or without modification, are
+permitted in any medium without royalty provided the copyright notice and this
+notice are preserved.

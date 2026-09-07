@@ -1,6 +1,7 @@
 # dirk
 
 [![ci](https://github.com/oddurs/dirk/actions/workflows/ci.yml/badge.svg)](https://github.com/oddurs/dirk/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/oddurs/dirk?label=release&color=blue)](https://github.com/oddurs/dirk/releases/latest)
 [![license: GPLv3+](https://img.shields.io/badge/license-GPLv3+-blue.svg)](COPYING)
 
 A terminal multiplexer that knows what its sessions are for.
@@ -33,6 +34,29 @@ A terminal multiplexer that knows what its sessions are for.
 
 tmux gives you panes and asks you to remember what is in them. dirk starts from
 the opposite end: the sidebar is the product, and the panes hang off it.
+
+## Install
+
+A binary for linux or macOS, on either architecture, from
+[the latest release](https://github.com/oddurs/dirk/releases/latest):
+
+```console
+$ tar -xzf dirk-0.4.0-aarch64-apple-darwin.tar.gz
+$ sudo install -m 755 dirk-*/dirk /usr/local/bin/dirk
+$ dirk
+```
+
+Or from source, which needs Rust 1.88 or newer:
+
+```console
+$ git clone https://github.com/oddurs/dirk && cd dirk
+$ make && sudo make install
+```
+
+[INSTALL](INSTALL) has the rest: verifying a download, `PREFIX` and `DESTDIR`,
+uninstalling, and what a packager needs. There is no crates.io release — the
+name was taken in 2019 by an unrelated tool — but `cargo install --git
+https://github.com/oddurs/dirk` works.
 
 ## Three ideas, and keeping them apart is the whole design
 
@@ -637,6 +661,11 @@ The unit tests cover the naming policy, which is pure. The rest is a terminal
 talking to a terminal, so `tests/smoke.rs` gives dirk a real pty, reads what it
 paints and drives it with real keystrokes.
 
+`make install` puts the binary in `$PREFIX/bin`, the manual page in
+`$PREFIX/share/man/man1`, and the documentation in `$PREFIX/share/doc/dirk`.
+`make uninstall` takes all three back out. `make dist` makes a source tarball
+someone else could build from, ChangeLog included.
+
 ## What it is built on
 
 The hard part of a multiplexer is terminal emulation, and it is a library.
@@ -653,13 +682,22 @@ routing, the hit map, the render composition and the naming policy.
 ## Contributing
 
 The backlog is the contribution guide: `cairn next` says what is ready to work
-on, and each item carries the reasoning that produced it. See
-[CONTRIBUTING.md](CONTRIBUTING.md), and [NEWS](NEWS) for what has changed.
+on, and each item carries the reasoning that produced it — the problem, the
+proposal, what was weighed, and acceptance criteria you can check yourself.
 
 ```console
-$ make check      # fmt, clippy and the full suite — the gate CI enforces
-$ make shot       # print what dirk currently paints, as plain text
+$ make setup                  # once: the git alias and the hooks
+$ git work start 44           # claim the item, branch, open a worktree
+$ make check                  # fmt, clippy and the suite — the gate CI enforces
+$ make shot                   # print what dirk currently paints, as plain text
+$ git work ship               # push, pull request, merge itself when green
 ```
+
+Every branch gets a worktree of its own, so two people — or two agents — can
+work at once without sharing a build directory. [HACKING](HACKING) has the whole
+loop, [CONTRIBUTING.md](CONTRIBUTING.md) has what a good change looks like,
+[AGENTS.md](AGENTS.md) is the brief a coding agent reads, and [NEWS](NEWS) is
+what has changed.
 
 ## Licence
 
@@ -672,6 +710,9 @@ It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE.
 
+Contributors keep the copyright in what they wrote and are listed in
+[AUTHORS](AUTHORS); what this rests on is in [THANKS](THANKS).
+
 ## Where this is going
 
 The sidebar is the product, and v0.1 has a sketch of it. The roadmap is
@@ -683,7 +724,7 @@ The sidebar is the product, and v0.1 has a sketch of it. The roadmap is
 | **v0.1** ✓ | It runs | panes on a pty, a clickable sidebar, a rail, naming |
 | **v0.2** ✓ | The nav | three sections — layouts, spaces, agents — two-line rows carrying worktree, branch, intent and age, and static layouts with a split tree under them |
 | **v0.3** ✓ | It knows what the agents are doing | real detection and real lifecycle states, so `blocked` is shown rather than guessed; attention routing and notifications |
-| **v0.4** | Sessions that outlive their terminal | a daemon, detach and reattach, persistence, and a socket API with a CLI so an agent inside a pane can drive dirk |
+| **v0.4** ✓ | Sessions that outlive their terminal | a daemon, detach and reattach, persistence, and a socket API with a CLI so an agent inside a pane can drive dirk |
 | **v0.5** | A multiplexer you would not miss tmux from | scrollback, copy mode, search, tabs, zoom, a command palette, configurable keys |
 | **v1.0** | Production | documented, packaged, hardened, and measured |
 
@@ -693,19 +734,25 @@ a guess until the states are real.
 
 ## Status
 
-v0.4 has begun: sessions outlive the terminal they were started from.
+**v0.4 has shipped.** A session outlives the terminal it was started from:
+`dirk` attaches and starts the session if it is not running, close the terminal
+and everything in it keeps going, and `dirk session list` says which sessions
+exist and whether anyone is watching. There is a socket API and a CLI that
+speaks it, so an agent inside a pane can drive the session it is running in.
 
-v0.3 is done. dirk reads what is running in each pane from its foreground
-process group, so a shell is a shell and an agent is an agent; the four
-lifecycle states are real, including `blocked`, which is the only one waiting on
-a human; the rail counts what is owed and notifications arrive when it changes.
+Before that, v0.3 made the agent states real — dirk reads what is running in
+each pane from its foreground process group, so a shell is a shell and an agent
+is an agent, and `blocked`, the only state waiting on a human, is shown rather
+than guessed.
 
-It is still a single process. Close the terminal and the work goes with it,
-which is the whole of v0.4. Close the terminal and the work goes with it, so
-[herdr](https://herdr.dev) stays installed for anything long-running — that is
-item `0007`, and the whole of v0.4.
+**v0.5 is what is being worked on now**, and it is the unglamorous half — the
+one that decides whether this is usable all day. Scrollback, copy mode and
+search have landed; pane zoom, move and swap are in progress.
 
-The gap worth naming rather than burying: the state glyph beside a workspace is
-inferred from whether its pane has ever published a title, so everything that
-has looks like it is working and `blocked` — the one state waiting on you — is
-never shown. That is `0030` and `0031`, and the whole of v0.3.
+The gaps worth naming rather than burying: there are no tabs, so a workspace is
+one arrangement of panes and not several (`0041`); there is no command palette,
+so everything reachable is reachable by a key you have to know (`0042`);
+keybindings are not configurable (`0014`); worktrees cannot be made from the nav
+(`0044`); and one client watches a session at a time — a second dirk takes it
+over and the first is told why (`0060`). Each is in [ROADMAP.md](ROADMAP.md)
+with the reasoning attached.

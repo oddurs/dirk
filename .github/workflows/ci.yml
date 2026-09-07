@@ -73,3 +73,29 @@ jobs:
         with:
           key: docs
       - run: cargo doc --no-deps --document-private-items
+
+  # What ships and is not Rust: the manual page, the shell that drives the
+  # workflow, and the commit messages. All three take seconds.
+  shipped:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The attribution check needs a merge base to compare against.
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mandoc
+      - name: the manual page parses
+        run: mandoc -T lint doc/dirk.1
+      - name: the scripts and hooks are clean
+        # Warnings and up. The info level is where shellcheck versions
+        # disagree with each other, and a CI job that fails when the runner
+        # image bumps a linter is a job nobody trusts.
+        run: shellcheck -S warning scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
+      - name: no tool attribution in the history this branch adds
+        run: |
+          base=$(git merge-base origin/${{ github.base_ref || 'main' }} HEAD 2>/dev/null || echo HEAD~1)
+          if git log --format=%B "$base..HEAD" | grep -niE 'co-authored-by:.*(claude|anthropic|copilot|cursor)|generated with \[*claude'; then
+            echo "::error::a commit on this branch credits a tool; .githooks/commit-msg strips these — run make setup"
+            exit 1
+          fi
+          echo "clean"
