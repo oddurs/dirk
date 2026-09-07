@@ -63,7 +63,25 @@ impl Client {
         Self::attach_sized(session, COLS, ROWS)
     }
 
+    /// The way `--remote` reaches a session, with a stand-in for ssh.
+    ///
+    /// Not a network: what is being tested is the transport -- a pipe pair
+    /// instead of a socket, a relay on the far end, and a client that survives
+    /// losing one -- and a test that needed a second machine would be a test
+    /// nobody runs.
+    fn over(session: &str, ssh: &std::path::Path) -> Self {
+        Self::spawn(session, COLS, ROWS, &|cmd| {
+            cmd.args(["--remote", "somewhere"]);
+            cmd.env("DIRK_SSH", ssh);
+            cmd.env("DIRK_REMOTE", env!("CARGO_BIN_EXE_dirk"));
+        })
+    }
+
     fn attach_sized(session: &str, cols: u16, rows: u16) -> Self {
+        Self::spawn(session, cols, rows, &|_| {})
+    }
+
+    fn spawn(session: &str, cols: u16, rows: u16, extra: &dyn Fn(&mut CommandBuilder)) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -82,6 +100,8 @@ impl Client {
         // and pointing this at the checkout would leave saved sessions in the
         // repository.
         cmd.env("XDG_CONFIG_HOME", config_home());
+
+        extra(&mut cmd);
 
         let child = pair.slave.spawn_command(cmd).expect("spawn dirk");
         drop(pair.slave);
@@ -106,6 +126,18 @@ impl Client {
             cols,
             rows,
         }
+    }
+
+    /// Wait for the client itself to end, and say how.
+    fn ended(&mut self, within: Duration) -> Option<u32> {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Some(status.exit_code());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
     }
 
     fn rows(&self) -> Vec<String> {
@@ -641,4 +673,210 @@ fn an_answer_nobody_is_reading_ends_quietly() {
             "`dirk {args}` panicked into a closed pipe:\n{said}"
         );
     }
+}
+
+// ── Over a link that is not a socket ────────────────────────────────────
+
+/// A stand-in for ssh that lets one link through and refuses every one after.
+///
+/// What a host that has gone looks like once you were already talking to it,
+/// and the case where a link is made -- ssh starts, the pipes are there -- and
+/// still delivers nothing.
+fn fake_ssh_once(name: &str) -> std::path::PathBuf {
+    let mark = config_home().join(format!("mark-{name}"));
+    let body = format!(
+        "#!/bin/sh\nshift 3\n\
+         if [ -f {mark} ]; then exit 0; fi\n\
+         : > {mark}\n\
+         exec \"$@\"\n",
+        mark = mark.display()
+    );
+    let _ = std::fs::remove_file(&mark);
+    script(name, &body)
+}
+
+/// A stand-in for ssh: drops `-T -- <target>` and runs the rest here.
+///
+/// `flaky` makes the first link die two seconds in, which is what a laptop lid
+/// looks like from this side.
+fn fake_ssh(name: &str, flaky: bool) -> std::path::PathBuf {
+    let body = match flaky {
+        false => "#!/bin/sh\nshift 3\nexec \"$@\"\n".to_string(),
+        // Killed rather than backgrounded: a POSIX shell gives an asynchronous
+        // list /dev/null for stdin, and a relay with no input has nothing to
+        // relay. The watchdog kills the script, which `exec` has made the relay.
+        true => format!(
+            "#!/bin/sh\nshift 3\n\
+             if [ -f {mark} ]; then exec \"$@\"; fi\n\
+             : > {mark}\n\
+             ( sleep 2; kill $$ 2>/dev/null ) &\n\
+             exec \"$@\"\n",
+            mark = config_home().join(format!("mark-{name}")).display()
+        ),
+    };
+    let _ = std::fs::remove_file(config_home().join(format!("mark-{name}")));
+    script(name, &body)
+}
+
+fn script(name: &str, body: &str) -> std::path::PathBuf {
+    let path = config_home().join(format!("ssh-{name}"));
+    std::fs::write(&path, body).expect("write the stand-in");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    path
+}
+
+#[test]
+fn a_session_reached_over_a_pipe_pair_draws_the_same_thing() {
+    // The client does not know what it is talking to. That is the whole claim
+    // of the remote attach: a transport, not a second implementation.
+    let session = unique("remote");
+    let client = Client::over(&session, &fake_ssh("plain", false));
+    assert!(
+        client.wait_for(READY, START),
+        "nothing came back over the relay\n{}",
+        client.drawn()
+    );
+    assert!(
+        client.wait_for("spaces", START),
+        "the frame is not a dirk frame\n{}",
+        client.drawn()
+    );
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn a_dropped_link_comes_back_to_the_same_session() {
+    // The session is a daemon and the link is not the session. Losing one
+    // should cost you the seconds it takes to make another and nothing else.
+    let session = unique("dropped");
+    let client = Client::over(&session, &fake_ssh("flaky", true));
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    // Past the two seconds the stand-in allows the first link.
+    std::thread::sleep(Duration::from_secs(4));
+
+    // Something the old frame cannot contain, so seeing it means a new link
+    // reached the session that was there before -- not a repaint of the last
+    // thing painted.
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "the session did not outlive the link: {list}");
+    let id = first_id(&list);
+    let (ok, _) = ask(&session, &["workspace", "rename", &id, "Still", "here"]);
+    assert!(ok, "rename failed");
+    assert!(
+        client.wait_for("Still here", START),
+        "the link never came back\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn a_link_that_never_worked_is_not_waited_for() {
+    // Nothing to wait for. A connection that never delivered a frame is a
+    // configuration problem wearing a network problem's clothes, and two
+    // minutes of patience spent on one is two minutes of a blank screen.
+    let ssh = config_home().join("ssh-dead");
+    std::fs::write(
+        &ssh,
+        "#!/bin/sh\necho 'ssh: no route to host' >&2\nexit 255\n",
+    )
+    .expect("write");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    let mut client = Client::over(&unique("dead"), &ssh);
+    let code = client.ended(Duration::from_secs(15));
+    assert_eq!(
+        code,
+        Some(1),
+        "a host that does not answer should end the client, and say so:\n{}",
+        client.drawn()
+    );
+}
+
+#[test]
+fn a_session_that_dies_reaches_the_client_as_a_lost_link() {
+    // The relay copies in two directions and only one of them decides when it
+    // is over. If the far session going away does not end the relay, the client
+    // sees a link that is still open and a screen that has stopped changing.
+    let session = unique("died");
+    let client = Client::over(&session, &fake_ssh("dies", false));
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let killed = std::process::Command::new("pkill")
+        .args(["-f", &format!("dirk server --session {session}")])
+        .status()
+        .expect("pkill");
+    assert!(killed.success(), "there was no server to kill");
+
+    assert!(
+        client.wait_for("reconnecting", Duration::from_secs(15)),
+        "a dead session looked like a live one\n{}",
+        client.drawn()
+    );
+    drop(client);
+}
+
+#[test]
+fn remote_attaches_and_does_not_carry_a_command() {
+    // `dirk --remote box pane list` used to answer about this machine, which is
+    // a wrong answer rather than an error.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--remote", "somewhere", "pane", "list"])
+        .env("XDG_CONFIG_HOME", config_home())
+        .output()
+        .expect("run it");
+    assert!(!out.status.success(), "it answered about the wrong machine");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("does not carry a command"), "said: {said}");
+}
+
+#[test]
+fn a_link_that_keeps_failing_is_tried_less_often_and_then_not_at_all() {
+    // The count belongs to the run, not to one wait. A ladder that started over
+    // every time a link was made -- and making one only means ssh started -- is
+    // how a client ends up dialling a host that has gone for good once a
+    // second, for ever, on a screen that says "reconnecting (1)" throughout.
+    let session = unique("ladder");
+    let client = Client::over(&session, &fake_ssh_once("once"));
+    assert!(
+        client.wait_for(READY, START),
+        "the one good link never worked\n{}",
+        client.drawn()
+    );
+
+    let killed = std::process::Command::new("pkill")
+        .args(["-f", &format!("dirk server --session {session}")])
+        .status()
+        .expect("pkill");
+    assert!(killed.success(), "there was no server to kill");
+
+    // The first three waits are one, one and two seconds, so a client that is
+    // counting reaches the fourth attempt inside ten and one that is not never
+    // leaves the first.
+    assert!(
+        client.wait_for("reconnecting (4)", Duration::from_secs(20)),
+        "the wait never got any longer\n{}",
+        client.drawn()
+    );
+    drop(client);
 }
