@@ -984,3 +984,38 @@ fn a_program_that_titles_itself_does_not_become_a_workspace_name() {
         h.drawn()
     );
 }
+
+#[test]
+fn the_second_source_enabled_without_a_key_changes_nothing() {
+    // Every failure of the second source has to leave naming exactly where it
+    // was without it: no key, no curl, a timeout, a bad answer, all the same.
+    // A naming source that can break naming is worse than no naming source.
+    let claude = fake_agent("claude");
+    let mut h = Harness::start_with_config(&format!(
+        r#"shell = {:?}
+[notify]
+enabled = false
+[naming.sources.llm]
+enabled = true
+api_key_env = "DIRK_A_KEY_THAT_IS_NOT_SET"
+interval_ms = 0
+"#,
+        claude.display().to_string()
+    ));
+    assert!(h.wait_for(READY, START), "never started");
+
+    // The title source still works, and the workspace is still named by it.
+    h.send(b"printf '\\033]2;Still named by the title\\007'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| {
+            h.rows().iter().any(|r| {
+                r.chars()
+                    .take(34)
+                    .collect::<String>()
+                    .contains("Still named by")
+            })
+        }),
+        "naming stopped working with the second source enabled\n{}",
+        h.drawn()
+    );
+}

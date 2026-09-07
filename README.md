@@ -162,6 +162,18 @@ strip_project_prefix = true   # "ptop-adopt-lessons" under "ptop" reads "Adopt-l
 # replaces it.
 ignore_titles        = ["nvim", "lazygit", "claude", "htop"]
 
+# A second source of intent, for panes whose title says nothing. Off unless
+# asked for. The name of the variable holding your key, never the key.
+[naming.sources.llm]
+enabled        = false
+endpoint       = "https://api.anthropic.com/v1/messages"
+model          = "claude-opus-5"
+api_key_env    = "ANTHROPIC_API_KEY"
+timeout_ms     = 8000
+max_chars      = 4000    # how much of the screen to send
+viewport_lines = 60
+interval_ms    = 600000  # floor between two questions about one workspace
+
 [naming.targets]
 workspace = true
 agent     = true
@@ -211,8 +223,35 @@ state store and sinks all disappear. The policy is unchanged:
 | Rewordings are not new intent | "naming plugin" → "naming plugins" scores 1.0 on stemmed token overlap and is skipped. |
 | Settle before committing | Titles churn early in a turn; a rename waits for the intent to hold still. |
 | One rename per workspace per interval | So a fast session cannot strobe the sidebar. |
-| Junk is never a name | Shell prompts, bare paths, echoed commands and the plain repo name are rejected. |
+| Junk is never a name | Shell prompts, bare paths, echoed commands, the plain repo name, and anything in `ignore_titles` are rejected. |
 | No guessing across agents | A workspace holding two panes has no single intent. |
+
+### The second source
+
+Naming reads the agent's own terminal title. That is the right primary source —
+the work is already done, it costs nothing, and it needs no key — and it fails in
+exactly one way: a pane where nothing publishes a title has no intent at all,
+and its workspace keeps its project name for ever.
+
+`[naming.sources.llm]` covers that case, and is off unless you ask for it. When
+it is on, dirk sends the tail of such a pane's screen and asks for a phrase.
+
+**The model is a source, not a decider.** The phrase it returns is a *candidate
+intent*, and it then goes through precisely the policy every title goes through:
+junk rejection, the hand-written-name lock, the debounce, the similarity check,
+the rate limit. Nothing about *when* a name changes moves into the model.
+
+That is what lets this exist without contradicting the argument the project
+started from. The claim was never that models are bad at naming — it was that
+generating a name is the part already solved, and deciding when to use one is
+the part that is not.
+
+It is asked only about panes with no title, no more often than
+`interval_ms`, and never on the drawing thread. Every failure — no key, no
+`curl`, a timeout, a malformed answer — leaves naming exactly where it was
+without it. Your key is read from the environment; the configuration file holds
+only the *name* of the variable, because a configuration file is a thing people
+paste into issues.
 
 ## Build
 

@@ -80,6 +80,11 @@ pub struct Workspace {
     pub intent_since: Instant,
     /// The intent the clock above is measuring.
     pub intent: Option<String>,
+    /// An intent from the second source, used only when the title has none.
+    /// It enters the policy through the same door a title does.
+    pub suggested: Option<String>,
+    /// When the second source was last asked about this workspace.
+    pub asked: Option<Instant>,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -250,6 +255,8 @@ impl Session {
             state_since: Instant::now(),
             intent_since: Instant::now(),
             intent: None,
+            suggested: None,
+            asked: None,
             touched: Instant::now(),
             expanded: false,
             panes: vec![pane],
@@ -422,6 +429,8 @@ impl Session {
                 state_since: Instant::now(),
                 intent_since: Instant::now(),
                 intent: None,
+                suggested: None,
+                asked: None,
                 touched: Instant::now(),
                 expanded: false,
                 panes,
@@ -668,6 +677,16 @@ pub struct Change {
     pub focused: bool,
 }
 
+/// The last `lines` of a pane's screen, as text.
+fn viewport(pane: &Pane, lines: u16) -> Option<String> {
+    let term = pane.term.lock().ok()?;
+    let screen = term.screen();
+    let (rows, cols) = screen.size();
+    let last = rows.saturating_sub(1);
+    let from = last.saturating_sub(lines);
+    Some(screen.contents_between(from, 0, last, cols))
+}
+
 /// An agent that has been quiet for this long has stopped.
 ///
 /// One that is thinking redraws its spinner continuously, so silence is the
@@ -866,6 +885,56 @@ impl Session {
                     // long that has been true.
                     ws.intent_since = Instant::now();
                     ws.intent = now;
+                }
+            }
+        }
+    }
+
+    /// Workspaces whose title says nothing, with what is on their screen.
+    ///
+    /// Only panes holding an agent, only when there is no title to work from,
+    /// and only past the floor between questions — the second source exists for
+    /// the case the first cannot cover, not as a second opinion on it.
+    pub fn wants_intent(
+        &mut self,
+        cfg: &crate::config::Llm,
+        now: Instant,
+    ) -> Vec<(PaneId, String)> {
+        let floor = Duration::from_millis(cfg.interval_ms);
+        let mut out = Vec::new();
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if ws.intent.is_some() {
+                    continue;
+                }
+                if ws.asked.is_some_and(|t| now.duration_since(t) < floor) {
+                    continue;
+                }
+                // Read and released before the workspace is written to.
+                let asked = match ws.active_pane() {
+                    Some(pane) if pane.occupant.agent().is_some() && !pane.dead => {
+                        viewport(pane, cfg.viewport_lines)
+                            .filter(|s| !s.trim().is_empty())
+                            .map(|screen| (pane.id, screen))
+                    }
+                    _ => None,
+                };
+                let Some(asked) = asked else { continue };
+                // Marked before the answer arrives, or every tick would
+                // start another question about the same workspace.
+                ws.asked = Some(now);
+                out.push(asked);
+            }
+        }
+        out
+    }
+
+    pub fn apply_suggestion(&mut self, pane: PaneId, intent: String) {
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if ws.panes.iter().any(|p| p.id == pane) {
+                    ws.suggested = Some(intent);
+                    return;
                 }
             }
         }
@@ -1201,6 +1270,8 @@ mod tests {
             state_since: Instant::now(),
             intent_since: Instant::now(),
             intent: None,
+            suggested: None,
+            asked: None,
             touched: Instant::now(),
             panes: Vec::new(),
             tree: Node::Leaf(0),

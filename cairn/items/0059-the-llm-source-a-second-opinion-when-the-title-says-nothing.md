@@ -2,8 +2,9 @@
 id: 59
 title: 'The LLM source: a second opinion when the title says nothing'
 type: feature
-status: backlog
+status: done
 milestone: v0.3.1
+assignee: oddurs
 depends_on:
 - 54
 created: 2026-09-06
@@ -48,11 +49,11 @@ Provider-agnostic in the config — endpoint, model, key environment variable �
 pointing it at something else is configuration rather than a patch.
 
 ## Acceptance criteria
-- [ ] Disabled by default, and dirk behaves identically with it off
-- [ ] Consulted only when the title source has nothing, and rate limited
-- [ ] The candidate goes through the same policy as a title, with no exemptions
-- [ ] Never on the drawing thread, and a hung request cannot stall a redraw
-- [ ] No API key in the config file — only the name of the variable holding it
-- [ ] Absent key, absent curl, or a failed call degrade to the title source
+- [x] Disabled by default, and dirk behaves identically with it off
+- [x] Consulted only when the title source has nothing, and rate limited
+- [x] The candidate goes through the same policy as a title, with no exemptions
+- [x] Never on the drawing thread, and a hung request cannot stall a redraw
+- [x] No API key in the config file — only the name of the variable holding it
+- [x] Absent key, absent curl, or a failed call degrade to the title source
       silently, which is the behaviour without it
-- [ ] The viewport sent is bounded, and what is sent is documented
+- [x] The viewport sent is bounded, and what is sent is documented

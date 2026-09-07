@@ -189,6 +189,54 @@ pub struct Naming {
     pub ignore_titles: Vec<String>,
     pub targets: Targets,
     pub templates: Templates,
+    pub sources: Sources,
+}
+
+/// Where an intent can come from.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Sources {
+    pub llm: Llm,
+}
+
+/// A second source, for panes whose title says nothing.
+///
+/// Off unless asked for. The primary source is the agent's own terminal title,
+/// which costs nothing and needs no key; this exists for the case that has no
+/// title at all.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Llm {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub model: String,
+    /// The *name* of the variable holding the key, never the key. A
+    /// configuration file is a thing people paste into issues.
+    pub api_key_env: String,
+    pub timeout_ms: u64,
+    /// How much of the screen to send, in characters.
+    pub max_chars: usize,
+    /// How many lines of the pane count as "the screen".
+    pub viewport_lines: u16,
+    /// Floor between two questions about one workspace. A naming call per turn
+    /// per workspace, all day, for a caption, is not a trade anyone would make
+    /// on purpose.
+    pub interval_ms: u64,
+}
+
+impl Default for Llm {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "https://api.anthropic.com/v1/messages".into(),
+            model: "claude-opus-5".into(),
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            timeout_ms: 8_000,
+            max_chars: 4_000,
+            viewport_lines: 60,
+            interval_ms: 600_000,
+        }
+    }
 }
 
 /// What naming is allowed to name.
@@ -280,6 +328,7 @@ impl Default for Naming {
             ignore_titles: default_ignore_titles(),
             targets: Targets::default(),
             templates: Templates::default(),
+            sources: Sources::default(),
         }
     }
 }

@@ -47,6 +47,7 @@ mod config;
 mod git;
 mod hit;
 mod keys;
+mod llm;
 mod mux;
 mod name;
 mod notify;
@@ -310,6 +311,7 @@ impl App {
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
+            Ev::Suggested { pane, intent } => self.session.apply_suggestion(pane, intent),
             Ev::Agents(reading) => {
                 self.sampling = false;
                 self.session.apply_agents(reading);
@@ -323,6 +325,7 @@ impl App {
                 self.read_agents();
                 self.read_repos();
                 self.session.track_intents();
+                self.ask_for_intents();
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)
@@ -369,6 +372,27 @@ impl App {
                 format!("{} {what}", change.label),
                 self.cfg.brand.name.clone(),
             );
+        }
+    }
+
+    /// Ask the second source about panes whose title says nothing.
+    ///
+    /// Off the drawing thread like every other external call, and the answer
+    /// arrives as an event. A request that hangs must not be able to stop dirk
+    /// redrawing, which is the whole reason for the shape.
+    fn ask_for_intents(&mut self) {
+        let cfg = &self.cfg.naming.sources.llm;
+        if !self.cfg.naming.enabled || !cfg.enabled {
+            return;
+        }
+        for (pane, screen) in self.session.wants_intent(cfg, Instant::now()) {
+            let cfg = cfg.clone();
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                if let Some(intent) = crate::llm::suggest(&cfg, &screen) {
+                    let _ = tx.send(Ev::Suggested { pane, intent });
+                }
+            });
         }
     }
 
@@ -442,7 +466,13 @@ impl App {
                 .unwrap_or_default();
             for w in 0..self.session.projects[p].workspaces.len() {
                 let ws = &self.session.projects[p].workspaces[w];
-                let title = ws.active_pane().and_then(|x| x.title());
+                // The title first, always. The second source is for the pane
+                // that has none, and its candidate goes through this same
+                // policy with no exemptions.
+                let title = ws
+                    .active_pane()
+                    .and_then(|x| x.title())
+                    .or_else(|| ws.suggested.clone());
                 let panes = ws.panes.len();
                 let current = ws.label.clone();
                 let blocked = ws.state == agent::State::Blocked;
