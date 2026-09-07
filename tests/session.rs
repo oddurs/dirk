@@ -616,3 +616,29 @@ fn the_shape_of_a_session_comes_back_after_it_has_ended() {
     drop(second);
     quit(&session);
 }
+
+#[test]
+fn an_answer_nobody_is_reading_ends_quietly() {
+    // A reader that is gone before anything is written, which is what every
+    // `| head`, closed pager and `grep -q` eventually looks like. Every other
+    // program on the system ends this in silence; `print!` ends it in a
+    // backtrace.
+    for args in [
+        "--skill",
+        "--help",
+        "session list",
+        "--session no-such-session pane list",
+    ] {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} {args} | true", env!("CARGO_BIN_EXE_dirk")))
+            .env("XDG_CONFIG_HOME", config_home())
+            .output()
+            .expect("run it through a pipe");
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !said.contains("panicked"),
+            "`dirk {args}` panicked into a closed pipe:\n{said}"
+        );
+    }
+}

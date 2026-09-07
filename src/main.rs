@@ -131,6 +131,27 @@ const VERSION: &str = concat!(
     "Written by Oddur Sigurdsson.\n",
 );
 
+/// Print an answer, and stop quietly when nobody is reading it any more.
+///
+/// `print!` panics on a closed pipe, so `dirk session list | head -1` ends in a
+/// backtrace where every other program on the system ends in silence.
+/// Restoring the default disposition for SIGPIPE is the usual fix and is the
+/// wrong one here: the server writes to panes and the client writes to an ssh
+/// pipe, and both need EPIPE back as an error rather than as a signal.
+fn say(text: &str) {
+    use std::io::Write;
+    let mut out = io::stdout();
+    // Flushed here rather than left to the runtime, so the failure to write is
+    // seen while there is still somewhere to report it.
+    let wrote = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+    let Err(e) = wrote else { return };
+    if e.kind() == io::ErrorKind::BrokenPipe {
+        std::process::exit(0);
+    }
+    eprintln!("dirk: {e}");
+    std::process::exit(1);
+}
+
 fn main() -> io::Result<()> {
     // Options are answered before the terminal is touched, so `dirk --version`
     // in a pipe behaves like any other program rather than briefly taking over
@@ -149,15 +170,15 @@ fn main() -> io::Result<()> {
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                print!("{USAGE}");
+                say(USAGE);
                 return Ok(());
             }
             "-V" | "--version" => {
-                print!("{VERSION}");
+                say(VERSION);
                 return Ok(());
             }
             "--skill" => {
-                print!("{}", skill::text());
+                say(&skill::text());
                 return Ok(());
             }
             "server" => mode = Mode::Server,
@@ -196,7 +217,7 @@ fn main() -> io::Result<()> {
                 // The socket outlived its server, which is the ordinary state
                 // after a crash. Said plainly rather than hidden, because it is
                 // the answer to "why can I not attach to that".
-                println!("{name}\tstale");
+                say(&format!("{name}\tstale\n"));
                 continue;
             }
             // Whether anyone is looking needs asking; only the session knows.
@@ -213,11 +234,11 @@ fn main() -> io::Result<()> {
             let field = |k: &str| said.as_ref().and_then(|r| r.result.get(k));
             let attached = field("attached").and_then(|v| v.as_bool()).unwrap_or(false);
             let spaces = field("workspaces").and_then(|v| v.as_u64()).unwrap_or(0);
-            println!(
-                "{name}\t{}\t{spaces} {}",
+            say(&format!(
+                "{name}\t{}\t{spaces} {}\n",
                 if attached { "attached" } else { "running" },
                 if spaces == 1 { "space" } else { "spaces" }
-            );
+            ));
         }
         return Ok(());
     }
@@ -235,10 +256,10 @@ fn main() -> io::Result<()> {
         let reply = server::ask(&path, &req)?;
         match reply.ok {
             true => {
-                println!(
-                    "{}",
+                say(&format!(
+                    "{}\n",
                     serde_json::to_string_pretty(&reply.result).unwrap_or_default()
-                );
+                ));
                 return Ok(());
             }
             false => {
