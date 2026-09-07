@@ -40,11 +40,18 @@ pub enum Target {
     Pane {
         index: usize,
     },
+    /// A tab reached from the nav.
+    NavTab {
+        p: usize,
+        w: usize,
+        t: usize,
+    },
     /// A pane reached from the nav, which may be in a workspace that is not
     /// focused yet.
     NavPane {
         p: usize,
         w: usize,
+        t: usize,
         index: usize,
     },
     NewWorkspace(usize),

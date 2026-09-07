@@ -128,49 +128,149 @@ pub struct Workspace {
     /// What decided the current state. Reported for the sake of being able to
     /// explain a badge that is wrong.
     pub source: crate::agent::Source,
+    /// The second axis. A space is one piece of work; a tab is one arrangement
+    /// of programs for it, and there is usually more than one -- an editor and
+    /// a test runner are the same task and not the same screen.
+    ///
+    /// Never empty: a workspace with no tabs has nowhere to draw, and every
+    /// path that could empty it closes the workspace instead.
+    pub tabs: Vec<Tab>,
+    /// Which tab is on screen.
+    pub tab: usize,
+    /// Whether the nav shows this workspace's tabs. Collapsed by default: the
+    /// tree should stay the height of the space list until it is asked for
+    /// more.
+    pub expanded: bool,
+    pub naming: NameState,
+}
+
+/// One arrangement of panes inside a space.
+///
+/// Everything that used to be on a workspace and was about *panes* rather than
+/// about the work: the arena, the tree, which pane has the keyboard, and
+/// whether one of them is filling the screen. A space kept the rest -- its
+/// name, its agent's state, the clocks -- because those are about the task and
+/// a task does not have two of them.
+pub struct Tab {
+    /// A handle that does not move, for the same reason a workspace has one.
+    pub id: u64,
+    /// What it is called. Empty until something names it, and drawn as its
+    /// number then -- a tab called "2" is not information, so it is not shown
+    /// as a name.
+    pub label: String,
     /// The panes themselves. The tree refers to them by id, so this is an arena
     /// rather than a layout.
     pub panes: Vec<Pane>,
     pub tree: Node,
-    /// One pane, filling the workspace.
+    /// One pane, filling the tab.
     ///
     /// A view rather than a change: the tree is untouched, so leaving puts
     /// every pane back exactly where it was and nothing running notices
     /// anything beyond a resize.
     pub zoomed: bool,
-    /// Whether the nav shows this workspace's panes. Collapsed by default: the
-    /// tree should stay the height of the space list until it is asked for
-    /// more.
-    pub expanded: bool,
     /// Which pane has the keyboard. An id rather than an index, because indices
     /// shift when a pane is removed and focus would silently move with them.
     pub focus: PaneId,
-    pub naming: NameState,
+    /// Whether the nav shows this tab's panes.
+    pub expanded: bool,
+}
+
+impl Tab {
+    pub fn new(id: u64, pane: Pane) -> Self {
+        Tab {
+            id,
+            label: String::new(),
+            focus: pane.id,
+            tree: Node::Leaf(pane.id),
+            panes: vec![pane],
+            zoomed: false,
+            expanded: false,
+        }
+    }
+
+    pub fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.id == id)
+    }
 }
 
 impl Workspace {
     pub fn pane(&self, id: PaneId) -> Option<&Pane> {
-        self.panes.iter().find(|p| p.id == id)
+        self.panes().iter().find(|p| p.id == id)
     }
+    #[allow(dead_code)]
     pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
-        self.panes.iter_mut().find(|p| p.id == id)
+        self.here_mut().panes.iter_mut().find(|p| p.id == id)
     }
 
     pub fn active_pane(&self) -> Option<&Pane> {
-        self.pane(self.focus)
+        self.pane(self.focus())
     }
     pub fn active_pane_mut(&mut self) -> Option<&mut Pane> {
-        self.pane_mut(self.focus)
+        self.pane_mut(self.focus())
     }
 
     /// Where every pane goes, in draw order.
+    /// The tab on screen. Never `None`: a workspace with no tabs is closed
+    /// rather than kept, so the index is always one that exists.
+    pub fn here(&self) -> &Tab {
+        let at = self.tab.min(self.tabs.len().saturating_sub(1));
+        &self.tabs[at]
+    }
+
+    pub fn here_mut(&mut self) -> &mut Tab {
+        let at = self.tab.min(self.tabs.len().saturating_sub(1));
+        &mut self.tabs[at]
+    }
+
+    /// The panes of the tab on screen.
+    ///
+    /// Almost every caller means this one -- drawing, splitting, closing,
+    /// scrolling -- because almost everything happens where you are looking.
+    /// The ones that mean *all* of them say `every_pane`.
+    pub fn panes(&self) -> &[Pane] {
+        &self.here().panes
+    }
+
+    pub fn tree(&self) -> &Node {
+        &self.here().tree
+    }
+
+    pub fn tree_mut(&mut self) -> &mut Node {
+        &mut self.here_mut().tree
+    }
+
+    pub fn focus(&self) -> PaneId {
+        self.here().focus
+    }
+
+    pub fn set_focus(&mut self, id: PaneId) {
+        self.here_mut().focus = id;
+    }
+
+    /// Every pane in every tab, for the things that are about the workspace
+    /// rather than about what is on screen: closing it, reading all of it.
+    pub fn every_pane(&self) -> impl Iterator<Item = &Pane> {
+        self.tabs.iter().flat_map(|t| t.panes.iter())
+    }
+
+    pub fn every_pane_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut())
+    }
+
+    /// Which tab holds a pane, and where in it.
+    pub fn holding(&self, id: PaneId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| t.panes.iter().any(|p| p.id == id))
+    }
+
     pub fn rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         // Zoom draws one leaf and hides the rest without touching either. The
         // tree still says where everything is, which is what makes leaving free.
-        if self.zoomed && self.panes.len() > 1 {
-            return vec![(self.focus, area)];
+        if self.here().zoomed && self.panes().len() > 1 {
+            return vec![(self.focus(), area)];
         }
-        self.tree.rects(area)
+        self.tree().rects(area)
     }
 
     /// Whatever a pane closing means for the zoom.
@@ -179,8 +279,8 @@ impl Workspace {
     /// leaving the flag set means the next split opens into a view that hides
     /// it -- a pane you asked for that is not on screen.
     fn settle_zoom(&mut self) {
-        if self.panes.len() < 2 {
-            self.zoomed = false;
+        if self.panes().len() < 2 {
+            self.here_mut().zoomed = false;
         }
     }
 
@@ -190,11 +290,65 @@ impl Workspace {
     /// and a workspace that says it is zoomed when it looks identical is a
     /// state you cannot get out of by looking.
     pub fn zoom(&mut self) -> bool {
-        if self.panes.len() < 2 {
+        if self.panes().len() < 2 {
             return false;
         }
-        self.zoomed = !self.zoomed;
+        self.here_mut().zoomed = !self.here().zoomed;
         true
+    }
+
+    /// What a tab is called, which is its name or its number.
+    ///
+    /// A tab called "2" is not information, so an unnamed one is drawn as its
+    /// position and a named one as its name.
+    pub fn tab_label(&self, at: usize) -> String {
+        match self.tabs.get(at) {
+            Some(t) if !t.label.is_empty() => t.label.clone(),
+            _ => (at + 1).to_string(),
+        }
+    }
+
+    /// Name an unnamed tab from what is running in it.
+    ///
+    /// The same policy the space uses, one level down and much smaller: no
+    /// debounce, no rate limit, no holds. A tab is a screenful rather than a
+    /// task, its name is short-lived, and getting it slightly wrong costs a
+    /// glance rather than a notification.
+    ///
+    /// Only when there is more than one tab, because a tab you cannot see is a
+    /// tab whose name nobody is reading.
+    pub fn name_tabs(&mut self) {
+        if self.tabs.len() < 2 {
+            return;
+        }
+        for tab in &mut self.tabs {
+            if !tab.label.is_empty() {
+                continue;
+            }
+            let Some(pane) = tab.pane(tab.focus) else {
+                continue;
+            };
+            // What is running, not what it says it is doing: an agent's title
+            // is the space's business, and repeating it on the tab would say
+            // the same thing twice in two columns.
+            let name = match &pane.occupant {
+                crate::agent::Occupant::Agent(k) => Some(k.name.clone()),
+                crate::agent::Occupant::Program(p) => Some(p.clone()),
+                _ => None,
+            };
+            if let Some(name) = name {
+                tab.label = name;
+            }
+        }
+    }
+
+    /// Move to another tab, wrapping.
+    pub fn step_tab(&mut self, delta: isize) {
+        if self.tabs.len() < 2 {
+            return;
+        }
+        let n = self.tabs.len() as isize;
+        self.tab = (self.tab as isize + delta).rem_euclid(n) as usize;
     }
 
     /// Exchange the focused pane with its neighbour in draw order.
@@ -202,35 +356,35 @@ impl Workspace {
     /// Focus follows the pane rather than the position: you moved a thing, and
     /// the thing is what you were looking at.
     pub fn move_focused(&mut self, delta: isize) -> bool {
-        let order = self.tree.leaves();
+        let order = self.tree().leaves();
         if order.len() < 2 {
             return false;
         }
-        let Some(at) = order.iter().position(|&id| id == self.focus) else {
+        let Some(at) = order.iter().position(|&id| id == self.focus()) else {
             return false;
         };
         let to = (at as isize + delta).rem_euclid(order.len() as isize) as usize;
-        self.tree.swap(order[at], order[to])
+        self.tree_mut().swap(order[at], order[to])
     }
 
     /// Move focus to the next pane in draw order.
     pub fn cycle(&mut self) {
-        let order = self.tree.leaves();
+        let order = self.tree().leaves();
         if order.is_empty() {
             return;
         }
-        let at = order.iter().position(|&id| id == self.focus).unwrap_or(0);
-        self.focus = order[(at + 1) % order.len()];
+        let at = order.iter().position(|&id| id == self.focus()).unwrap_or(0);
+        self.set_focus(order[(at + 1) % order.len()]);
     }
 
     /// Put focus on a pane that exists. Called after a removal, where the pane
     /// that had focus may be the one that went.
     fn refocus(&mut self) {
-        if self.pane(self.focus).is_some() {
+        if self.pane(self.focus()).is_some() {
             return;
         }
-        if let Some(&first) = self.tree.leaves().first() {
-            self.focus = first;
+        if let Some(&first) = self.tree().leaves().first() {
+            self.set_focus(first);
         }
     }
 }
@@ -343,9 +497,9 @@ impl Session {
         };
         let pane = self.spawn_shell(&path, rows, cols)?;
         let id = self.id();
+        let tab_id = self.id();
         let proj = self.projects.get_mut(p)?;
         proj.expanded = true;
-        let root = pane.id;
         proj.workspaces.push(Workspace {
             id,
             label: name,
@@ -359,13 +513,11 @@ impl Session {
             asked: None,
             turns: 0,
             touched: Instant::now(),
-            zoomed: false,
             reported: None,
             source: crate::agent::Source::None,
             expanded: false,
-            panes: vec![pane],
-            tree: Node::Leaf(root),
-            focus: root,
+            tabs: vec![Tab::new(tab_id, pane)],
+            tab: 0,
             naming: NameState::default(),
         });
         self.focus = Focus::Ws {
@@ -404,14 +556,14 @@ impl Session {
         };
 
         let new = pane.id;
-        let target = ws.focus;
-        if !ws.tree.split(target, dir, new) {
+        let target = ws.focus();
+        if !ws.tree_mut().split(target, dir, new) {
             // The focused pane is not in the tree, which should be impossible.
             // Dropping the pane beats leaking a process nothing draws.
             return;
         }
-        ws.panes.push(pane);
-        ws.focus = new;
+        ws.here_mut().panes.push(pane);
+        ws.set_focus(new);
     }
 
     pub fn workspace(&self, p: usize, w: usize) -> Option<&Workspace> {
@@ -526,6 +678,7 @@ impl Session {
                 return;
             };
             let ws_id = self.id();
+            let tab_id = self.id();
             self.layouts[i].ws = Some(Workspace {
                 id: ws_id,
                 label: def.name.clone(),
@@ -541,11 +694,19 @@ impl Session {
                 touched: Instant::now(),
                 reported: None,
                 source: crate::agent::Source::None,
-                zoomed: false,
                 expanded: false,
-                panes,
-                tree,
-                focus: first,
+                // A board is one arrangement by definition -- that is what a
+                // board is -- so it has the one tab and no way to make another.
+                tabs: vec![Tab {
+                    id: tab_id,
+                    label: String::new(),
+                    panes,
+                    tree,
+                    zoomed: false,
+                    focus: first,
+                    expanded: false,
+                }],
+                tab: 0,
                 naming: NameState::default(),
             });
         }
@@ -564,58 +725,72 @@ impl Session {
             let Some(ws) = self.layouts[i].ws.as_mut() else {
                 continue;
             };
-            if let Some(k) = ws.panes.iter().position(|p| p.id == id) {
-                // A layout is the arrangement a human named and asked for, so
-                // it survives its contents exiting. The output is usually the
-                // point -- a board that prints and exits is a reasonable panel,
-                // and reaping it made that the panel dirk could least show.
-                //
-                // A pane the human closed is a different thing wearing the same
-                // event, which is what `closing` distinguishes.
-                if !ws.panes[k].closing {
-                    ws.panes[k].finish();
-                    return;
-                }
-                ws.panes.remove(k);
-                let empty = ws.tree.remove(id);
-                ws.refocus();
-                ws.settle_zoom();
-                // A layout whose last pane is closed goes back to unbuilt
-                // rather than being removed: quitting lazygit should return you
-                // to the tree and leave the entry there to be opened again.
-                if empty || ws.panes.is_empty() {
-                    self.layouts[i].ws = None;
-                    if self.focus == Focus::Layout(i) {
-                        // Back exactly where you were, found by identity so a
-                        // workspace closing in the meantime cannot redirect it.
-                        let back = self.previous.and_then(|id| self.holding(id));
-                        self.focus = back
-                            .or_else(|| self.first_workspace())
-                            .unwrap_or(Focus::Layout(i));
-                        self.previous = None;
-                    }
-                }
+            let Some(t) = ws.holding(id) else { continue };
+            let Some(k) = ws.tabs[t].panes.iter().position(|p| p.id == id) else {
+                continue;
+            };
+            // A layout is the arrangement a human named and asked for, so it
+            // survives its contents exiting. The output is usually the point --
+            // a board that prints and exits is a reasonable panel, and reaping
+            // it made that the panel dirk could least show.
+            //
+            // A pane the human closed is a different thing wearing the same
+            // event, which is what `closing` distinguishes.
+            if !ws.tabs[t].panes[k].closing {
+                ws.tabs[t].panes[k].finish();
                 return;
             }
+            ws.tabs[t].panes.remove(k);
+            let empty = ws.tabs[t].tree.remove(id);
+            ws.refocus();
+            ws.settle_zoom();
+            // A layout whose last pane is closed goes back to unbuilt rather
+            // than being removed: quitting lazygit should return you to the
+            // tree and leave the entry there to be opened again.
+            if empty || ws.tabs[t].panes.is_empty() {
+                self.layouts[i].ws = None;
+                if self.focus == Focus::Layout(i) {
+                    // Back exactly where you were, found by identity so a
+                    // workspace closing in the meantime cannot redirect it.
+                    let back = self.previous.and_then(|id| self.holding(id));
+                    self.focus = back
+                        .or_else(|| self.first_workspace())
+                        .unwrap_or(Focus::Layout(i));
+                    self.previous = None;
+                }
+            }
+            return;
         }
 
         for p in 0..self.projects.len() {
             for w in 0..self.projects[p].workspaces.len() {
                 let ws = &mut self.projects[p].workspaces[w];
-                if let Some(k) = ws.panes.iter().position(|x| x.id == id) {
-                    ws.panes.remove(k);
-                    let empty = ws.tree.remove(id);
-                    ws.refocus();
-                    ws.settle_zoom();
-                    if empty || ws.panes.is_empty() {
-                        self.projects[p].workspaces.remove(w);
-                        if self.projects[p].workspaces.is_empty() {
-                            self.projects.remove(p);
-                        }
-                        self.refocus();
+                let Some(t) = ws.holding(id) else { continue };
+                let Some(k) = ws.tabs[t].panes.iter().position(|x| x.id == id) else {
+                    continue;
+                };
+                ws.tabs[t].panes.remove(k);
+                let empty = ws.tabs[t].tree.remove(id);
+
+                // A tab with nothing in it goes; a workspace with no tabs goes
+                // with it. Keeping an empty one would be a row in the nav you
+                // can select and that draws nothing.
+                if empty || ws.tabs[t].panes.is_empty() {
+                    ws.tabs.remove(t);
+                    ws.tab = ws.tab.min(ws.tabs.len().saturating_sub(1));
+                }
+                if ws.tabs.is_empty() {
+                    self.projects[p].workspaces.remove(w);
+                    if self.projects[p].workspaces.is_empty() {
+                        self.projects.remove(p);
                     }
+                    self.refocus();
                     return;
                 }
+                let ws = &mut self.projects[p].workspaces[w];
+                ws.refocus();
+                ws.settle_zoom();
+                return;
             }
         }
     }
@@ -624,7 +799,7 @@ impl Session {
     fn holding(&self, id: PaneId) -> Option<Focus> {
         for (p, proj) in self.projects.iter().enumerate() {
             for (w, ws) in proj.workspaces.iter().enumerate() {
-                if ws.panes.iter().any(|x| x.id == id) {
+                if ws.panes().iter().any(|x| x.id == id) {
                     return Some(Focus::Ws { p, w });
                 }
             }
@@ -689,8 +864,10 @@ impl Session {
         let Some(ws) = layout.ws.take() else {
             return;
         };
-        for mut pane in ws.panes {
-            pane.close();
+        for tab in ws.tabs {
+            for mut pane in tab.panes {
+                pane.close();
+            }
         }
         self.refocus();
     }
@@ -715,8 +892,10 @@ impl Session {
             return;
         };
         for ws in std::mem::take(&mut self.projects[p].workspaces) {
-            for mut pane in ws.panes {
-                pane.close();
+            for tab in ws.tabs {
+                for mut pane in tab.panes {
+                    pane.close();
+                }
             }
         }
         self.projects.remove(p);
@@ -738,7 +917,7 @@ impl Session {
             let Some(ws) = self.workspace(p, w) else {
                 continue;
             };
-            for pane in &ws.panes {
+            for pane in ws.every_pane() {
                 read_pane(pane, &ws.label, &mut out);
             }
         }
@@ -746,7 +925,7 @@ impl Session {
             let Some(ws) = layout.ws.as_ref() else {
                 continue;
             };
-            for pane in &ws.panes {
+            for pane in ws.every_pane() {
                 read_pane(pane, &layout.def.name, &mut out);
             }
         }
@@ -779,7 +958,7 @@ impl Session {
     /// were not watching.
     pub fn scroll_to(&mut self, id: PaneId, back: usize) {
         let set = |ws: &mut Workspace| -> bool {
-            let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) else {
+            let Some(pane) = ws.every_pane_mut().find(|p| p.id == id) else {
                 return false;
             };
             let Ok(mut term) = pane.term.lock() else {
@@ -824,6 +1003,47 @@ impl Session {
         self.active_pane().map_or(0, |p| p.scroll)
     }
 
+    /// A second arrangement for the same piece of work.
+    ///
+    /// The space keeps its name, its agent's state and its clocks, because
+    /// those are about the task -- an editor tab and a test-runner tab are one
+    /// task and two screens.
+    pub fn new_tab(&mut self, rows: u16, cols: u16) -> Option<()> {
+        let Focus::Ws { p, w } = self.focus else {
+            return None;
+        };
+        let cwd = self
+            .focused_workspace()
+            .and_then(|ws| ws.active_pane())
+            .map(|x| x.cwd.clone())
+            .unwrap_or_else(crate::config::home);
+        let pane = self.spawn_shell(&cwd, rows, cols)?;
+        let id = self.id();
+        let ws = self.projects.get_mut(p)?.workspaces.get_mut(w)?;
+        ws.tabs.push(Tab::new(id, pane));
+        ws.tab = ws.tabs.len() - 1;
+        Some(())
+    }
+
+    /// Close the tab on screen, and the workspace with it if it was the last.
+    pub fn close_tab(&mut self) -> bool {
+        let Some(ws) = self.focused_workspace_mut() else {
+            return false;
+        };
+        if ws.tabs.len() < 2 {
+            // The last tab is the workspace. Closing it is closing that, which
+            // is what `x` on the last pane already means.
+            return false;
+        }
+        let at = ws.tab;
+        // Marked rather than dropped: a pane whose process is still running has
+        // to be told to stop, and the reaping is what removes it.
+        for pane in &mut ws.tabs[at].panes {
+            pane.close();
+        }
+        true
+    }
+
     /// Start the focused pane's program again, in place.
     ///
     /// Only for a pane that has stopped. The tree keeps its shape, so the panel
@@ -832,7 +1052,7 @@ impl Session {
         let Some(ws) = self.focused_workspace() else {
             return false;
         };
-        let id = ws.focus;
+        let id = ws.focus();
         let Some(old) = ws.pane(id) else { return false };
         if !old.dead {
             return false;
@@ -861,10 +1081,10 @@ impl Session {
                     return false;
                 };
                 // Replace in place: same slot in the tree, same rectangle.
-                ws.tree.replace(id, new_id);
-                ws.panes.retain(|p| p.id != id);
-                ws.panes.push(pane);
-                ws.focus = new_id;
+                ws.tree_mut().replace(id, new_id);
+                ws.here_mut().panes.retain(|p| p.id != id);
+                ws.here_mut().panes.push(pane);
+                ws.set_focus(new_id);
                 true
             }
             Err(e) => {
@@ -1065,8 +1285,8 @@ pub fn content_of(labelled: bool, r: Rect) -> Rect {
 }
 
 fn resize_tree(ws: &mut Workspace, area: Rect) {
-    for (id, r) in ws.tree.rects(area) {
-        if let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) {
+    for (id, r) in ws.tree().rects(area) {
+        if let Some(pane) = ws.every_pane_mut().find(|p| p.id == id) {
             let inner = content_of(pane.label.is_some(), r);
             pane.resize(inner.height, inner.width);
         }
@@ -1088,7 +1308,7 @@ impl Session {
     pub fn touch(&mut self, id: PaneId) {
         let now = Instant::now();
         let mark = |ws: &mut Workspace| -> bool {
-            let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) else {
+            let Some(pane) = ws.every_pane_mut().find(|p| p.id == id) else {
                 return false;
             };
             pane.touched = now;
@@ -1182,6 +1402,15 @@ impl Session {
 
     /// Note the intent a workspace's agent is publishing, so `age` can measure
     /// how long it has been the same one.
+    /// Give unnamed tabs a name from what is running in them.
+    pub fn name_tabs(&mut self) {
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                ws.name_tabs();
+            }
+        }
+    }
+
     pub fn track_intents(&mut self, cfg: &crate::config::Naming) {
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
@@ -1227,7 +1456,7 @@ impl Session {
                 // A workspace holding two agents has no single intent, so the
                 // policy will refuse whatever comes back. Asking would be paid
                 // for and discarded.
-                if ws.panes.len() > 1 {
+                if ws.panes().len() > 1 {
                     continue;
                 }
                 if ws.asked.is_some_and(|t| now.duration_since(t) < floor) {
@@ -1255,7 +1484,7 @@ impl Session {
     pub fn apply_suggestion(&mut self, pane: PaneId, intent: String) {
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
-                if ws.panes.iter().any(|p| p.id == pane) {
+                if ws.panes().iter().any(|p| p.id == pane) {
                     ws.suggested = Some(intent);
                     return;
                 }
@@ -1406,7 +1635,7 @@ impl Session {
             t.set("agent", &kind.name);
         }
         let agents = ws
-            .panes
+            .panes()
             .iter()
             .filter(|p| p.occupant.agent().is_some())
             .count();
@@ -1461,7 +1690,7 @@ impl Session {
         // Existing names are kept, so a name does not move under an agent that
         // is still running.
         for ws in self.every_workspace() {
-            for pane in &ws.panes {
+            for pane in ws.every_pane() {
                 if pane.occupant.agent().is_some()
                     && let Some(n) = &pane.agent_name
                 {
@@ -1472,7 +1701,7 @@ impl Session {
 
         let mut assign: Vec<(PaneId, Option<String>)> = Vec::new();
         for ws in self.every_workspace() {
-            for pane in &ws.panes {
+            for pane in ws.every_pane() {
                 match (pane.occupant.agent(), &pane.agent_name) {
                     // Already named, and still an agent.
                     (Some(_), Some(_)) => {}
@@ -1514,14 +1743,14 @@ impl Session {
     fn pane_anywhere_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
         for layout in &mut self.layouts {
             if let Some(ws) = layout.ws.as_mut()
-                && let Some(p) = ws.panes.iter_mut().find(|p| p.id == id)
+                && let Some(p) = ws.every_pane_mut().find(|p| p.id == id)
             {
                 return Some(p);
             }
         }
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
-                if let Some(p) = ws.panes.iter_mut().find(|p| p.id == id) {
+                if let Some(p) = ws.every_pane_mut().find(|p| p.id == id) {
                     return Some(p);
                 }
             }
@@ -1730,7 +1959,7 @@ impl Session {
     pub fn foregrounds(&self) -> Vec<(PaneId, Option<i32>)> {
         let mut out = Vec::new();
         let mut take = |ws: &Workspace| {
-            for p in &ws.panes {
+            for p in ws.every_pane() {
                 match p.foreground() {
                     Some(pgid) => out.push((p.id, Some(pgid))),
                     // A pane with no foreground group has nothing running in
@@ -1757,7 +1986,7 @@ impl Session {
         let found: std::collections::HashMap<PaneId, Option<crate::agent::Occupant>> =
             reading.panes.into_iter().collect();
         let set = |ws: &mut Workspace| {
-            for p in &mut ws.panes {
+            for p in ws.every_pane_mut() {
                 match found.get(&p.id) {
                     // A miss is "no news", not "nothing running": the group can
                     // end between the pgid being read and `ps` running, which a
@@ -1800,13 +2029,19 @@ mod tests {
             asked: None,
             turns: 0,
             touched: Instant::now(),
-            zoomed: false,
             reported: None,
             source: crate::agent::Source::None,
-            panes: Vec::new(),
-            tree: Node::Leaf(0),
+            tabs: vec![Tab {
+                id: 0,
+                label: String::new(),
+                panes: Vec::new(),
+                tree: Node::Leaf(0),
+                zoomed: false,
+                focus: 0,
+                expanded: false,
+            }],
+            tab: 0,
             expanded: false,
-            focus: 0,
             naming: NameState::default(),
         }
     }

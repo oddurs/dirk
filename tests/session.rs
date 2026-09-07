@@ -259,6 +259,13 @@ impl Client {
         false
     }
 
+    fn click(&mut self, col: u16, row: u16) {
+        let (c, r) = (col + 1, row + 1);
+        self.send(format!("\x1b[<0;{c};{r}M").as_bytes());
+        self.send(format!("\x1b[<0;{c};{r}m").as_bytes());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
     fn send(&mut self, bytes: &[u8]) {
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
@@ -1444,4 +1451,102 @@ fn removing_a_worktree_refuses_while_it_holds_uncommitted_work() {
 
     drop(client);
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+// ── Tabs ────────────────────────────────────────────────────────────────
+
+#[test]
+fn a_space_holds_more_than_one_arrangement() {
+    // An editor and a test runner are one task and two screens. The space keeps
+    // its name and its agent's state, because those are about the task.
+    let session = unique("tabs");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["tab", "list"]);
+    assert!(ok, "tab list failed: {list}");
+    assert_eq!(
+        list.matches("\"id\"").count(),
+        1,
+        "a space starts with one tab"
+    );
+
+    let (ok, out) = ask(&session, &["tab", "new"]);
+    assert!(ok, "tab new failed: {out}");
+    let (ok, list) = ask(&session, &["tab", "list"]);
+    assert!(ok, "tab list failed");
+    assert_eq!(list.matches("\"id\"").count(), 2, "the second tab: {list}");
+
+    // Still one space, because a tab is not one.
+    let (ok, spaces) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    assert_eq!(
+        spaces.matches("\"id\"").count(),
+        1,
+        "a new tab made a new space: {spaces}"
+    );
+
+    // Named by hand, and the name is what it is called from then on.
+    let id = first_field(&list, "id");
+    let (ok, _) = ask(&session, &["tab", "rename", &id, "tests"]);
+    assert!(ok, "tab rename failed");
+    let (ok, list) = ask(&session, &["tab", "list"]);
+    assert!(ok, "tab list failed");
+    assert!(list.contains("tests"), "the name did not stick: {list}");
+
+    drop(client);
+}
+
+#[test]
+fn the_last_tab_is_the_space_and_is_not_closed_on_its_own() {
+    // Closing it is closing the space, which `x` on the last pane already
+    // means. Two ways to do one thing, one of which leaves a row that draws
+    // nothing, is the version worth refusing.
+    let session = unique("lasttab");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["tab", "list"]);
+    assert!(ok, "tab list failed");
+    let id = first_field(&list, "id");
+    let (ok, why) = ask(&session, &["tab", "close", &id]);
+    assert!(!ok, "it closed the only tab: {why}");
+    assert!(why.contains("last tab"), "said the wrong thing: {why}");
+
+    drop(client);
+}
+
+#[test]
+fn the_nav_draws_the_tabs_a_space_actually_has() {
+    // The nav was already drawing a level here with nothing behind it.
+    let session = unique("navtabs");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, _) = ask(&session, &["tab", "new"]);
+    assert!(ok, "tab new failed");
+    let (ok, list) = ask(&session, &["tab", "list"]);
+    assert!(ok, "tab list failed");
+    let id = first_field(&list, "id");
+    let (ok, _) = ask(&session, &["tab", "rename", &id, "zzEDITOR"]);
+    assert!(ok, "tab rename failed");
+
+    // Expand the space, which is what the disclosure mark on its row does.
+    let rows = client.rows();
+    let (row, col) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(r, line)| line.find("1 dirk").map(|c| (r, c)))
+        .expect("the workspace row");
+    // Once: the row is already focused, so the click is the disclosure.
+    let mut client = client;
+    client.click(col as u16, row as u16);
+
+    assert!(
+        client.wait_for("zzEDITOR", START),
+        "the nav did not draw the tabs\n{}",
+        client.drawn()
+    );
+
+    drop(client);
 }

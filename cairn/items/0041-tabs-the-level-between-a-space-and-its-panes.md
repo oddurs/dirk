@@ -2,10 +2,10 @@
 id: 41
 title: 'Tabs: the level between a space and its panes'
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-07
 priority: p1
 area: mux
 effort: l
