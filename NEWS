@@ -6,6 +6,67 @@ See the end of the file for copying conditions.
 Please send bug reports and suggestions through the project's issue tracker.
 
 
+* Noteworthy changes in release 0.3.1 (2026-09-07)
+
+The rest of namesync, natively.  The port took its policy -- when a name should
+change -- and left everything around it.
+
+** Tokens
+
+A name is made of eleven of them: project, branch, worktree, n, intent,
+intent-slug, since, age, locked, stale, agent and agents.  They are an interface
+rather than whatever the code has to hand, and a token that is not known is
+absent rather than empty, so a template written for a workspace that has a
+branch does not leave a hole in one that has not.
+
+Two are clocks, and confusing them makes both useless.  `since` restarts
+whenever the state changes and answers "who has been blocked longest".  `age`
+restarts only when the intent changes and answers "what has been grinding on the
+same thing all day".
+
+** Templates
+
+A name is a template over those tokens, one for workspaces and one for agents,
+defaulting to what the labels were before.  A template naming a token that does
+not exist is reported at startup rather than rendering as silence.
+
+** Configuration
+
+The similarity threshold, whether hand-written names are respected, whether to
+hold off while an agent is blocked, whether to strip a project prefix, and the
+list of titles that are programs rather than intents.  That last is what stops a
+pane running `nvim` becoming a workspace called `nvim`; it ships with a list.
+
+** Holds
+
+A name you wrote is held explicitly rather than worked out afresh each pass, so
+it can be marked in the interface and released with `u`.  Clearing a name by hand
+releases the hold: an empty label is not a name, it is the clearest possible
+statement that the previous one was unwanted, and a hold with no visible release
+leaves a workspace blank for ever.
+
+** A second source
+
+Naming reads the agent's own terminal title.  That is the right primary source
+and it fails in one way: a pane where nothing publishes a title has no intent at
+all.  `[naming.sources.llm]` covers that case and is off unless asked for.
+
+The model is a source, not a decider.  It supplies a candidate intent from the
+tail of the screen, and that candidate goes through precisely the policy every
+title goes through.  Nothing about when a name changes moves into the model.
+
+Asked only about panes with no usable title, no more often than a floor, and
+never on the drawing thread.  Every failure -- no key, no curl, a timeout, a
+malformed answer -- leaves naming exactly where it was without it.  The key is
+read from the environment and passed to curl on its standard input, never in an
+argument: dirk reads the process table itself and draws what it finds.
+
+** Stale
+
+An agent that has not revised its title across several state changes is marked,
+and nothing is done about it.  It is a signal for a human.
+
+
 * Noteworthy changes in release 0.3.0 (2026-09-06)
 
 ** What is running in a pane
