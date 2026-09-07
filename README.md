@@ -234,7 +234,7 @@ The sidebar is the product, and v0.1 has a sketch of it. The roadmap is
 | --- | --- | --- |
 | **v0.1** ✓ | It runs | panes on a pty, a clickable sidebar, a rail, naming |
 | **v0.2** ✓ | The nav | three sections — layouts, spaces, agents — two-line rows carrying worktree, branch, intent and age, and static layouts with a split tree under them |
-| **v0.3** | It knows what the agents are doing | real detection and real lifecycle states, so `blocked` is shown rather than guessed; attention routing and notifications |
+| **v0.3** ✓ | It knows what the agents are doing | real detection and real lifecycle states, so `blocked` is shown rather than guessed; attention routing and notifications |
 | **v0.4** | Sessions that outlive their terminal | a daemon, detach and reattach, persistence, and a socket API with a CLI so an agent inside a pane can drive dirk |
 | **v0.5** | A multiplexer you would not miss tmux from | scrollback, copy mode, search, tabs, zoom, a command palette, configurable keys |
 | **v1.0** | Production | documented, packaged, hardened, and measured |
@@ -245,11 +245,13 @@ a guess until the states are real.
 
 ## Status
 
-v0.2 is done: the nav is three sections of two-line rows, layouts are declared
-arrangements that hold their shape when a panel stops, and everything in the
-column is clickable.
+v0.3 is done. dirk reads what is running in each pane from its foreground
+process group, so a shell is a shell and an agent is an agent; the four
+lifecycle states are real, including `blocked`, which is the only one waiting on
+a human; the rail counts what is owed and notifications arrive when it changes.
 
-It is still a single process. Close the terminal and the work goes with it, so
+It is still a single process. Close the terminal and the work goes with it,
+which is the whole of v0.4. Close the terminal and the work goes with it, so
 [herdr](https://herdr.dev) stays installed for anything long-running — that is
 item `0007`, and the whole of v0.4.
 

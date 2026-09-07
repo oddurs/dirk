@@ -1,6 +1,6 @@
 [package]
 name = "dirk"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A terminal multiplexer with a clickable project tree, static pages and intent-based workspace naming built in."
