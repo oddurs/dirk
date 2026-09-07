@@ -907,11 +907,25 @@ fn an_agent_is_given_a_name_you_could_type() {
 
     // Two panes, so the workspace has a subtree worth opening.
     h.prefix(b"|");
-    let row = h
-        .rows()
-        .iter()
-        .position(|r| r.contains("Reviewing the parser"))
-        .expect("the workspace row");
+
+    // Found in the nav, not merely on screen: the pane echoes the command that
+    // set the title, and that is not the row being looked for. Waited for rather
+    // than read once, because the split has to be drawn before the row it moves
+    // can be found, and a fixed pause is not a synchronisation.
+    let nav_row = |h: &Harness| {
+        h.rows().iter().position(|r| {
+            r.chars()
+                .take(34)
+                .collect::<String>()
+                .contains("Reviewing the parser")
+        })
+    };
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| nav_row(h).is_some()),
+        "the workspace row was never drawn\n{}",
+        h.drawn()
+    );
+    let row = nav_row(&h).expect("the workspace row");
     h.click(4, row as u16);
 
     assert!(
