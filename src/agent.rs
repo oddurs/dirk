@@ -135,23 +135,42 @@ pub fn classify(comm: &str) -> Occupant {
 /// A group whose leader has exited yields no entry, which the caller reads as
 /// "no news" and keeps what it had.
 pub fn table() -> HashMap<i32, String> {
-    let mut out = HashMap::new();
     let Ok(ps) = Command::new("ps")
         .args(["-A", "-o", "pid=,pgid=,comm="])
         .output()
     else {
-        return out;
+        return HashMap::new();
     };
-    for line in String::from_utf8_lossy(&ps.stdout).lines() {
-        let mut parts = line.trim_start().splitn(3, char::is_whitespace);
-        let (Some(pid), Some(pgid), Some(comm)) = (parts.next(), parts.next(), parts.next()) else {
+    parse(&String::from_utf8_lossy(&ps.stdout))
+}
+
+/// The parsing half, separated so it can be tested against real output instead
+/// of against whatever the machine running the tests happens to have.
+///
+/// It was not, once, and the bug that hid there was this: `ps` right-aligns its
+/// numeric columns, so the gap between pid and pgid is several spaces, and
+/// splitting on each whitespace character yields an empty field where the pgid
+/// should be. Every line was discarded and the table came back empty — on both
+/// platforms, silently, since an empty table just means "no news about any
+/// pane".
+pub fn parse(text: &str) -> HashMap<i32, String> {
+    let mut out = HashMap::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(pgid)) = (fields.next(), fields.next()) else {
             continue;
         };
-        let (Ok(pid), Ok(pgid)) = (pid.parse::<i32>(), pgid.trim().parse::<i32>()) else {
+        let (Ok(pid), Ok(pgid)) = (pid.parse::<i32>(), pgid.parse::<i32>()) else {
             continue;
         };
-        if pid == pgid {
-            out.insert(pgid, comm.trim().to_string());
+        if pid != pgid {
+            continue;
+        }
+        // A command can contain spaces ("Google Chrome Helper"), so it is the
+        // whole of the rest of the line rather than the next field.
+        let comm = fields.collect::<Vec<_>>().join(" ");
+        if !comm.is_empty() {
+            out.insert(pgid, comm);
         }
     }
     out
@@ -212,17 +231,64 @@ mod tests {
         assert_eq!(classify("   "), Occupant::Unknown);
     }
 
+    /// Real `ps -A -o pid=,pgid=,comm=` output, padding and all.
+    const PS: &str = "\
+    1       1 /sbin/launchd
+  337     337 /usr/libexec/logd
+18776   18776 claude
+61207   84361 sleep
+84361   84361 /bin/zsh
+99123   84361 node
+  512     512 Google Chrome Helper
+";
+
     #[test]
-    fn the_process_table_can_be_read_and_holds_this_process() {
-        let table = table();
-        assert!(!table.is_empty(), "ps returned nothing");
-        // This test's own process group is in there, whatever it is called.
-        let mine = std::process::id() as i32;
-        assert!(
-            table
-                .keys()
-                .any(|&pgid| pgid == mine || table.contains_key(&pgid)),
-            "the table has no plausible entries"
+    fn the_padding_between_columns_is_not_a_field() {
+        // What went wrong: `ps` right-aligns its numbers, so splitting on each
+        // whitespace character puts an empty string where the pgid should be
+        // and every line is discarded. The table came back empty on both
+        // platforms and said nothing, because an empty table reads as "no news".
+        let table = parse(PS);
+        assert!(!table.is_empty(), "the whole table was discarded");
+        assert_eq!(table.get(&1).map(String::as_str), Some("/sbin/launchd"));
+        assert_eq!(table.get(&18776).map(String::as_str), Some("claude"));
+    }
+
+    #[test]
+    fn only_the_group_leader_names_its_group() {
+        let table = parse(PS);
+        // Group 84361 is led by pid 84361 (`zsh`) but `ps` lists pid 61207
+        // (`sleep`) first, because pids wrap. Taking the first row would report
+        // a child -- and a `bash` under a running agent would mark the pane
+        // free for another one.
+        assert_eq!(table.get(&84361).map(String::as_str), Some("/bin/zsh"));
+    }
+
+    #[test]
+    fn a_group_whose_leader_has_gone_has_no_entry() {
+        // Better than naming a survivor: the caller reads a miss as "no news"
+        // and keeps the last good answer.
+        let table = parse("61207   84361 sleep\n");
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn a_command_with_spaces_survives_intact() {
+        assert_eq!(
+            parse(PS).get(&512).map(String::as_str),
+            Some("Google Chrome Helper")
         );
+    }
+
+    #[test]
+    fn the_real_process_table_is_readable() {
+        // The fixture tests cover the parsing; this one only proves `ps` is
+        // where it is expected to be and speaks the expected dialect.
+        let table = table();
+        assert!(
+            !table.is_empty(),
+            "ps returned nothing usable on this machine"
+        );
+        assert!(table.values().all(|c| !c.is_empty()));
     }
 }
