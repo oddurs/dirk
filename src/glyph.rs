@@ -95,6 +95,7 @@ marks! {
 
     // What a workspace is, beside its name.
     Worktree  "worktree"   "y"  "⑂",
+    Zoomed    "zoomed"     "Z"  "⤢",
     Held      "held"       "."  "·",
 
     // Disclosure, and the pane subtree under a workspace.

@@ -933,10 +933,11 @@ fn a_link_that_keeps_failing_is_tried_less_often_and_then_not_at_all() {
     assert!(killed.success(), "there was no server to kill");
 
     // The first three waits are one, one and two seconds, so a client that is
-    // counting reaches the fourth attempt inside ten and one that is not never
-    // leaves the first.
+    // counting reaches the fourth attempt in four and one that is not never
+    // leaves the first. The allowance is for a loaded machine, not for the
+    // ladder: the whole suite spawns a lot of processes.
     assert!(
-        client.wait_for("reconnecting (4)", Duration::from_secs(20)),
+        client.wait_for("reconnecting (4)", START),
         "the wait never got any longer\n{}",
         client.drawn()
     );

@@ -1996,6 +1996,17 @@ impl App {
         self.send_key(k);
     }
 
+    /// Exchange the focused pane with its neighbour.
+    fn move_pane(&mut self, delta: isize) {
+        let moved = self
+            .session
+            .focused_workspace_mut()
+            .is_some_and(|ws| ws.move_focused(delta));
+        if !moved {
+            self.note("nothing to move it past");
+        }
+    }
+
     /// Read everything every pane has said, and start filtering it.
     fn start_find(&mut self) {
         let Some(ws) = self.session.focused_workspace() else {
@@ -2308,6 +2319,15 @@ impl App {
                 }
             }
             KeyCode::Char(';') => self.session.cycle_pane(),
+            KeyCode::Char('z') => {
+                if let Some(ws) = self.session.focused_workspace_mut()
+                    && !ws.zoom()
+                {
+                    self.note("nothing to zoom past");
+                }
+            }
+            KeyCode::Char('{') => self.move_pane(-1),
+            KeyCode::Char('}') => self.move_pane(1),
             KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.session.step_workspace(1),
             KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => self.session.step_workspace(-1),
             KeyCode::Char(c) => {

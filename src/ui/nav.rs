@@ -1047,6 +1047,11 @@ fn space_row(
         style,
         w,
     );
+    // A zoomed workspace looks exactly like one with a single pane, so the row
+    // is the only thing that can say the others are still there.
+    if ws.zoomed && ws.panes.len() > 1 {
+        x += write_str(buf, x + 1, y, cx.g.text(G::Zoomed), THEME.warn(), w) + 1;
+    }
     // Kept in the short form, where the branch line is not. Which branch this
     // is is scenery; that it is a worktree at all is what tells two rows
     // wearing the same repository's name apart.

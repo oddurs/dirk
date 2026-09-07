@@ -2,7 +2,7 @@
 id: 43
 title: Pane zoom, move and swap
 type: feature
-status: doing
+status: done
 milestone: v0.5
 depends_on:
 - 11
