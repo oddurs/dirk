@@ -757,14 +757,14 @@ impl App {
         // The wheel over the nav scrolls the nav, not whatever pane is behind
         // the pointer.
         if m.column < self.side.right() && self.side.width > 0 {
-            let delta = match m.kind {
+            let delta: isize = match m.kind {
                 MouseEventKind::ScrollDown => 1,
                 MouseEventKind::ScrollUp => -1,
                 _ => 0,
             };
             if delta != 0 {
-                self.nav
-                    .scroll_by(delta, self.nav_rows.len(), self.side.height as usize);
+                // The section under the pointer, not the nav as a whole.
+                self.nav.scroll_by(m.row, delta);
                 return;
             }
         }

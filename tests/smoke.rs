@@ -36,6 +36,13 @@ const COLS: u16 = 80;
 /// had drawn anything.
 const READY: &str = "+ workspace";
 
+/// How long to allow for dirk to come up.
+///
+/// Generous on purpose. Starting is a process spawn, a pty, a shell and a first
+/// frame, and on a loaded CI runner that is not instant — a tight bound here
+/// fails as "never started" and reads like a bug in dirk.
+const START: Duration = Duration::from_secs(30);
+
 /// Unique per config directory, so concurrent tests do not share one.
 fn next_config_id() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -189,7 +196,7 @@ fn it_comes_up_and_draws_its_chrome() {
 
     // The nav's three sections, as plain words.
     assert!(
-        h.wait_for(READY, Duration::from_secs(10)),
+        h.wait_for(READY, START),
         "the nav never drew; dirk drew:\n{}",
         h.drawn()
     );
@@ -203,7 +210,7 @@ fn it_comes_up_and_draws_its_chrome() {
 #[test]
 fn a_shell_in_a_pane_runs_and_echoes() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // Straight through to the pane: no prefix, so this is the focused shell.
     h.send(b"echo dirk-is-alive\r");
@@ -217,7 +224,7 @@ fn a_shell_in_a_pane_runs_and_echoes() {
 #[test]
 fn the_prefix_opens_the_picker_and_escape_closes_it() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // Ctrl-Space, then o.
     h.send(&[0]);
@@ -233,7 +240,7 @@ fn the_prefix_opens_the_picker_and_escape_closes_it() {
 #[test]
 fn prefix_q_quits() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     h.send(&[0]);
     h.send(b"q");
@@ -264,7 +271,7 @@ impl Harness {
 #[test]
 fn splitting_twice_gives_three_side_by_side_columns() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // The sidebar is hidden so the panes are wide enough that neither the
     // echoed command nor the marker wraps; a wrapped marker is not a layout
@@ -322,7 +329,7 @@ fn splitting_twice_gives_three_side_by_side_columns() {
 #[test]
 fn closing_a_split_pane_gives_the_whole_width_back() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     h.prefix(b"|");
     h.prefix(b"x");
@@ -364,7 +371,7 @@ title = "lower"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // The configured layout replaces the built-in ones, so it is the only entry
     // in the section above the tree.
@@ -402,7 +409,7 @@ key = "9"
 command = ["definitely-not-installed-anywhere"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // An entry that could only ever show `command not found` is worse than no
     // entry, so it is dropped at startup rather than left to fail on first use.
@@ -434,7 +441,7 @@ title = "right"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
     h.prefix(b"9");
     assert!(
         h.wait_for("left", Duration::from_secs(10)),
@@ -473,7 +480,7 @@ key = "9"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
     assert!(
         h.wait_for("Solo", Duration::from_secs(5)),
         "layout not listed\n{}",
@@ -512,7 +519,7 @@ command = ["/bin/sh"]
 #[test]
 fn escape_leaves_the_nav_without_going_anywhere() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     h.prefix(b"w");
     h.send(b"j");
@@ -556,7 +563,7 @@ title = "alive"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
     h.prefix(b"9");
 
     assert!(

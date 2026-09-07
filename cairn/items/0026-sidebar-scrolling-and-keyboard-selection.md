@@ -30,12 +30,10 @@ the edges. The pointer wheel scrolls the section under it.
 - [x] Scrolls to keep the selection visible with margin
 - [x] Wheel scrolls the section under the pointer
 
-One criterion this item started with was moved rather than met:
+One criterion this item started with was moved rather than met, and has since
+been done under its own number:
 
-- Sections shrink proportionally before any of them is cut off → 0050
+- Sections shrink proportionally before any of them is cut off → 0050, done
 
-It was ticked here by mistake in the first pass and caught in review. The nav is
-one flat list with one offset; there is no per-section height allocation
-anywhere, so the last section is simply cut. Recorded rather than quietly
-unticked — a ticked box that was never built is worse than an open one.
+It was ticked here by mistake in the first pass and caught in review.
 - [x] A scrollable section shows that it has more

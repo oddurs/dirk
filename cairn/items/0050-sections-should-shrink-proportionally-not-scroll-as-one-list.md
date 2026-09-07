@@ -2,8 +2,9 @@
 id: 50
 title: Sections should shrink proportionally, not scroll as one list
 type: feature
-status: backlog
+status: done
 milestone: v0.2
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p2
@@ -27,8 +28,8 @@ share of what is available, and only sections that are over their share scroll.
 A section with three rows should never be scrolled at all.
 
 ## Acceptance criteria
-- [ ] Each section is allocated height before any of them is drawn
-- [ ] A section that fits never scrolls
-- [ ] A section that does not scroll within itself, keeping its heading visible
-- [ ] The agents section is never the one silently cut off
-- [ ] Selection moving into a section scrolls that section, not the whole nav
+- [x] Each section is allocated height before any of them is drawn
+- [x] A section that fits never scrolls
+- [x] A section that does not scroll within itself, keeping its heading visible
+- [x] The agents section is never the one silently cut off
+- [x] Selection moving into a section scrolls that section, not the whole nav
