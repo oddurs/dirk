@@ -283,6 +283,11 @@ impl App {
             while let Ok(next) = rx.try_recv() {
                 self.handle(next);
             }
+            // Once per frame, for the same reason drawing is: one `read` of a
+            // busy pane produces an event, and working out every agent's state
+            // locks each agent pane's terminal and reads its screen. Doing that
+            // per chunk contends with the reader threads holding the same lock.
+            self.session.update_states(Instant::now());
             if self.quit || self.session.is_empty() {
                 return Ok(());
             }
@@ -298,7 +303,6 @@ impl App {
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
             Ev::Output(id) => {
                 self.session.touch(id);
-                self.session.update_states(Instant::now());
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
@@ -313,7 +317,6 @@ impl App {
             Ev::Tick => {
                 self.read_agents();
                 self.read_repos();
-                self.session.update_states(Instant::now());
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)

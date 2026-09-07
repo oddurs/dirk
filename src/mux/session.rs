@@ -673,14 +673,20 @@ fn observe(ws: &Workspace, now: Instant) -> Observed {
         // full, and a program that has just started has all its output at the
         // top.
         let (cursor, _) = screen.cursor_position();
-        let from = cursor.saturating_sub(crate::agent::PROMPT_ROWS);
-        let prompt = screen.contents_between(from, 0, rows, cols);
+        // Bounded on both sides. `contents_between` takes row indices, not a
+        // count, and passing the count made the end unreachable -- so the read
+        // ran to the bottom of the screen and the window was not around the
+        // cursor at all, which is the whole idea.
+        let last = rows.saturating_sub(1);
+        let to = cursor.min(last);
+        let from = to.saturating_sub(crate::agent::PROMPT_ROWS);
+        let prompt = screen.contents_between(from, 0, to, cols);
         if crate::agent::is_blocked(kind, &prompt) {
             return Observed::Blocked;
         }
     }
 
-    if now.duration_since(ws.touched) < WORKING_FOR {
+    if now.duration_since(pane.touched) < WORKING_FOR {
         return Observed::Working;
     }
     Observed::Waiting
@@ -712,15 +718,35 @@ fn resize_tree(ws: &mut Workspace, area: Rect) {
 }
 
 impl Session {
-    /// Note that a pane produced output, so its workspace's age resets.
+    /// Note that a pane produced output.
+    ///
+    /// Both the pane's own clock and the workspace's: the pane's decides
+    /// whether its agent is working, and the workspace's is the age in the nav,
+    /// which is about the workspace as a whole.
     pub fn touch(&mut self, id: PaneId) {
         let now = Instant::now();
+        let mark = |ws: &mut Workspace| -> bool {
+            let Some(pane) = ws.panes.iter_mut().find(|p| p.id == id) else {
+                return false;
+            };
+            pane.touched = now;
+            ws.touched = now;
+            true
+        };
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
-                if ws.panes.iter().any(|p| p.id == id) {
-                    ws.touched = now;
+                if mark(ws) {
                     return;
                 }
+            }
+        }
+        // Layouts were missed here, so a layout's clock was frozen at creation
+        // and an agent in one could never be seen working.
+        for layout in &mut self.layouts {
+            if let Some(ws) = layout.ws.as_mut()
+                && mark(ws)
+            {
+                return;
             }
         }
     }
@@ -790,9 +816,13 @@ fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
     // notifications by asking about them.
     if focused {
         ws.seen = true;
-    } else if observed == Observed::Working && ws.state != State::Working {
-        // Work has started that you have not watched. Whatever it produces is
-        // unseen when it stops.
+    } else if observed == Observed::Working {
+        // Any moment of work you are not watching leaves the result unseen.
+        //
+        // This was once only the *edge* into working, which missed the flow the
+        // feature exists for: start something, watch it begin, then look away.
+        // Focus made it seen, the edge had already passed, and it finished as
+        // `idle` with nothing to say it was done.
         ws.seen = false;
     }
 

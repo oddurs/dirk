@@ -43,6 +43,14 @@ use std::process::Command;
 pub struct Kind {
     pub name: &'static str,
     names: &'static [&'static str],
+    /// Whether a marker only counts alongside a menu of numbered answers.
+    ///
+    /// "Do you want" and "Would you like" are phrases an agent writes in
+    /// ordinary prose -- "Would you like me to run the tests?" is how a finished
+    /// turn ends -- with its cursor a few rows below, well inside the window.
+    /// Without this, every such turn read as blocked, which masks `done` and
+    /// inverts the attention order.
+    choices: bool,
     /// Text that appears when this agent is waiting for an answer.
     ///
     /// The part of this file most likely to be wrong: these are strings another
@@ -57,24 +65,27 @@ pub const KINDS: &[Kind] = &[
     Kind {
         name: "claude",
         names: &["claude"],
-        // Every approval prompt is a question of this shape, above a numbered
-        // list of answers.
         blocked: &["Do you want", "Would you like"],
+        choices: true,
     },
     Kind {
         name: "codex",
         names: &["codex"],
         blocked: &["Allow command?", "Approve?"],
+        choices: true,
     },
     Kind {
         name: "aider",
         names: &["aider"],
         blocked: &["(Y)es/(N)o", "Add to chat?"],
+        // Its marker is already the answer set, so there is no menu to find.
+        choices: false,
     },
     Kind {
         name: "goose",
         names: &["goose"],
         blocked: &["Do you approve"],
+        choices: true,
     },
 ];
 
@@ -228,8 +239,29 @@ impl State {
 /// Only the region around the cursor is read, not the whole screen: an agent
 /// that merely wrote the words "do you want" in a paragraph further up is not
 /// waiting for anything.
-pub fn is_blocked(kind: Kind, tail: &str) -> bool {
-    kind.blocked.iter().any(|m| tail.contains(m))
+pub fn is_blocked(kind: Kind, window: &str) -> bool {
+    if !kind.blocked.iter().any(|m| window.contains(m)) {
+        return false;
+    }
+    !kind.choices || has_menu(window)
+}
+
+/// Two or more numbered answers, which is what an approval box is.
+///
+/// One is not a menu: an agent writing "1. First we should..." in prose is
+/// listing, not asking.
+fn has_menu(window: &str) -> bool {
+    window
+        .lines()
+        .filter(|line| {
+            let t = line
+                .trim_start()
+                .trim_start_matches(['❯', '>', '*', '·', ' ']);
+            let mut c = t.chars();
+            matches!((c.next(), c.next()), (Some(d), Some('.')) if d.is_ascii_digit())
+        })
+        .count()
+        >= 2
 }
 
 /// How many rows above the cursor count as "the prompt".

@@ -942,11 +942,25 @@ fn space_row(
 
 /// A workspace's state, as the word the theme and the nav both speak.
 ///
-/// Worked out in `session::update_states`, which is where it belongs: it
-/// depends on whether *you* have looked at the workspace, and drawing should
-/// not be the thing deciding that.
+/// The agent's state when there is an agent. When there is not, the column
+/// still has something worth saying — a build is running, or a shell is at a
+/// prompt — and blanking it lost that. The `agents` list keeps asking the
+/// narrower question, which is why it reads `ws.state` directly.
 fn state_of(ws: &Workspace) -> &'static str {
-    ws.state.glyph_name()
+    use crate::agent::{Occupant, State};
+    if ws.state != State::None {
+        return ws.state.glyph_name();
+    }
+    match ws.active_pane() {
+        None => "unknown",
+        Some(p) if p.dead => "idle",
+        Some(p) => match &p.occupant {
+            // Something is running that is not an agent and not a prompt.
+            Occupant::Program(_) => "working",
+            Occupant::Shell => "idle",
+            _ => "unknown",
+        },
+    }
 }
 
 #[cfg(test)]

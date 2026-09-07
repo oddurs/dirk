@@ -783,7 +783,18 @@ fn an_agent_sitting_on_an_approval_prompt_reads_as_blocked() {
         h.drawn()
     );
 
-    h.send(b"printf 'Do you want to proceed?\\n'\r");
+    // A question in prose is not an approval prompt -- it is how a finished
+    // turn ends -- so this must not read as blocked.
+    h.send(b"printf 'Would you like me to run the tests?\\n'\r");
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !blocked(&h),
+        "a question in prose read as an approval prompt\n{}",
+        h.drawn()
+    );
+
+    // The real thing: a question above a menu of answers.
+    h.send(b"printf 'Do you want to proceed?\\n> 1. Yes\\n  2. No\\n'\r");
     assert!(
         h.wait_until(Duration::from_secs(10), blocked),
         "an approval prompt did not read as blocked\n{}",
