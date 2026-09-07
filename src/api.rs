@@ -42,6 +42,16 @@ pub fn pane_id(ws: u64, pane: PaneId) -> String {
     format!("w{ws}:p{pane}")
 }
 
+pub fn tab_id(ws: u64, tab: u64) -> String {
+    format!("w{ws}:t{tab}")
+}
+
+/// Read a tab handle, in either form.
+pub fn parse_tab(text: &str) -> Option<u64> {
+    let tail = text.rsplit(':').next()?;
+    tail.strip_prefix('t')?.parse().ok()
+}
+
 /// Read a workspace or pane handle in either form.
 ///
 /// A pane id is unique on its own, so the workspace half is a courtesy to the
@@ -74,7 +84,7 @@ fn workspace_json(session: &Session, p: usize, w: usize) -> Value {
         "seen": ws.seen,
         "held": ws.naming.held,
         "focused": session.focus == Focus::Ws { p, w },
-        "panes": ws.tree.leaves().len(),
+        "panes": ws.tree().leaves().len(),
         "branch": tokens.get("branch"),
         "worktree": tokens.get("worktree").is_some(),
         "agent": tokens.get("agent"),
@@ -133,9 +143,9 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
                 if want.is_some_and(|id| id != ws.id) {
                     continue;
                 }
-                for id in ws.tree.leaves() {
+                for id in ws.tree().leaves() {
                     let Some(pane) = ws.pane(id) else { continue };
-                    list.push(pane_json(ws.id, pane, ws.focus == id));
+                    list.push(pane_json(ws.id, pane, ws.focus() == id));
                 }
             }
             Reply::ok(json!({ "panes": list }))
@@ -163,6 +173,35 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
 
         // Agents are workspaces holding one, which is the only thing that can
         // be addressed by name.
+        "tab.list" => {
+            let want = match args.first() {
+                None => None,
+                Some(a) => match parse_workspace(a) {
+                    Some(id) => Some(id),
+                    None => return Some(Reply::err("not a workspace id")),
+                },
+            };
+            let mut list = Vec::new();
+            for (p, w) in session.flat() {
+                let Some(ws) = session.workspace(p, w) else {
+                    continue;
+                };
+                if want.is_some_and(|id| id != ws.id) {
+                    continue;
+                }
+                for (i, tab) in ws.tabs.iter().enumerate() {
+                    list.push(json!({
+                        "id": tab_id(ws.id, tab.id),
+                        "workspace": workspace_id(ws.id),
+                        "name": ws.tab_label(i),
+                        "panes": tab.panes.len(),
+                        "focused": ws.tab == i,
+                    }));
+                }
+            }
+            Reply::ok(json!({ "tabs": list }))
+        }
+
         "agent.list" => {
             let mut list = Vec::new();
             for (p, w) in session.flat() {
@@ -217,6 +256,7 @@ pub const NOUNS: &[&str] = &[
     "agent",
     "session",
     "worktree",
+    "tab",
 ];
 
 /// Every command, with what it takes. Kept beside the handlers so the two
@@ -235,6 +275,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("pane.close", "<pane>"),
     ("layout.list", ""),
     ("layout.open", "<name>"),
+    ("tab.list", "[workspace]"),
+    ("tab.new", "[workspace]"),
+    ("tab.focus", "<tab>"),
+    ("tab.rename", "<tab> <name...>"),
+    ("tab.close", "<tab>"),
     ("worktree.list", ""),
     ("worktree.add", "<branch>"),
     ("worktree.remove", "<branch|path> [--force]"),
@@ -256,7 +301,7 @@ pub fn locate(session: &Session, pane: PaneId) -> Option<(usize, usize)> {
     session.flat().into_iter().find(|&(p, w)| {
         session
             .workspace(p, w)
-            .is_some_and(|ws| ws.panes.iter().any(|x| x.id == pane))
+            .is_some_and(|ws| ws.panes().iter().any(|x| x.id == pane))
     })
 }
 

@@ -79,6 +79,14 @@ actions! {
     MovePaneOn   "pane.move-on"     "Move this pane on"                  "}",
     Restart      "pane.restart"     "Restart a stopped pane"             "r",
 
+    // Tabs: the level between a space and its panes.
+    // `c` and `&` are tmux's, and `[` is tmux's copy mode, which is why next
+    // and previous are not its `n` and `p`: both are spoken for here.
+    NewTab       "tab.new"          "New tab in this space"              "c",
+    NextTab      "tab.next"         "Next tab"                           ".",
+    PrevTab      "tab.prev"         "Previous tab"                       ",",
+    CloseTab     "tab.close"        "Close this tab"                     "&",
+
     // Reading.
     Read         "pane.read"        "Read this pane's scrollback"        "[",
     Find         "session.find"     "Find a line, in any pane"           "/",
@@ -105,7 +113,7 @@ impl Action {
     /// silently omits what it cannot do teaches you that dirk cannot do it.
     pub fn why_not(self, session: &Session) -> Option<&'static str> {
         let in_space = matches!(session.focus, Focus::Ws { .. });
-        let panes = session.focused_workspace().map_or(0, |ws| ws.panes.len());
+        let panes = session.focused_workspace().map_or(0, |ws| ws.panes().len());
         match self {
             Action::NewWorkspace | Action::NewAgent | Action::NewWorktree if !in_space => {
                 Some("no project focused")
@@ -114,6 +122,16 @@ impl Action {
                 Some("only one pane here")
             }
             Action::CyclePane if panes < 2 => Some("only one pane here"),
+            Action::NewTab | Action::CloseTab | Action::NextTab | Action::PrevTab if !in_space => {
+                Some("boards have one arrangement")
+            }
+            Action::CloseTab | Action::NextTab | Action::PrevTab
+                if session
+                    .focused_workspace()
+                    .is_some_and(|ws| ws.tabs.len() < 2) =>
+            {
+                Some("only one tab here")
+            }
             Action::Restart
                 if !session
                     .focused_workspace()

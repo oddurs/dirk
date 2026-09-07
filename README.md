@@ -125,6 +125,9 @@ jump. `dirk --keys` prints the same list to a terminal.
 | `\|` `v` | split into columns |
 | `-` `s` | split into rows |
 | `;` | next pane in this workspace |
+| `c` | new tab in this space |
+| `,` `.` | previous / next tab |
+| `&` | close this tab |
 | `z` | zoom: one pane fills the space, and back |
 | `{` `}` | move this pane past its neighbour |
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
@@ -181,6 +184,25 @@ A folded project carries the worst state inside it and a count, so twenty repos
 fit on a screen and the one that is blocked still says so. `rows = "short"`
 drops the branch line, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
+
+## Tabs
+
+A space is one piece of work. A tab is one arrangement of programs for it, and
+there is usually more than one — an editor and a test runner are the same task
+and not the same screen.
+
+The space keeps its name, its agent's state and its clocks, because those are
+about the task and a task does not have two of them. The tab keeps the panes.
+
+An unnamed tab is drawn as its number, because a tab called "2" is not
+information, and takes a name from whatever is running in it — what is
+*running*, not what it says it is doing: an agent's intent is the space's
+business, and repeating it on the tab would say the same thing twice in two
+columns. `tab rename` overrides that.
+
+The last tab is the space. Closing it is closing that, which `x` on the last
+pane already means, so `&` refuses — two ways to do one thing, one of which
+leaves a row that draws nothing, is the version worth refusing.
 
 **Zoom is a view, not a change.** The tree is untouched, so leaving puts every
 pane back exactly where it was and nothing running notices anything beyond a

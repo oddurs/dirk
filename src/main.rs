@@ -114,6 +114,7 @@ JSON; `--current` means the pane you are in.
   layout    list|open
   agent     list|start|state|hooks
   worktree  list|add|remove
+  tab       list|new|focus|rename|close
   session   info|list|reload|commands|quit|prune
 
 Options:
@@ -836,6 +837,28 @@ impl App {
                 ws.label = want.label.clone();
                 ws.naming.held = want.held;
                 ws.naming.applied = Some(want.label.clone());
+                // The first tab exists already; the rest are made, and all of
+                // them take back the names they had.
+                for (i, name) in want.tabs.iter().enumerate() {
+                    if i > 0 && self.session.new_tab(rows, cols).is_none() {
+                        break;
+                    }
+                    let Some(ws) = self
+                        .session
+                        .projects
+                        .get_mut(p)
+                        .and_then(|x| x.workspaces.last_mut())
+                    else {
+                        break;
+                    };
+                    if let Some(tab) = ws.tabs.get_mut(i) {
+                        // A name that is only the position is not a name: it
+                        // would freeze what the number happened to be.
+                        if *name != (i + 1).to_string() {
+                            tab.label = name.clone();
+                        }
+                    }
+                }
             }
             // After the workspaces, not before: opening one expands the project
             // that holds it, so a collapsed project set up first is expanded
@@ -1023,6 +1046,7 @@ impl App {
             Ev::Output(id) => {
                 self.session.touch(id);
                 self.session.track_intents(&self.cfg.naming);
+                self.session.name_tabs();
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
@@ -1068,6 +1092,7 @@ impl App {
                 self.read_agents();
                 self.read_repos();
                 self.session.track_intents(&self.cfg.naming);
+                self.session.name_tabs();
                 self.ask_for_intents();
                 self.rename_pass();
                 if !self.status.is_empty()
@@ -1268,7 +1293,7 @@ impl App {
                     let ids: Vec<_> = self
                         .session
                         .workspace(p, w)
-                        .map(|ws| ws.panes.iter().map(|x| x.id).collect())
+                        .map(|ws| ws.panes().iter().map(|x| x.id).collect())
                         .unwrap_or_default();
                     for id in ids {
                         if let Some(ws) = self.session.workspace_mut(p, w)
@@ -1287,7 +1312,7 @@ impl App {
                     Some((p, w)) => {
                         self.session.focus = Focus::Ws { p, w };
                         if let Some(ws) = self.session.workspace_mut(p, w) {
-                            ws.focus = id;
+                            ws.set_focus(id);
                         }
                         Reply::ok(serde_json::json!({ "focused": arg(0) }))
                     }
@@ -1314,10 +1339,10 @@ impl App {
                 let was = self.session.focus;
                 self.session.focus = Focus::Ws { p, w };
                 if let Some(ws) = self.session.workspace_mut(p, w) {
-                    ws.focus = id;
+                    ws.set_focus(id);
                 }
                 self.session.split(dir, area.height, area.width);
-                let new = self.session.workspace(p, w).map(|ws| ws.focus);
+                let new = self.session.workspace(p, w).map(|ws| ws.focus());
                 self.session.focus = was;
 
                 match new {
@@ -1362,6 +1387,55 @@ impl App {
                         Reply::ok(serde_json::json!({ "opened": arg(0) }))
                     }
                     None => Reply::err("no such layout"),
+                }
+            }
+
+            "tab.new" => {
+                let (rows, cols) = (area.height, area.width);
+                if let Some(at) = api::target_workspace(&self.session, &arg(0)) {
+                    self.session.focus = Focus::Ws { p: at.0, w: at.1 };
+                }
+                match self.session.new_tab(rows, cols) {
+                    Some(()) => {
+                        let ws = self.session.focused_workspace();
+                        let id = ws.map(|w| api::tab_id(w.id, w.here().id));
+                        Reply::ok(serde_json::json!({ "tab": id }))
+                    }
+                    None => Reply::err("no space focused"),
+                }
+            }
+
+            "tab.focus" | "tab.rename" | "tab.close" => {
+                let Some(want) = api::parse_tab(&arg(0)) else {
+                    return Reply::err("not a tab id");
+                };
+                let Some((p, w, t)) = self.find_tab(want) else {
+                    return Reply::err("no such tab");
+                };
+                let verb = req.cmd.as_str();
+                let Some(ws) = self.session.workspace_mut(p, w) else {
+                    return Reply::err("no such tab");
+                };
+                match verb {
+                    "tab.focus" => {
+                        ws.tab = t;
+                        self.session.focus = Focus::Ws { p, w };
+                        Reply::ok(serde_json::json!({ "focused": arg(0) }))
+                    }
+                    "tab.rename" => {
+                        let name = req.args[1..].join(" ");
+                        ws.tabs[t].label = name.clone();
+                        Reply::ok(serde_json::json!({ "renamed": name }))
+                    }
+                    _ => {
+                        if ws.tabs.len() < 2 {
+                            return Reply::err("the last tab is the space");
+                        }
+                        for pane in &mut ws.tabs[t].panes {
+                            pane.close();
+                        }
+                        Reply::ok(serde_json::json!({ "closed": arg(0) }))
+                    }
                 }
             }
 
@@ -1469,7 +1543,7 @@ impl App {
                 // means the one you are looking at. A target that was given and
                 // did not resolve is still an error.
                 let target = match arg(1).is_empty() {
-                    true => self.session.focused_workspace().map(|ws| ws.focus),
+                    true => self.session.focused_workspace().map(|ws| ws.focus()),
                     false => api::target_pane(&self.session, &arg(1)),
                 };
                 let Some(pane) = target else {
@@ -1538,7 +1612,7 @@ impl App {
                     Focus::Layout(_) => w,
                 },
             )
-            .map(|ws| ws.focus)
+            .map(|ws| ws.focus())
         else {
             return self.note("nowhere to start it");
         };
@@ -1752,7 +1826,7 @@ impl App {
                     .active_pane()
                     .and_then(|x| x.title())
                     .or_else(|| ws.suggested.clone());
-                let panes = ws.panes.len();
+                let panes = ws.panes().len();
                 let current = ws.label.clone();
                 let blocked = ws.state == agent::State::Blocked;
 
@@ -1834,7 +1908,7 @@ impl App {
 
     fn visible_pane(&self, index: usize) -> Option<&Pane> {
         let ws = self.session.focused_workspace()?;
-        let id = *ws.tree.leaves().get(index)?;
+        let id = *ws.tree().leaves().get(index)?;
         ws.pane(id)
     }
 
@@ -1842,12 +1916,12 @@ impl App {
         match self.session.focus {
             Focus::Layout(i) => {
                 let ws = self.session.layouts.get_mut(i)?.ws.as_mut()?;
-                let id = *ws.tree.leaves().get(index)?;
+                let id = *ws.tree().leaves().get(index)?;
                 ws.pane_mut(id)
             }
             Focus::Ws { p, w } => {
                 let ws = self.session.workspace_mut(p, w)?;
-                let id = *ws.tree.leaves().get(index)?;
+                let id = *ws.tree().leaves().get(index)?;
                 ws.pane_mut(id)
             }
         }
@@ -1959,12 +2033,12 @@ impl App {
         match self.session.focus {
             Focus::Layout(i) => {
                 let ws = self.session.layouts.get(i)?.ws.as_ref()?;
-                let at = ws.tree.leaves().iter().position(|&id| id == ws.focus)?;
+                let at = ws.tree().leaves().iter().position(|&id| id == ws.focus())?;
                 rects.get(at).copied()
             }
             Focus::Ws { p, w } => {
                 let ws = self.session.workspace(p, w)?;
-                let at = ws.tree.leaves().iter().position(|&id| id == ws.focus)?;
+                let at = ws.tree().leaves().iter().position(|&id| id == ws.focus())?;
                 rects.get(at).copied()
             }
         }
@@ -2003,19 +2077,33 @@ impl App {
                     && self
                         .session
                         .workspace(p, w)
-                        .is_some_and(|ws| ws.panes.len() > 1);
+                        // Tabs as well as panes: a space with two tabs of one
+                        // pane each has a subtree worth opening, and asking
+                        // only about the tab on screen said it did not.
+                        .is_some_and(|ws| ws.tabs.len() > 1 || ws.panes().len() > 1);
                 if expand && let Some(ws) = self.session.workspace_mut(p, w) {
                     ws.expanded = !ws.expanded;
                     return;
                 }
                 self.session.focus = Focus::Ws { p, w };
             }
-            Target::NavPane { p, w, index } => {
+            Target::NavTab { p, w, t } => {
                 self.session.focus = Focus::Ws { p, w };
                 if let Some(ws) = self.session.workspace_mut(p, w)
-                    && let Some(&id) = ws.tree.leaves().get(index)
+                    && t < ws.tabs.len()
                 {
-                    ws.focus = id;
+                    ws.tab = t;
+                }
+            }
+            Target::NavPane { p, w, t, index } => {
+                self.session.focus = Focus::Ws { p, w };
+                if let Some(ws) = self.session.workspace_mut(p, w)
+                    && t < ws.tabs.len()
+                {
+                    ws.tab = t;
+                    if let Some(&id) = ws.tabs[t].tree.leaves().get(index) {
+                        ws.tabs[t].focus = id;
+                    }
                 }
             }
             Target::NewAgent => {
@@ -2227,6 +2315,14 @@ impl App {
         }
     }
 
+    /// Where a tab is, by its handle.
+    fn find_tab(&self, id: u64) -> Option<(usize, usize, usize)> {
+        self.session.flat().into_iter().find_map(|(p, w)| {
+            let ws = self.session.workspace(p, w)?;
+            ws.tabs.iter().position(|t| t.id == id).map(|t| (p, w, t))
+        })
+    }
+
     /// The directory of whatever is focused, which is what git is asked about.
     fn here(&self) -> Option<std::path::PathBuf> {
         self.session.focused_dir()
@@ -2275,7 +2371,7 @@ impl App {
         let Some(ws) = self.session.focused_workspace() else {
             return self.note("nothing to search");
         };
-        let origin = (ws.focus, self.session.scrolled());
+        let origin = (ws.focus(), self.session.scrolled());
         self.find = Some(find::Find::new(self.session.everything_said(), origin));
         self.copy = None;
     }
@@ -2326,7 +2422,7 @@ impl App {
             self.session.focus = Focus::Ws { p, w };
         }
         if let Some(ws) = self.session.focused_workspace_mut() {
-            ws.focus = pane;
+            ws.set_focus(pane);
         }
         self.session.scroll_to(pane, back);
 
@@ -2346,7 +2442,7 @@ impl App {
                 self.session.focus = Focus::Ws { p, w };
             }
             if let Some(ws) = self.session.focused_workspace_mut() {
-                ws.focus = pane;
+                ws.set_focus(pane);
             }
             self.session.scroll_to(pane, at);
         }
@@ -2361,7 +2457,7 @@ impl App {
         let Some(ws) = self.session.focused_workspace() else {
             return self.note("nothing to read");
         };
-        let pane = ws.focus;
+        let pane = ws.focus();
         let at = ws
             .pane(pane)
             .and_then(|p| p.term.lock().ok().map(|t| t.screen().cursor_position()))
@@ -2616,6 +2712,26 @@ impl App {
                     self.note("nothing to restart");
                 }
             }
+            A::NewTab => {
+                if self.session.new_tab(rows, cols).is_none() {
+                    self.note("no space focused");
+                }
+            }
+            A::NextTab => {
+                if let Some(ws) = self.session.focused_workspace_mut() {
+                    ws.step_tab(1);
+                }
+            }
+            A::PrevTab => {
+                if let Some(ws) = self.session.focused_workspace_mut() {
+                    ws.step_tab(-1);
+                }
+            }
+            A::CloseTab => {
+                if !self.session.close_tab() {
+                    self.note("the last tab is the space");
+                }
+            }
             A::Read => self.start_copy(),
             A::Find => self.start_find(),
             A::NextSpace => self.session.step_workspace(1),
@@ -2792,7 +2908,7 @@ impl App {
         let Some(ws) = self.session.focused_workspace() else {
             return;
         };
-        self.copy = Some(copy::Mode::new(ws.focus, (0, 0)));
+        self.copy = Some(copy::Mode::new(ws.focus(), (0, 0)));
     }
 
     /// Focus whatever pane the pointer is over, so the wheel reads that one.
@@ -2804,9 +2920,9 @@ impl App {
             return;
         };
         if let Some(ws) = self.session.focused_workspace_mut()
-            && let Some(&id) = ws.tree.leaves().get(index)
+            && let Some(&id) = ws.tree().leaves().get(index)
         {
-            ws.focus = id;
+            ws.set_focus(id);
         }
     }
 
@@ -2834,7 +2950,7 @@ impl App {
                 // Started but not anchored: a click is a click until it moves,
                 // and anchoring here would make every click a one-cell
                 // selection that swallows the click the pane wanted.
-                let mut mode = copy::Mode::new(ws.focus, at);
+                let mut mode = copy::Mode::new(ws.focus(), at);
                 mode.dragging = true;
                 self.copy = Some(mode);
                 Some(false)
@@ -2893,9 +3009,9 @@ impl App {
         // wants the click.
         if let MouseEventKind::Down(_) = m.kind
             && let Some(ws) = self.session.focused_workspace_mut()
-            && let Some(&id) = ws.tree.leaves().get(index)
+            && let Some(&id) = ws.tree().leaves().get(index)
         {
-            ws.focus = id;
+            ws.set_focus(id);
         }
 
         let Some(pane) = self.visible_pane_mut(index) else {
@@ -2960,14 +3076,14 @@ fn draw_content(
                 g,
                 label,
                 pane.exit.as_deref(),
-                id == ws.focus,
+                id == ws.focus(),
             );
         }
         if let Ok(t) = pane.term.lock() {
             // A stopped pane keeps its last output, dimmed. The output is
             // usually why the panel was there.
             let span = reading.filter(|m| m.pane == id).and_then(|m| m.span());
-            ui::pane::paint(t.screen(), inner, buf, id != ws.focus || pane.dead, span);
+            ui::pane::paint(t.screen(), inner, buf, id != ws.focus() || pane.dead, span);
         }
         hits.push(r, Target::Pane { index: i });
     }

@@ -57,6 +57,13 @@ pub struct Workspace {
     /// Whether a human named this one. Kept, or a restart would quietly hand a
     /// name you wrote back to the naming policy.
     pub held: bool,
+    /// The names of its tabs, in order.
+    ///
+    /// Only the names. What was running in one is a process, and a screenful of
+    /// text with nothing behind it is worse than an empty tab -- the same
+    /// argument the workspaces themselves are restored under.
+    #[serde(default)]
+    pub tabs: Vec<String>,
 }
 
 /// Where a session is written.
@@ -180,6 +187,7 @@ pub fn current(session: &crate::mux::Session) -> Saved {
                     .map(|w| Workspace {
                         label: w.label.clone(),
                         held: w.naming.held,
+                        tabs: (0..w.tabs.len()).map(|i| w.tab_label(i)).collect(),
                     })
                     .collect(),
             })
@@ -203,7 +211,7 @@ pub fn differs(a: &Saved, b: &Saved) -> bool {
                     p.expanded,
                     p.workspaces
                         .iter()
-                        .map(|w| (w.label.clone(), w.held))
+                        .map(|w| (w.label.clone(), w.held, w.tabs.clone()))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -227,6 +235,7 @@ mod tests {
                     workspaces: labels
                         .iter()
                         .map(|l| Workspace {
+                            tabs: Vec::new(),
                             label: (*l).to_string(),
                             held: false,
                         })

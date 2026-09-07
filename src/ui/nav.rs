@@ -160,10 +160,20 @@ pub enum Row {
         p: usize,
         w: usize,
     },
-    /// One pane of an expanded workspace.
+    /// One tab of an expanded workspace.
+    ///
+    /// Between the workspace and its panes, which is the level the nav was
+    /// already drawing with nothing behind it.
+    Tab {
+        p: usize,
+        w: usize,
+        t: usize,
+    },
+    /// One pane of an expanded tab.
     Pane {
         p: usize,
         w: usize,
+        t: usize,
         index: usize,
     },
     /// The same workspace, in the agents list. A separate variant so that
@@ -196,7 +206,8 @@ impl Row {
             Row::Workspace { p, w, .. } | Row::Agent { p, w } | Row::Branch { p, w } => {
                 Target::Workspace { p, w }
             }
-            Row::Pane { p, w, index } => Target::NavPane { p, w, index },
+            Row::Tab { p, w, t } => Target::NavTab { p, w, t },
+            Row::Pane { p, w, t, index } => Target::NavPane { p, w, t, index },
             Row::NewWorkspace(p) => Target::NewWorkspace(p),
             _ => return None,
         })
@@ -233,11 +244,26 @@ pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
             if cfg.nav.tall() && proj.repo.as_ref().is_some_and(|r| !r.branch.is_empty()) {
                 out.push(Row::Branch { p, w });
             }
-            // A workspace with one pane draws no subtree: there is nothing the
-            // row above does not already say.
+            // A workspace with one tab holding one pane draws no subtree: there
+            // is nothing the row above does not already say.
             let ws = &proj.workspaces[w];
-            if ws.expanded && ws.panes.len() > 1 {
-                out.extend((0..ws.tree.leaves().len()).map(|index| Row::Pane { p, w, index }));
+            if ws.expanded && (ws.tabs.len() > 1 || ws.panes().len() > 1) {
+                for (t, tab) in ws.tabs.iter().enumerate() {
+                    // One tab is not a level worth drawing -- it would be a row
+                    // saying "the only arrangement" above the panes in it.
+                    if ws.tabs.len() > 1 {
+                        out.push(Row::Tab { p, w, t });
+                    }
+                    let open = ws.tabs.len() == 1 || tab.expanded || t == ws.tab;
+                    if open && tab.tree.leaves().len() > 1 {
+                        out.extend((0..tab.tree.leaves().len()).map(|index| Row::Pane {
+                            p,
+                            w,
+                            t,
+                            index,
+                        }));
+                    }
+                }
             }
         }
         out.push(Row::NewWorkspace(p));
@@ -896,24 +922,77 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             );
         }
 
-        Row::Pane { p, w: wi, index } => {
+        Row::Tab { p, w: wi, t } => {
             let Some(ws) = session.workspace(p, wi) else {
                 return;
             };
-            let Some(&id) = ws.tree.leaves().get(index) else {
+            let Some(tab) = ws.tabs.get(t) else { return };
+            let here = ws.tab == t;
+            let style = match (selected && active, here) {
+                (true, _) => base,
+                // The one on screen, as against the ones that are not. Same
+                // distinction the rail's chips make, in one column.
+                (false, true) => THEME.text(),
+                (false, false) => THEME.dim(),
+            };
+            let mut x = inner.x + 4;
+            x += write_str(
+                buf,
+                x,
+                y,
+                cx.g.text(if here { G::Expanded } else { G::Collapsed }),
+                THEME.rule_strong(),
+                w,
+            );
+            x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
+
+            // How many panes are in it, since a collapsed tab says nothing else
+            // about what is inside.
+            let mut right = 0u16;
+            if tab.panes.len() > 1 {
+                let n = tab.panes.len().to_string();
+                right = cells(&n) + 1;
+                write_str(
+                    buf,
+                    inner.right().saturating_sub(cells(&n)),
+                    y,
+                    &n,
+                    THEME.faint(),
+                    cells(&n),
+                );
+            }
+            let left = w.saturating_sub(x - inner.x).saturating_sub(right) as usize;
+            write_str(
+                buf,
+                x,
+                y,
+                &elide(&ws.tab_label(t), left, cx.g.text(G::Ellipsis)),
+                style,
+                w,
+            );
+        }
+
+        Row::Pane { p, w: wi, t, index } => {
+            let Some(ws) = session.workspace(p, wi) else {
                 return;
             };
-            let Some(pane) = ws.pane(id) else {
+            let Some(tab) = ws.tabs.get(t) else { return };
+            let Some(&id) = tab.tree.leaves().get(index) else {
                 return;
             };
-            let last = index + 1 == ws.tree.leaves().len();
+            let Some(pane) = tab.pane(id) else {
+                return;
+            };
+            let last = index + 1 == tab.tree.leaves().len();
             let style = if selected && active {
                 base
             } else {
                 THEME.faint()
             };
 
-            let mut x = inner.x + 4;
+            // One further in when there is a tab level above, so the tree reads
+            // as a tree rather than as two lists at the same indent.
+            let mut x = inner.x + if ws.tabs.len() > 1 { 6 } else { 4 };
             let branch = if last { G::TreeLast } else { G::TreeMid };
             x += write_str(buf, x, y, cx.g.text(branch), THEME.rule_strong(), w);
             x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
@@ -924,8 +1003,8 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 .clone()
                 .or_else(|| pane.title())
                 .unwrap_or_else(|| {
-                    // Failing a label or a title, say what is running: that is more
-                    // use than the directory, which the row above already implies.
+                    // Failing a label or a title, say what is running: that is
+                    // more use than the directory, which the row above implies.
                     match &pane.occupant {
                         // Its name, which is how it is addressed, rather than
                         // its kind, which every agent of that kind shares.
@@ -938,8 +1017,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                         // prompt is that an agent could be started in it.
                         o if o.available() => "free".into(),
                         // Nothing known yet -- the first tick after a split, or
-                        // a platform with no foreground group to read. The
-                        // directory is a poor name and an empty row is worse.
+                        // a platform with no foreground group to read.
                         _ => pane
                             .cwd
                             .file_name()
@@ -1014,7 +1092,7 @@ fn space_row(
     );
 
     let mut x = inner.x;
-    x += match (ws.panes.len() > 1, ws.expanded) {
+    x += match (ws.panes().len() > 1, ws.expanded) {
         (false, _) => cx.g.cells(G::Collapsed),
         (true, false) => write_str(buf, x, y, cx.g.text(G::Collapsed), THEME.rule_strong(), w),
         (true, true) => write_str(buf, x, y, cx.g.text(G::Expanded), THEME.rule_strong(), w),
@@ -1055,7 +1133,7 @@ fn space_row(
     );
     // A zoomed workspace looks exactly like one with a single pane, so the row
     // is the only thing that can say the others are still there.
-    if ws.zoomed && ws.panes.len() > 1 {
+    if ws.here().zoomed && ws.panes().len() > 1 {
         x += write_str(buf, x + 1, y, cx.g.text(G::Zoomed), THEME.warn(), w) + 1;
     }
     // Kept in the short form, where the branch line is not. Which branch this
@@ -1280,6 +1358,7 @@ mod tests {
         let pane = Row::Pane {
             p: 1,
             w: 2,
+            t: 0,
             index: 3,
         };
         assert!(pane.selectable());
@@ -1288,6 +1367,7 @@ mod tests {
             Some(Target::NavPane {
                 p: 1,
                 w: 2,
+                t: 0,
                 index: 3
             })
         );
