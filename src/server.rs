@@ -116,6 +116,20 @@ pub struct View {
     pub out: UnixStream,
     pub term: Terminal<CrosstermBackend<Sink>>,
     sink: Sink,
+    /// Where *this* viewer is looking.
+    ///
+    /// Focus stopped being a property of the session when there could be more
+    /// than one client: the whole point of two of them is a laptop and a
+    /// monitor showing different parts of the same work.
+    pub focus: crate::mux::Focus,
+    /// And what this viewer's nav is doing, for the same reason. A selection is
+    /// where somebody is pointing, and two people point at different things.
+    pub nav: crate::ui::nav::Nav,
+    /// The rows this viewer's nav last drew, so a key from this client acts on
+    /// what this client can see.
+    pub rows: Vec<crate::ui::nav::Row>,
+    /// How big this client's screen is.
+    area: ratatui::layout::Rect,
 }
 
 impl std::fmt::Debug for View {
@@ -125,6 +139,25 @@ impl std::fmt::Debug for View {
 }
 
 impl View {
+    /// How big this client's screen is.
+    ///
+    /// Kept here rather than asked of the terminal. `Terminal::size` asks the
+    /// *backend*, and this backend is a socket -- so crossterm asks the process,
+    /// which in a server with no controlling terminal answers 80x24. That is
+    /// the same trap `Viewport::Fixed` exists to avoid, one level up.
+    pub fn size(&self) -> ratatui::layout::Rect {
+        self.area
+    }
+
+    /// Note a new size, and redraw against it.
+    pub fn resized(&mut self, cols: u16, rows: u16) {
+        self.area = ratatui::layout::Rect::new(0, 0, cols.max(1), rows.max(1));
+        let _ = self.term.resize(self.area);
+        // The old contents are wrong at the new size, and ratatui would
+        // otherwise only send what changed against them.
+        let _ = self.repaint();
+    }
+
     fn new(id: u64, out: UnixStream, cols: u16, rows: u16) -> io::Result<Self> {
         let sink = Sink::default();
         // Fixed, not fullscreen. A fullscreen viewport re-asks the backend for
@@ -149,6 +182,13 @@ impl View {
             out,
             term,
             sink,
+            // Corrected to somewhere real the moment the session sees it: a new
+            // client should arrive looking at work rather than at whichever
+            // board happens to be first.
+            focus: crate::mux::Focus::Layout(0),
+            nav: crate::ui::nav::Nav::default(),
+            rows: Vec::new(),
+            area,
         })
     }
 
@@ -238,7 +278,7 @@ fn view(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>, body: &[u8]) {
         let Some(event) = input.into_event() else {
             continue;
         };
-        if tx.send(Ev::Term(event)).is_err() {
+        if tx.send(Ev::Term(Some(id), event)).is_err() {
             return;
         }
     }

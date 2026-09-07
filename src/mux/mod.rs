@@ -31,7 +31,12 @@ pub use tree::Dir;
 /// a receive and never polls, so an idle dirk costs nothing.
 #[derive(Debug)]
 pub enum Ev {
-    Term(crossterm::event::Event),
+    /// A terminal event, and which client it came from.
+    ///
+    /// The id is what makes focus per-client work at all: a key acts on what
+    /// the person who pressed it can see, and two people are looking at
+    /// different things. `None` is the single-process mode, which has one.
+    Term(Option<u64>, crossterm::event::Event),
     /// A client connected, with the screen it is to be shown.
     Attach(Box<crate::server::View>),
     /// A client went away, named so that one being taken over cannot clear the

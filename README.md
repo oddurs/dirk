@@ -636,8 +636,18 @@ nobody can reproduce. There is one renderer, it lives in the session, and a
 client is a terminal with a socket — which is why attaching over `ssh` is a
 transport and not a second implementation.
 
-One client at a time. A second `dirk` takes the session over and the first is
-told why.
+**Several clients at once, each looking where it is looking.** That is the case
+two of them exist for: a laptop and a monitor showing different parts of the
+same work. Each carries its own focus, its own nav selection and its own size,
+so a key acts on what the person who pressed it can see.
+
+A pane is as wide as the narrowest screen showing it, which is what tmux does
+and the only answer that is not a lie to somebody. Detaching one client does not
+disturb another. `done` means *nobody* has looked at it, so one viewer clears it
+for everybody — which is right, because the work has been seen.
+
+A command over the socket has no screen of its own, so `workspace focus` moves
+every client's: which one it would otherwise pick is an accident of ordering.
 
 **A session on another machine is the same session.** `dirk --remote host`
 runs `ssh -T host dirk relay` and drives the ordinary client over the pipe pair

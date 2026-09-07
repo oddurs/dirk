@@ -2,7 +2,7 @@
 id: 60
 title: A view per client, rather than one client at a time
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07
