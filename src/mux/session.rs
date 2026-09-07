@@ -48,9 +48,19 @@ pub struct NameState {
     /// The title currently settling, and when it first appeared.
     pub pending: Option<(String, Instant)>,
     pub last_rename: Option<Instant>,
-    /// The last label dirk itself wrote. If the label differs from this, a
-    /// human renamed it.
+    /// The last label dirk itself wrote — the rendered one, not the intent it
+    /// came from. If the live label differs from this, a human changed it.
+    ///
+    /// It has to be the rendered label: with a template, the intent and the
+    /// label are different strings, and comparing the label against the intent
+    /// makes every workspace look hand-written the moment it is named.
     pub applied: Option<String>,
+    /// The last intent dirk named from.
+    ///
+    /// Separate from `applied` for the same reason: "has the intent changed" and
+    /// "did a human edit this label" are different questions, and with a
+    /// template they have different answers.
+    pub last_intent: Option<String>,
     /// A human named this one and dirk has stood down.
     ///
     /// Held explicitly rather than worked out afresh each pass, so it can be
@@ -895,12 +905,19 @@ impl Session {
 
     /// Note the intent a workspace's agent is publishing, so `age` can measure
     /// how long it has been the same one.
-    pub fn track_intents(&mut self) {
+    pub fn track_intents(&mut self, cfg: &crate::config::Naming) {
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
                 let title = ws.active_pane().and_then(|p| p.title());
                 let now = crate::name::normalize(title.as_deref().unwrap_or_default());
-                let now = (!now.is_empty()).then_some(now);
+                // A title the policy would reject is not an intent. Without
+                // this, a pane whose title is a shell prompt or the agent's own
+                // name counts as having one -- and those are exactly the panes
+                // the second source exists for, so they would never be asked
+                // about and would keep their project name for ever.
+                let now = (!now.is_empty()
+                    && !crate::name::is_junk(&now, &proj.name, &cfg.ignore_titles))
+                .then_some(now);
                 if now != ws.intent {
                     // Only when it actually changed. A title republished
                     // unchanged is the same intent, and `age` is what says how
@@ -928,6 +945,12 @@ impl Session {
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
                 if ws.intent.is_some() {
+                    continue;
+                }
+                // A workspace holding two agents has no single intent, so the
+                // policy will refuse whatever comes back. Asking would be paid
+                // for and discarded.
+                if ws.panes.len() > 1 {
                     continue;
                 }
                 if ws.asked.is_some_and(|t| now.duration_since(t) < floor) {
@@ -1039,7 +1062,11 @@ impl Session {
             return false;
         }
         ws.naming.held = false;
-        ws.naming.applied = None;
+        // Adopted, not forgotten. Clearing this makes the very next pass see a
+        // label dirk did not write and take the hold straight back -- so `u`
+        // would say "released" and release nothing.
+        ws.naming.applied = Some(ws.label.clone());
+        ws.naming.last_intent = None;
         true
     }
 
@@ -1049,7 +1076,10 @@ impl Session {
     /// thing its label comes from, so `dirk agent send-keys mux-core` names
     /// something you would recognise. Unique among live agents, because that is
     /// what a name is for.
-    pub fn name_agents(&mut self) {
+    pub fn name_agents(&mut self, cfg: &crate::config::Naming) {
+        if !cfg.targets.agent {
+            return;
+        }
         let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Existing names are kept, so a name does not move under an agent that
         // is still running.

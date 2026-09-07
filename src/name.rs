@@ -432,7 +432,11 @@ pub fn decide(
     if desired.is_empty() {
         return Decision::Skip(Skip::NoIntent);
     }
-    if cur == normalize(&desired) {
+    // Against the last intent, not against the label: with a template those are
+    // different strings, and comparing to the label would rename on every pass.
+    if state.last_intent.as_deref().map(normalize).as_deref() == Some(desired.as_str())
+        || cur == normalize(&desired)
+    {
         state.pending = None;
         return Decision::Skip(Skip::Unchanged);
     }
@@ -465,6 +469,10 @@ pub fn decide(
 
     state.pending = None;
     state.last_rename = Some(now);
+    state.last_intent = Some(desired.clone());
+    // A sensible value for a caller that applies no template. One that does
+    // overwrites this with what it wrote, which is what the manual-name check
+    // has to compare against.
     state.applied = Some(desired.clone());
     Decision::Rename(desired)
 }
@@ -581,6 +589,7 @@ mod tests {
         // first — which is the correct order, and the order policy.js uses.
         let mut st = NameState {
             applied: Some("Herdr session naming plugin".into()),
+            last_intent: Some("Herdr session naming plugin".into()),
             ..Default::default()
         };
         assert_eq!(
@@ -700,6 +709,44 @@ mod tests {
             ),
             Decision::Rename(_)
         ));
+    }
+
+    #[test]
+    fn a_template_does_not_make_a_label_look_hand_written() {
+        // The label is the template's output; the intent is what it came from.
+        // Comparing the label against the intent made every named workspace
+        // look edited by a human the moment it was named -- and, once holds
+        // were explicit, held for ever after one rename.
+        let mut st = NameState::default();
+        let now = Instant::now();
+        let title = Some("Building the mux core");
+        assert!(
+            matches!(
+                decide_once(&mut st, "dirk", "Building the mux core", "dirk"),
+                Decision::Rename(_)
+            ),
+            "a project name is adoptable"
+        );
+
+        // What the caller wrote, after rendering "{n} {intent}".
+        st.applied = Some("1 Building the mux core".into());
+
+        assert_eq!(
+            decide(
+                &cfg(),
+                &mut st,
+                "1 Building the mux core",
+                title,
+                "dirk",
+                "",
+                1,
+                false,
+                now
+            ),
+            Decision::Skip(Skip::Unchanged),
+            "the same intent, rendered, is not a new one"
+        );
+        assert!(!st.held, "and it is certainly not a hand-written name");
     }
 
     #[test]
@@ -858,6 +905,7 @@ mod tests {
         );
         // And the name it had is untouched by the block.
         assert!(st.applied.is_none());
+        assert!(st.last_intent.is_none());
     }
 
     #[test]

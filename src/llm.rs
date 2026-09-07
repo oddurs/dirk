@@ -71,9 +71,11 @@ pub fn suggest(cfg: &Llm, viewport: &str) -> Option<String> {
 
     let body = serde_json::json!({
         "model": cfg.model,
-        // Room for adaptive thinking, which is on by default; the answer
-        // itself is a phrase.
-        "max_tokens": 1024,
+        // Adaptive thinking is on by default and shares this budget with the
+        // answer. Too small a number is spent thinking and returns no text at
+        // all -- which this source treats as "no candidate" and would not
+        // mention.
+        "max_tokens": 4096,
         // The cheapest setting that suits the task. Naming a screen is not
         // work that rewards deliberation.
         "output_config": { "effort": "low" },
@@ -113,7 +115,9 @@ fn curl(cfg: &Llm, key: &str, body: &str) -> Option<Vec<u8>> {
             "--silent",
             "--show-error",
             "--max-time",
-            &(cfg.timeout_ms.div_ceil(1000)).to_string(),
+            // Seconds, and never zero: `--max-time 0` is curl for *no* limit,
+            // which would leave the thread waiting for ever.
+            &cfg.timeout_ms.div_ceil(1000).max(1).to_string(),
             "--config",
             "-",
         ])

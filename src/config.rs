@@ -236,7 +236,11 @@ impl Default for Llm {
             endpoint: "https://api.anthropic.com/v1/messages".into(),
             model: "claude-opus-5".into(),
             api_key_env: "ANTHROPIC_API_KEY".into(),
-            timeout_ms: 8_000,
+            // Generous: this is a non-streaming request to a model that thinks
+            // before it answers, and a timeout is indistinguishable from "no
+            // candidate" -- so one set too tight makes the feature quietly
+            // never work.
+            timeout_ms: 30_000,
             max_chars: 4_000,
             viewport_lines: 60,
             interval_ms: 600_000,

@@ -307,7 +307,7 @@ impl App {
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
             Ev::Output(id) => {
                 self.session.touch(id);
-                self.session.track_intents();
+                self.session.track_intents(&self.cfg.naming);
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
@@ -315,7 +315,7 @@ impl App {
             Ev::Agents(reading) => {
                 self.sampling = false;
                 self.session.apply_agents(reading);
-                self.session.name_agents();
+                self.session.name_agents(&self.cfg.naming);
             }
             Ev::Exited(id) => {
                 self.session.reap(id);
@@ -324,7 +324,7 @@ impl App {
             Ev::Tick => {
                 self.read_agents();
                 self.read_repos();
-                self.session.track_intents();
+                self.session.track_intents(&self.cfg.naming);
                 self.ask_for_intents();
                 self.rename_pass();
                 if !self.status.is_empty()
@@ -501,7 +501,12 @@ impl App {
                     tokens.set("intent-slug", name::slugify(&intent, name::AGENT_NAME_MAX));
                     let label = tokens::render(&self.cfg.naming.templates.workspace, &tokens);
                     let ws = &mut self.session.projects[p].workspaces[w];
-                    ws.label = if label.is_empty() { intent } else { label };
+                    let label = if label.is_empty() { intent } else { label };
+                    // Recorded as written, so "did a human change this" compares
+                    // the live label against the label rather than against the
+                    // intent it was rendered from.
+                    ws.naming.applied = Some(label.clone());
+                    ws.label = label;
                 }
             }
         }

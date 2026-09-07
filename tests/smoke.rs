@@ -963,6 +963,24 @@ fn a_label_is_arranged_by_its_template() {
         "the label was not arranged by the template\n{}",
         h.drawn()
     );
+
+    // And it keeps renaming. The label is the template's output and the intent
+    // is what it came from; comparing the one against the other made every
+    // named workspace look hand-written the moment it was named, so a
+    // non-default template froze after exactly one rename.
+    h.send(b"printf '\\033]2;Something else entirely\\007'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(25), |h| {
+            h.rows().iter().any(|r| {
+                r.chars()
+                    .take(34)
+                    .collect::<String>()
+                    .contains("#1 Something")
+            })
+        }),
+        "a templated label froze after one rename\n{}",
+        h.drawn()
+    );
 }
 
 #[test]

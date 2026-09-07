@@ -935,7 +935,7 @@ fn space_row(
     };
     // The name gets what is left after the age, plus a space so the two never
     // touch, plus the worktree mark when there is one.
-    let mark = if worktree { 2 } else { 0 };
+    let mark = if worktree { 2 } else { 0 } + if ws.naming.held { 2 } else { 0 };
     let left = w
         .saturating_sub(x - inner.x)
         .saturating_sub(age_w + 1 + mark) as usize;
