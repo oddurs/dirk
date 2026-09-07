@@ -340,11 +340,28 @@ fn closing_a_split_pane_gives_the_whole_width_back() {
     assert!(h.wait_for(READY, START), "never started");
 
     h.prefix(b"|");
-    h.prefix(b"x");
 
-    // Forty characters do not fit in half of a 52-column content area, so if
-    // the split had left a single-child node behind instead of collapsing, this
-    // would wrap onto a second row.
+    // A marker in the new pane, so its disappearance is the signal that the
+    // close has actually been processed. Closing is not synchronous with the
+    // keystroke -- the child is killed, the pty reaches EOF, and the event
+    // comes back -- and typing into the gap sends the keys to the pane that is
+    // on its way out, where they are lost.
+    h.send(b"printf 'zz%s' GOING\r");
+    assert!(
+        h.wait_for("zzGOING", Duration::from_secs(10)),
+        "the new pane never echoed"
+    );
+
+    h.prefix(b"x");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzGOING").is_none()),
+        "the pane was never closed\n{}",
+        h.drawn()
+    );
+
+    // Forty characters do not fit in half of the content area, so if the split
+    // had left a single-child node behind instead of collapsing, this would
+    // wrap onto a second row.
     let marker = "X".repeat(40);
     h.send(format!("printf {marker}\r").as_bytes());
 

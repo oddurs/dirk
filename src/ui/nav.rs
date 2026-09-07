@@ -842,7 +842,13 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                         // "free" rather than "shell": what matters about a
                         // prompt is that an agent could be started in it.
                         o if o.available() => "free".into(),
-                        _ => String::new(),
+                        // Nothing known yet -- the first tick after a split, or
+                        // a platform with no foreground group to read. The
+                        // directory is a poor name and an empty row is worse.
+                        _ => pane
+                            .cwd
+                            .file_name()
+                            .map_or_else(String::new, |f| f.to_string_lossy().into_owned()),
                     }
                 });
             let left = w.saturating_sub(x - inner.x) as usize;

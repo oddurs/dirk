@@ -27,7 +27,10 @@ titles are how an agent says what it is doing, not what it is.
 - [x] A shell at its prompt is reported as available, not as an unknown agent
 - [x] Detection survives the agent being started after the pane
 - [x] Cheap enough to run on the tick; cached between samples
-- [x] Works on linux and macos, which have different process APIs
+- [x] Works on linux and macos, which have different process APIs — `ps -A -o`
+      is POSIX and `process_group_leader` is `cfg(unix)`. One gap found in
+      review and split out as 0051: an agent run under an interpreter reports
+      as the interpreter, which is how npm installs one.
 
 ## Plan
 

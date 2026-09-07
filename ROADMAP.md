@@ -50,7 +50,7 @@ the split tree they need underneath. This is the milestone dirk is for.
 
 ## v0.3 — It knows what the agents are doing
 
-`##········` 20% · 1 of 5 done · due 2026-11-15
+`##········` 17% · 1 of 6 done · due 2026-11-15
 
 Real agent detection and real lifecycle states, so `blocked` — the only state
 waiting on a human — is shown rather than guessed. Attention routing and
@@ -62,6 +62,7 @@ notifications on top of it.
 - [ ] `0032` Attention counts in the rail <sup>feature · p1 · chrome</sup>
 - [ ] `0033` Notify when an agent blocks or finishes <sup>feature · p1 · agents</sup>
 - [ ] `0034` Agent names <sup>feature · p2 · agents</sup>
+- [ ] `0051` An agent run under an interpreter reports as the interpreter <sup>bug · p1 · agents</sup>
 
 ### done
 

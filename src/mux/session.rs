@@ -712,12 +712,16 @@ pub fn since(d: Duration) -> String {
 impl Session {
     /// Every live pane and the process group it currently has in the
     /// foreground, for a sample that will happen elsewhere.
-    pub fn foregrounds(&self) -> Vec<(PaneId, i32)> {
+    pub fn foregrounds(&self) -> Vec<(PaneId, Option<i32>)> {
         let mut out = Vec::new();
         let mut take = |ws: &Workspace| {
             for p in &ws.panes {
-                if let Some(pgid) = p.foreground() {
-                    out.push((p.id, pgid));
+                match p.foreground() {
+                    Some(pgid) => out.push((p.id, Some(pgid))),
+                    // A pane with no foreground group has nothing running in
+                    // it. Omitting it would leave it wearing whatever it was
+                    // running when it died, for ever.
+                    None => out.push((p.id, None)),
                 }
             }
         };
@@ -735,12 +739,16 @@ impl Session {
     }
 
     pub fn apply_agents(&mut self, reading: crate::agent::Reading) {
-        let found: std::collections::HashMap<PaneId, crate::agent::Occupant> =
+        let found: std::collections::HashMap<PaneId, Option<crate::agent::Occupant>> =
             reading.panes.into_iter().collect();
         let set = |ws: &mut Workspace| {
             for p in &mut ws.panes {
-                if let Some(o) = found.get(&p.id) {
-                    p.occupant = o.clone();
+                match found.get(&p.id) {
+                    // A miss is "no news", not "nothing running": the group can
+                    // end between the pgid being read and `ps` running, which a
+                    // shell does on every short command.
+                    Some(None) | None => {}
+                    Some(Some(o)) => p.occupant = o.clone(),
                 }
             }
         };

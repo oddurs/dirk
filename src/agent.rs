@@ -120,37 +120,53 @@ pub fn classify(comm: &str) -> Occupant {
     Occupant::Program(base.to_string())
 }
 
-/// One reading of the process table: process group to the name leading it.
+/// One reading of the process table: process group to the name of its leader.
 ///
 /// `-A -o` is POSIX, so this is the same command on linux and macos.
+///
+/// The leader is the process whose pid equals the pgid, and only that row
+/// counts. Taking whichever member `ps` printed first would usually work — the
+/// leader has the lowest pid in its group and `ps` prints in pid order — and
+/// would quietly report a child's name whenever it did not, because pids wrap.
+/// On this machine that is 19 groups in 476. Reporting a child is worse than
+/// reporting nothing: `bash` under a running agent would mark the pane free for
+/// another one.
+///
+/// A group whose leader has exited yields no entry, which the caller reads as
+/// "no news" and keeps what it had.
 pub fn table() -> HashMap<i32, String> {
     let mut out = HashMap::new();
     let Ok(ps) = Command::new("ps")
-        .args(["-A", "-o", "pgid=,comm="])
+        .args(["-A", "-o", "pid=,pgid=,comm="])
         .output()
     else {
         return out;
     };
     for line in String::from_utf8_lossy(&ps.stdout).lines() {
-        let line = line.trim_start();
-        let Some((pgid, comm)) = line.split_once(char::is_whitespace) else {
+        let mut parts = line.trim_start().splitn(3, char::is_whitespace);
+        let (Some(pid), Some(pgid), Some(comm)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
         };
-        let Ok(pgid) = pgid.parse::<i32>() else {
+        let (Ok(pid), Ok(pgid)) = (pid.parse::<i32>(), pgid.trim().parse::<i32>()) else {
             continue;
         };
-        // The process group leader is the one whose pid is the pgid, but `ps`
-        // does not print pid here and the leader is listed first for a group,
-        // so the first entry wins and later members do not overwrite it.
-        out.entry(pgid).or_insert_with(|| comm.trim().to_string());
+        if pid == pgid {
+            out.insert(pgid, comm.trim().to_string());
+        }
     }
     out
 }
 
 /// A finished sample, on its way back to the event loop.
+///
+/// `None` means the sample had nothing to say about that pane — its process
+/// group ended between the pgid being read and `ps` running, which happens
+/// every time a shell finishes a short command. It is not the same as "nothing
+/// is running there", and overwriting a good answer with it made the state
+/// glyph blink and the workspace drop out of the agents list for a frame.
 #[derive(Debug)]
 pub struct Reading {
-    pub panes: Vec<(crate::mux::PaneId, Occupant)>,
+    pub panes: Vec<(crate::mux::PaneId, Option<Occupant>)>,
 }
 
 #[cfg(test)]
