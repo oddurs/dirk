@@ -745,13 +745,14 @@ each pane from its foreground process group, so a shell is a shell and an agent
 is an agent, and `blocked`, the only state waiting on a human, is shown rather
 than guessed.
 
-**v0.5 is what is being worked on now**, and it is the unglamorous half:
-scrollback, copy mode and search; tabs, zoom and pane movement; a command
-palette and configurable keys. It is the half that decides whether this is
-usable all day.
+**v0.5 is what is being worked on now**, and it is the unglamorous half — the
+one that decides whether this is usable all day. Scrollback, copy mode and
+search have landed; pane zoom, move and swap are in progress.
 
-The gaps worth naming rather than burying: there is no scrollback view and no
-copy mode, so anything that has scrolled off is gone (`0008`, `0040`);
-keybindings are not configurable (`0014`); and one client watches a session at a
-time — a second dirk takes it over and the first is told why (`0060`). Each is
-in [ROADMAP.md](ROADMAP.md) with the reasoning attached.
+The gaps worth naming rather than burying: there are no tabs, so a workspace is
+one arrangement of panes and not several (`0041`); there is no command palette,
+so everything reachable is reachable by a key you have to know (`0042`);
+keybindings are not configurable (`0014`); worktrees cannot be made from the nav
+(`0044`); and one client watches a session at a time — a second dirk takes it
+over and the first is told why (`0060`). Each is in [ROADMAP.md](ROADMAP.md)
+with the reasoning attached.

@@ -119,9 +119,35 @@ u@Release a held name, so naming may claim the workspace again
 r@Restart a stopped pane
 w@Give the nav the keyboard: j k to move, Enter to go, Escape back
 a@Start an agent here
+[@Read this pane's scrollback, and copy out of it
+/@Find a line, in any pane
 d@Detach: leave, and let everything keep running
 q@Quit: end every shell and every agent
 .TE
+.PP
+In the scrollback view: the wheel,
+.BR PgUp / PgDn ,
+.B g
+and
+.B G
+move through it;
+.BR h " " j " " k " " l ,
+the arrows,
+.B 0
+and
+.B $
+move the cursor;
+.B v
+starts a selection;
+.B y
+or
+.B Enter
+copies and leaves;
+.B q
+or
+.B Esc
+leaves without copying. Dragging with the pointer selects and copies in one
+gesture. A pane whose program asked for mouse events keeps them.
 .PP
 Leaving and quitting are different things. A session outlives the terminal it
 was started in, so detaching is the ordinary way out. Quitting ends the work.
