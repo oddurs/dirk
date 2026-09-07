@@ -640,6 +640,44 @@ impl Session {
         self.refocus();
     }
 
+    /// Move the focused pane's view through its scrollback.
+    ///
+    /// Positive is towards the past. Answers where it ended up, so the caller
+    /// can tell a scroll that did something from one that hit the end.
+    pub fn scroll_focused(&mut self, delta: isize) -> usize {
+        let Some(pane) = self.active_pane_mut() else {
+            return 0;
+        };
+        let want = (pane.scroll as isize).saturating_sub(-delta).max(0) as usize;
+        let Ok(mut term) = pane.term.lock() else {
+            return pane.scroll;
+        };
+        // vt100 clamps to what scrollback there actually is, so the answer to
+        // "how far back am I" comes from it rather than from what was asked.
+        term.screen_mut().set_scrollback(want);
+        pane.scroll = term.screen().scrollback();
+        pane.scroll
+    }
+
+    /// Back to the live screen. What typing means.
+    pub fn unscroll_focused(&mut self) {
+        let Some(pane) = self.active_pane_mut() else {
+            return;
+        };
+        if pane.scroll == 0 {
+            return;
+        }
+        pane.scroll = 0;
+        if let Ok(mut term) = pane.term.lock() {
+            term.screen_mut().set_scrollback(0);
+        }
+    }
+
+    /// How far back the focused pane is being read.
+    pub fn scrolled(&self) -> usize {
+        self.active_pane().map_or(0, |p| p.scroll)
+    }
+
     /// Start the focused pane's program again, in place.
     ///
     /// Only for a pane that has stopped. The tree keeps its shape, so the panel
@@ -895,6 +933,12 @@ impl Session {
     /// Both the pane's own clock and the workspace's: the pane's decides
     /// whether its agent is working, and the workspace's is the age in the nav,
     /// which is about the workspace as a whole.
+    ///
+    /// Deliberately does *not* return a scrolled pane to the bottom. Being
+    /// scrolled back is a thing you asked for, and a build that prints a line
+    /// every second would otherwise drag you out of what you were reading --
+    /// which is the reason to be reading it. Typing is what brings you back,
+    /// because typing is a statement about the live screen.
     pub fn touch(&mut self, id: PaneId) {
         let now = Instant::now();
         let mark = |ws: &mut Workspace| -> bool {

@@ -191,6 +191,22 @@ impl Harness {
         std::thread::sleep(Duration::from_millis(200));
     }
 
+    /// Press, move, release: the gesture that selects.
+    ///
+    /// The move matters -- a press and a release in the same cell is a click,
+    /// which belongs to whatever is in the pane.
+    fn drag(&mut self, from_col: u16, from_row: u16, to_col: u16, to_row: u16) {
+        let (c, r) = (from_col + 1, from_row + 1);
+        let (c2, r2) = (to_col + 1, to_row + 1);
+        self.send(format!("\x1b[<0;{c};{r}M").as_bytes());
+        std::thread::sleep(Duration::from_millis(80));
+        // Button 32 is a drag with the left button held.
+        self.send(format!("\x1b[<32;{c2};{r2}M").as_bytes());
+        std::thread::sleep(Duration::from_millis(80));
+        self.send(format!("\x1b[<0;{c2};{r2}m").as_bytes());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
     fn send(&mut self, bytes: &[u8]) {
         self.writer.write_all(bytes).expect("write");
         self.writer.flush().expect("flush");
@@ -1229,6 +1245,111 @@ fn the_old_word_for_a_board_still_parses() {
     assert!(
         h.wait_for("still-here", START),
         "an existing config stopped working\n{}",
+        h.drawn()
+    );
+}
+
+// ── Reading what has gone past ──────────────────────────────────────────
+
+#[test]
+fn output_that_left_the_screen_can_be_read_again() {
+    // vt100 was keeping scrollback all along and dirk never showed any of it.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    // More lines than the screen has, so the first is gone from it.
+    h.send(b"for i in $(seq 1 60); do printf 'zzLINE%s\\n' $i; done\r");
+    assert!(
+        h.wait_for("zzLINE60", Duration::from_secs(10)),
+        "the output never arrived\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("zzLINE1 ").is_none(),
+        "the screen is not full, so there is nothing to scroll back to\n{}",
+        h.drawn()
+    );
+
+    h.prefix(b"[");
+    // Page up rather than `k`: `k` moves the reading cursor and only scrolls
+    // once it reaches the top, which is right for selecting and slow for
+    // looking.
+    for _ in 0..4 {
+        h.send(b"\x1b[5~");
+    }
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzLINE10").is_some()),
+        "scrolling back showed nothing that had left the screen\n{}",
+        h.drawn()
+    );
+
+    // And the bar says you are not looking at the live screen, which a pane
+    // that has simply stopped changing looks exactly like.
+    assert!(
+        h.rows().last().is_some_and(|r| r.contains("back")),
+        "nothing said the pane was being read from the past\n{}",
+        h.drawn()
+    );
+
+    // Leaving puts it back.
+    h.send(b"\x1b");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzLINE60").is_some()),
+        "leaving did not return to the live screen\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn typing_brings_a_scrolled_pane_back_to_the_live_screen() {
+    // Sending a keystroke to a program whose output you cannot see is the kind
+    // of thing you find out about afterwards.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+    h.send(b"for i in $(seq 1 60); do printf 'zzL%s\\n' $i; done\r");
+    assert!(h.wait_for("zzL60", Duration::from_secs(10)), "no output");
+
+    h.prefix(b"[");
+    for _ in 0..4 {
+        h.send(b"\x1b[5~");
+    }
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzL10").is_some()),
+        "did not scroll\n{}",
+        h.drawn()
+    );
+
+    // `q` rather than escape: a lone escape byte followed immediately by more
+    // input parses as alt-something, which is a property of terminals and not
+    // of dirk.
+    h.send(b"q");
+    std::thread::sleep(Duration::from_millis(300));
+    h.send(b"printf 'zzAFTER'\r");
+    assert!(
+        h.wait_for("zzAFTER", Duration::from_secs(10)),
+        "what was typed went somewhere invisible\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_selection_is_taken_and_the_terminal_is_asked_to_hold_it() {
+    // The escape sequence is the half that crosses ssh, so it is the half worth
+    // asserting: the terminal at the other end is the one with the clipboard.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+    h.send(b"printf 'zzTAKEME\\n'\r");
+    assert!(h.wait_for("zzTAKEME", Duration::from_secs(10)), "no output");
+
+    let (row, col) = h.find("zzTAKEME").expect("the text is on screen");
+    h.drag(col as u16, row as u16, col as u16 + 7, row as u16);
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .rows()
+            .last()
+            .is_some_and(|r| r.contains("copied"))),
+        "nothing was copied\n{}",
         h.drawn()
     );
 }

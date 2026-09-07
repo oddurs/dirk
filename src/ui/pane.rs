@@ -41,7 +41,17 @@ fn color(c: vt100::Color) -> Color {
 /// `dim` washes out an unfocused pane. It is applied as a style modifier
 /// rather than by mixing colours, so a pane that comes back into focus is
 /// pixel-identical to the one that left it.
-pub fn blit(screen: &vt100::Screen, area: Rect, buf: &mut Buffer, dim: bool) {
+/// The same, with whatever is selected marked.
+///
+/// Reversed rather than recoloured: a selection has to be visible over whatever
+/// the program chose, and there is no colour that is legible on all of them.
+pub fn paint(
+    screen: &vt100::Screen,
+    area: Rect,
+    buf: &mut Buffer,
+    dim: bool,
+    span: Option<crate::copy::Span>,
+) {
     let (rows, cols) = screen.size();
     let h = area.height.min(rows);
     let w = area.width.min(cols);
@@ -80,6 +90,15 @@ pub fn blit(screen: &vt100::Screen, area: Rect, buf: &mut Buffer, dim: bool) {
             }
             if dim {
                 st = st.add_modifier(Modifier::DIM);
+            }
+            // Reversed on top of whatever the program chose, and reversed
+            // *again* if it had already inverted the cell -- so a selection
+            // over a highlighted line is still visibly a selection.
+            if span.is_some_and(|s| s.holds(r, c)) {
+                st = match src.inverse() {
+                    true => st.remove_modifier(Modifier::REVERSED),
+                    false => st.add_modifier(Modifier::REVERSED),
+                };
             }
             dst.set_style(st);
 

@@ -101,6 +101,7 @@ literal one through.
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `a` | start an agent here |
+| `[` | read this pane's scrollback, and copy out of it |
 | `d` | **detach** — leave, and let everything keep running |
 | `q` | **quit** — end every shell and every agent |
 
@@ -144,6 +145,37 @@ A folded project carries the worst state inside it and a count, so twenty repos
 fit on a screen and the one that is blocked still says so. `rows = "short"`
 drops the branch line, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
+
+## Reading what has gone past
+
+The wheel scrolls the pane under it, and `Ctrl-Space [` reads the focused one
+from the keyboard. Neither touches the program inside — scrolling moves a window
+over a grid vt100 was already keeping, so a build does not learn that you looked
+at it.
+
+| | |
+| --- | --- |
+| wheel, <kbd>PgUp</kbd> <kbd>PgDn</kbd>, `g` `G` | move through the scrollback |
+| `h` `j` `k` `l`, arrows, `0` `$` | move the cursor; up at the top scrolls |
+| `v` | start selecting from here |
+| `y` <kbd>Enter</kbd> | copy, and leave |
+| `q` <kbd>Esc</kbd> | leave, back at the bottom |
+
+Dragging with the pointer selects and copies in one gesture, which is what
+everybody already does. A pane whose program asked for mouse events keeps them —
+`less` and `nvim` do their own scrolling and their own selection, and taking
+either off them would be worse than not having this.
+
+The bar says how far back you are, because a pane being read from the past looks
+exactly like a program that has stopped. Typing brings you back to the live
+screen: sending a keystroke to a program whose output you cannot see is the kind
+of thing you find out about afterwards.
+
+**Copying happens where you are.** dirk asks the terminal to hold the text
+(OSC 52), which is the half that crosses `ssh` — the clipboard is on the machine
+you are sitting at, not the one the session is on — and also runs a command on
+the client, `pbcopy` or `wl-copy` or `xclip`, since not every terminal answers
+the escape. `clipboard = [...]` names your own.
 
 ### Boards
 
@@ -309,6 +341,7 @@ mark = ""                    # empty takes the glyph set's; naming one makes it 
 name = "dirk"
 
 default_agent = "claude"     # what `a` starts, when a project does not say
+clipboard     = []           # empty finds pbcopy, wl-copy or xclip
 
 [nav]
 glyphs    = "unicode"        # unicode | ascii

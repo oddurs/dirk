@@ -2,10 +2,10 @@
 id: 8
 title: Scrollback and copy mode
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-07
 priority: p0
 area: mux
 ---

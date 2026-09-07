@@ -45,7 +45,9 @@
 mod agent;
 mod api;
 mod client;
+mod clipboard;
 mod config;
+mod copy;
 mod git;
 mod glyph;
 mod hit;
@@ -657,6 +659,8 @@ struct App {
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
     badging: bool,
+    /// Selecting, when that is what is happening.
+    copy: Option<copy::Mode>,
     /// Which board was focused at the end of the last turn, by name, so one
     /// that does not keep its panes can be shut when you leave it.
     ///
@@ -711,6 +715,7 @@ impl App {
             glyphs,
             badges: std::collections::HashMap::new(),
             badging: false,
+            copy: None,
             was: None,
             readonly: false,
             complained: false,
@@ -1715,6 +1720,12 @@ impl App {
         }
     }
 
+    fn visible_pane(&self, index: usize) -> Option<&Pane> {
+        let ws = self.session.focused_workspace()?;
+        let id = *ws.tree.leaves().get(index)?;
+        ws.pane(id)
+    }
+
     fn visible_pane_mut(&mut self, index: usize) -> Option<&mut Pane> {
         match self.session.focus {
             Focus::Layout(i) => {
@@ -1766,7 +1777,14 @@ impl App {
                 &mut self.hits,
             );
         }
-        draw_content(buf, content, &self.glyphs, &self.session, &mut self.hits);
+        draw_content(
+            buf,
+            content,
+            &self.glyphs,
+            &self.session,
+            self.copy.as_ref(),
+            &mut self.hits,
+        );
 
         let clock = chrono::Local::now().format("%H:%M").to_string();
         let status = if self.prefix { "prefix" } else { &self.status };
@@ -1779,6 +1797,9 @@ impl App {
             &ui::rail::Now {
                 clock: &clock,
                 note: status,
+                // Being read from the past is a state you can forget you are
+                // in, and it is the one surface on every screen.
+                scrolled: self.session.scrolled(),
                 quit_armed: self.quit_armed.is_some(),
             },
             &mut self.hits,
@@ -1934,6 +1955,11 @@ impl App {
         if self.picker.is_some() {
             return self.picker_key(k);
         }
+        // Before the prefix: while selecting, keys move a cursor rather than
+        // reaching the program, and that has to be escapable without one.
+        if self.copy.is_some() && !self.prefix {
+            return self.copy_key(k);
+        }
         if self.nav.active && !self.prefix {
             return self.nav_key(k);
         }
@@ -1951,6 +1977,123 @@ impl App {
             return;
         }
         self.send_key(k);
+    }
+
+    /// Start reading a pane rather than typing into it.
+    ///
+    /// The cursor starts where the program's is, because that is where you were
+    /// looking. Nothing is written to the pty: the program does not learn that
+    /// somebody is reading it.
+    fn start_copy(&mut self) {
+        let Some(ws) = self.session.focused_workspace() else {
+            return self.note("nothing to read");
+        };
+        let pane = ws.focus;
+        let at = ws
+            .pane(pane)
+            .and_then(|p| p.term.lock().ok().map(|t| t.screen().cursor_position()))
+            .unwrap_or((0, 0));
+        self.copy = Some(copy::Mode::new(pane, at));
+        self.note("read: v select · y copy · esc");
+    }
+
+    /// Keys while a pane is being read.
+    fn copy_key(&mut self, k: KeyEvent) {
+        let Some(mode) = self.copy.as_mut() else {
+            return;
+        };
+        let (rows, cols) = self
+            .session
+            .focused_workspace()
+            .and_then(|ws| ws.pane(mode.pane))
+            .and_then(|p| p.term.lock().ok().map(|t| t.screen().size()))
+            .unwrap_or((24, 80));
+        let step = |v: u16, d: isize, max: u16| {
+            (v as isize + d).clamp(0, max.saturating_sub(1) as isize) as u16
+        };
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.copy = None;
+                self.session.unscroll_focused();
+                self.status.clear();
+            }
+            // Anchoring where the cursor is, so `v` then a movement selects the
+            // way it does in every editor that has this.
+            KeyCode::Char('v') | KeyCode::Char(' ') => mode.anchor = Some(mode.at),
+            KeyCode::Char('y') | KeyCode::Enter => self.take_selection(),
+            KeyCode::Char('h') | KeyCode::Left => mode.at.1 = step(mode.at.1, -1, cols),
+            KeyCode::Char('l') | KeyCode::Right => mode.at.1 = step(mode.at.1, 1, cols),
+            KeyCode::Char('0') => mode.at.1 = 0,
+            KeyCode::Char('$') => mode.at.1 = cols.saturating_sub(1),
+            KeyCode::Char('k') | KeyCode::Up => match mode.at.0 {
+                // At the top of the screen, up means further back rather than
+                // nowhere -- which is the whole reason to be here.
+                0 => {
+                    self.session.scroll_focused(1);
+                }
+                _ => mode.at.0 = step(mode.at.0, -1, rows),
+            },
+            KeyCode::Char('j') | KeyCode::Down => match mode.at.0 + 1 >= rows {
+                true => {
+                    self.session.scroll_focused(-1);
+                }
+                false => mode.at.0 = step(mode.at.0, 1, rows),
+            },
+            KeyCode::PageUp => {
+                self.session.scroll_focused(rows as isize / 2);
+            }
+            KeyCode::PageDown => {
+                self.session.scroll_focused(-(rows as isize) / 2);
+            }
+            KeyCode::Char('g') => {
+                self.session.scroll_focused(isize::MAX / 2);
+            }
+            KeyCode::Char('G') => {
+                self.session.unscroll_focused();
+                mode.at.0 = rows.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
+    /// Take what is selected, and give it to the end with a clipboard.
+    fn take_selection(&mut self) {
+        let Some(mode) = self.copy.as_ref() else {
+            return;
+        };
+        let Some(span) = mode.span() else {
+            return self.note("nothing selected");
+        };
+        let text = self
+            .session
+            .focused_workspace()
+            .and_then(|ws| ws.pane(mode.pane))
+            .and_then(|p| p.term.lock().ok().map(|t| copy::text(t.screen(), span)));
+        let Some(text) = text.filter(|t| !t.is_empty()) else {
+            return self.note("nothing selected");
+        };
+        let lines = text.lines().count();
+        self.clip(text);
+        self.copy = None;
+        self.session.unscroll_focused();
+        self.note(&format!(
+            "copied {lines} {}",
+            if lines == 1 { "line" } else { "lines" }
+        ));
+    }
+
+    /// Put text on the clipboard of the machine somebody is sitting at.
+    ///
+    /// Sent to the client for the same reason an alert is: `pbcopy` in the
+    /// server would put a remote session's selection on the build box, where
+    /// nothing can paste it.
+    fn clip(&mut self, text: String) {
+        match self.view.as_mut() {
+            Some(view) => {
+                let _ = wire::send_json(&mut view.out, wire::Kind::Clip, &text);
+            }
+            None => clipboard::put(&self.cfg.clipboard, &text),
+        }
     }
 
     /// Keys while the nav holds them. No prefix: a nav that needs one before
@@ -1976,6 +2119,10 @@ impl App {
     }
 
     fn send_key(&mut self, k: KeyEvent) {
+        // Typing is a statement about the live screen, so it brings you back to
+        // it. Sending a keystroke to a program whose output you cannot see is
+        // the kind of thing you only find out about afterwards.
+        self.session.unscroll_focused();
         let Some(pane) = self.session.active_pane_mut() else {
             return;
         };
@@ -2032,6 +2179,7 @@ impl App {
             }
             KeyCode::Char('o') => self.open_picker(),
             KeyCode::Char('a') => self.new_agent(),
+            KeyCode::Char('[') => self.start_copy(),
             KeyCode::Char('x') => self.session.close_focused(),
             KeyCode::Char('u') => {
                 if self.session.release_hold() {
@@ -2170,9 +2318,140 @@ impl App {
             return self.act(t);
         }
 
+        // The wheel over a pane reads its scrollback, unless the program inside
+        // asked for mouse events -- `less` and `nvim` scroll themselves, and
+        // taking the wheel off them would be worse than not having this.
+        let wheel = match m.kind {
+            MouseEventKind::ScrollUp => 1,
+            MouseEventKind::ScrollDown => -1,
+            _ => 0,
+        };
+        if wheel != 0 && self.picker.is_none() && !self.pane_wants_mouse() {
+            self.focus_pane_under(&m);
+            let back = self.session.scroll_focused(wheel * 3);
+            // Scrolling up is a way into reading, and reaching the bottom is
+            // the way out. Nobody wants a mode to leave after a wheel gesture.
+            match back {
+                0 => self.copy = None,
+                _ if self.copy.is_none() => self.start_reading(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Selecting with the pointer, which is the gesture everybody already
+        // knows. Only in a pane that is not itself listening for the mouse.
+        if self.picker.is_none()
+            && !self.pane_wants_mouse()
+            && self.select_with_pointer(&m) == Some(true)
+        {
+            return;
+        }
+
         // Anything else in the content area belongs to the pane under it.
         if self.picker.is_none() {
             self.send_mouse(&m);
+        }
+    }
+
+    /// Whether the program in the focused pane asked for mouse events.
+    ///
+    /// A pager or an editor does its own scrolling and its own selection, and
+    /// taking either off it would be worse than not having them at all.
+    fn pane_wants_mouse(&self) -> bool {
+        self.session
+            .focused_workspace()
+            .and_then(|ws| ws.active_pane())
+            .and_then(|p| {
+                p.term
+                    .lock()
+                    .ok()
+                    .map(|t| t.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Reading without having asked for it, which is what a wheel gesture is.
+    fn start_reading(&mut self) {
+        let Some(ws) = self.session.focused_workspace() else {
+            return;
+        };
+        self.copy = Some(copy::Mode::new(ws.focus, (0, 0)));
+    }
+
+    /// Focus whatever pane the pointer is over, so the wheel reads that one.
+    fn focus_pane_under(&mut self, m: &MouseEvent) {
+        let rects = self.visible_rects();
+        let Some(index) = rects.iter().position(|r| {
+            m.column >= r.x && m.column < r.right() && m.row >= r.y && m.row < r.bottom()
+        }) else {
+            return;
+        };
+        if let Some(ws) = self.session.focused_workspace_mut()
+            && let Some(&id) = ws.tree.leaves().get(index)
+        {
+            ws.focus = id;
+        }
+    }
+
+    /// Drag to select, release to copy. `None` when the pointer was not over a
+    /// pane at all, so the caller can carry on with whatever else it means.
+    fn select_with_pointer(&mut self, m: &MouseEvent) -> Option<bool> {
+        let rects = self.visible_rects();
+        let index = rects.iter().position(|r| {
+            m.column >= r.x && m.column < r.right() && m.row >= r.y && m.row < r.bottom()
+        })?;
+        let r = rects[index];
+        let labelled = self.visible_pane(index).is_some_and(|p| p.label.is_some());
+        let inner = mux::session::content_of(labelled, r);
+        if m.row < inner.y {
+            return Some(false);
+        }
+        let at = (m.row - inner.y, m.column - inner.x);
+
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.focus_pane_under(m);
+                let Some(ws) = self.session.focused_workspace() else {
+                    return Some(false);
+                };
+                // Started but not anchored: a click is a click until it moves,
+                // and anchoring here would make every click a one-cell
+                // selection that swallows the click the pane wanted.
+                let mut mode = copy::Mode::new(ws.focus, at);
+                mode.dragging = true;
+                self.copy = Some(mode);
+                Some(false)
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let mode = self.copy.as_mut()?;
+                if !mode.dragging {
+                    return Some(false);
+                }
+                mode.anchor.get_or_insert(mode.at);
+                mode.at = at;
+                Some(true)
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let mode = self.copy.as_mut()?;
+                if !mode.dragging {
+                    return Some(false);
+                }
+                mode.dragging = false;
+                match mode.anchor.is_some() {
+                    // A drag that ended: take it, which is what selecting is
+                    // for. A click that never moved is not a selection.
+                    true => {
+                        self.take_selection();
+                        Some(true)
+                    }
+                    false => {
+                        self.copy = None;
+                        Some(false)
+                    }
+                }
+            }
+            _ => Some(false),
         }
     }
 
@@ -2238,6 +2517,7 @@ fn draw_content(
     area: Rect,
     g: &glyph::Glyphs,
     session: &Session,
+    reading: Option<&copy::Mode>,
     hits: &mut HitMap,
 ) {
     let ws = match session.focus {
@@ -2270,7 +2550,8 @@ fn draw_content(
         if let Ok(t) = pane.term.lock() {
             // A stopped pane keeps its last output, dimmed. The output is
             // usually why the panel was there.
-            ui::pane::blit(t.screen(), inner, buf, id != ws.focus || pane.dead);
+            let span = reading.filter(|m| m.pane == id).and_then(|m| m.span());
+            ui::pane::paint(t.screen(), inner, buf, id != ws.focus || pane.dead, span);
         }
         hits.push(r, Target::Pane { index: i });
     }
