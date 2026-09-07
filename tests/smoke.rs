@@ -703,3 +703,39 @@ fn a_shell_that_sets_a_title_is_not_mistaken_for_an_agent() {
         h.drawn()
     );
 }
+
+/// A program that behaves like a shell but is named like an agent, so the whole
+/// detection chain can be exercised without installing one.
+fn fake_agent(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("dirk-smoke-bin").join(format!(
+        "{}-{}",
+        std::process::id(),
+        next_config_id()
+    ));
+    std::fs::create_dir_all(&dir).expect("bin dir");
+    let link = dir.join(name);
+    let _ = std::fs::remove_file(&link);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/bin/sh", &link).expect("symlink");
+    link
+}
+
+#[test]
+fn a_pane_running_an_agent_is_detected_as_one() {
+    // End to end: the foreground process group is read from the pty, looked up
+    // in the process table, and its name classified. A shell named `claude` is
+    // enough to drive all three -- what is being identified is the name of the
+    // program in the foreground, which is the whole point.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| {
+            h.rows().iter().any(|r| r.contains("agents"))
+        }),
+        "a pane running `claude` was not recognised as holding an agent\n{}",
+        h.drawn()
+    );
+}
