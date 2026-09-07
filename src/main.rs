@@ -43,6 +43,7 @@
 //! all. There is no polling anywhere in this file.
 
 mod config;
+mod git;
 mod hit;
 mod keys;
 mod mux;
@@ -131,8 +132,8 @@ fn main() -> io::Result<()> {
     let mut terminal = setup()?;
     let size = terminal.size()?;
 
-    let session = Session::new(&cfg, tx);
-    let mut app = App::new(cfg, session, size);
+    let session = Session::new(&cfg, tx.clone());
+    let mut app = App::new(cfg, session, size, tx);
     app.bootstrap();
 
     let result = app.run(&mut terminal, rx);
@@ -202,6 +203,9 @@ struct App {
     /// Where panes live, kept so a pane can be spawned at the right size
     /// before it has ever been drawn.
     content: Rect,
+    /// Kept so background work -- a git read, say -- can post its answer back
+    /// to the one loop that owns the state.
+    tx: Sender<Ev>,
     /// Where the nav is looking, and what it last drew. The rows are kept so a
     /// keystroke can act on the same list the pointer sees.
     nav: Nav,
@@ -211,7 +215,7 @@ struct App {
 }
 
 impl App {
-    fn new(cfg: Config, session: Session, size: ratatui::layout::Size) -> Self {
+    fn new(cfg: Config, session: Session, size: ratatui::layout::Size, tx: Sender<Ev>) -> Self {
         let width = size.width;
         let height = size.height;
         let sidebar_w = cfg.sidebar_width;
@@ -224,6 +228,7 @@ impl App {
             sidebar: true,
             status: String::new(),
             status_at: Instant::now(),
+            tx,
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
@@ -274,12 +279,17 @@ impl App {
             Ev::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
             Ev::Term(Event::Mouse(m)) => self.on_mouse(m),
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
-            Ev::Output(_) => self.rename_pass(),
+            Ev::Output(id) => {
+                self.session.touch(id);
+                self.rename_pass();
+            }
+            Ev::Git(answer) => self.session.apply_repo(answer),
             Ev::Exited(id) => {
                 self.session.reap(id);
                 self.session.refocus();
             }
             Ev::Tick => {
+                self.read_repos();
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)
@@ -291,12 +301,34 @@ impl App {
         }
     }
 
+    /// Ask git about any project whose answer has gone stale.
+    ///
+    /// One thread per read, and the answer comes back as an event. A `git` that
+    /// has gone to a network remote or is waiting on an index lock would
+    /// otherwise stall the whole program for the sake of a caption.
+    fn read_repos(&mut self) {
+        for dir in self.session.stale_repos(Instant::now()) {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let repo = crate::git::read(&dir);
+                let _ = tx.send(Ev::Git(crate::git::Answer { dir, repo }));
+            });
+        }
+    }
+
     /// Ask `name.rs` about every workspace. Cheap: it is a few string tests
     /// per workspace, and it short-circuits on the first one that fails.
     fn rename_pass(&mut self) {
         let now = Instant::now();
         for p in 0..self.session.projects.len() {
             let repo = self.session.projects[p].name.clone();
+            // Without this, a workspace labelled with its own branch name looks
+            // hand-written and naming backs off from it permanently.
+            let branch = self.session.projects[p]
+                .repo
+                .as_ref()
+                .map(|r| r.branch.clone())
+                .unwrap_or_default();
             for w in 0..self.session.projects[p].workspaces.len() {
                 let ws = &self.session.projects[p].workspaces[w];
                 let title = ws.active_pane().and_then(|x| x.title());
@@ -310,7 +342,7 @@ impl App {
                     &current,
                     title.as_deref(),
                     &repo,
-                    "",
+                    &branch,
                     panes,
                     now,
                 ) {

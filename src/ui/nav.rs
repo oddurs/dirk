@@ -24,7 +24,10 @@
 //!
 //! spaces                10
 //!  ▾ dirk
-//!    * Building the mux core
+//!    * 1 Building the mux core     2m
+//!        main
+//!    · 2 Reading the vt100 grid ⑂  1d
+//!        feat/packaging-manifests
 //!    + workspace
 //!    n new  ·  o project
 //!
@@ -46,6 +49,7 @@
 //! each of those is awkward on its own.
 
 use crate::hit::{HitMap, Target};
+use crate::mux::session::since;
 use crate::mux::{Focus, Session, Workspace};
 use crate::theme::THEME;
 use crate::ui::{elide, fill, heading, write_str};
@@ -113,7 +117,15 @@ pub enum Row {
     Heading(Section, usize),
     Layout(usize),
     Project(usize),
+    /// The identity line of a workspace: state, number, name, age.
     Workspace {
+        p: usize,
+        w: usize,
+        n: usize,
+    },
+    /// Its second line: which checkout this is. Scenery — the selection lands
+    /// on the identity line, and clicking either goes to the same place.
+    Branch {
         p: usize,
         w: usize,
     },
@@ -132,7 +144,10 @@ impl Row {
     /// Rows the selection can land on. Headings, footers and blanks are
     /// scenery: stopping on them would make `j` feel broken.
     pub fn selectable(self) -> bool {
-        !matches!(self, Row::Heading(..) | Row::Footer(_) | Row::Blank)
+        !matches!(
+            self,
+            Row::Heading(..) | Row::Footer(_) | Row::Blank | Row::Branch { .. }
+        )
     }
 
     /// What activating this row means. Keyboard and pointer produce the same
@@ -141,7 +156,9 @@ impl Row {
         Some(match self {
             Row::Layout(i) => Target::Layout(i),
             Row::Project(i) => Target::ProjectFold(i),
-            Row::Workspace { p, w } | Row::Agent { p, w } => Target::Workspace { p, w },
+            Row::Workspace { p, w, .. } | Row::Agent { p, w } | Row::Branch { p, w } => {
+                Target::Workspace { p, w }
+            }
             Row::NewWorkspace(p) => Target::NewWorkspace(p),
             _ => return None,
         })
@@ -161,12 +178,24 @@ pub fn rows(session: &Session) -> Vec<Row> {
 
     let spaces: usize = session.projects.iter().map(|p| p.workspaces.len()).sum();
     out.push(Row::Heading(Section::Spaces, spaces));
+    // Numbers run across the whole list rather than per project, because they
+    // are jump keys and the rail numbers the same way.
+    let mut n = 0;
     for (p, proj) in session.projects.iter().enumerate() {
         out.push(Row::Project(p));
         if !proj.expanded {
+            n += proj.workspaces.len();
             continue;
         }
-        out.extend((0..proj.workspaces.len()).map(|w| Row::Workspace { p, w }));
+        for w in 0..proj.workspaces.len() {
+            n += 1;
+            out.push(Row::Workspace { p, w, n });
+            // Only when there is something to say. A row with nothing for its
+            // second line draws one line rather than a blank one.
+            if proj.repo.as_ref().is_some_and(|r| !r.branch.is_empty()) {
+                out.push(Row::Branch { p, w });
+            }
+        }
         out.push(Row::NewWorkspace(p));
     }
     out.push(Row::Footer(Section::Spaces));
@@ -240,11 +269,12 @@ impl Nav {
     /// Put the selection on the focused workspace, so entering the nav starts
     /// where the eye already is.
     pub fn sync(&mut self, rows: &[Row], focus: Focus) {
-        let want = match focus {
-            Focus::Layout(i) => Row::Layout(i),
-            Focus::Ws { p, w } => Row::Workspace { p, w },
+        let at = |r: &Row| match (focus, r) {
+            (Focus::Layout(i), Row::Layout(j)) => i == *j,
+            (Focus::Ws { p, w }, Row::Workspace { p: q, w: x, .. }) => p == *q && w == *x,
+            _ => false,
         };
-        if let Some(i) = rows.iter().position(|r| *r == want) {
+        if let Some(i) = rows.iter().position(at) {
             self.selected = i;
         }
     }
@@ -488,25 +518,35 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             }
         }
 
-        Row::Workspace { p, w: wi } | Row::Agent { p, w: wi } => {
+        Row::Workspace { p, w: wi, n } => {
             let Some(ws) = session.workspace(p, wi) else {
                 return;
             };
-            let focused = session.focus == Focus::Ws { p, w: wi };
-            let (glyph, gstyle) = THEME.agent_state(state_of(ws));
+            let worktree = session
+                .projects
+                .get(p)
+                .is_some_and(|x| x.repo.as_ref().is_some_and(|r| r.worktree));
+            space_row(buf, cx, ws, p, wi, Some(n), worktree);
+        }
 
-            let mut x = inner.x;
-            x += write_str(buf, x, y, "  ", THEME.rule_strong(), w);
-            x += write_str(buf, x, y, glyph, gstyle, w);
-            x += write_str(buf, x, y, " ", THEME.text(), w);
-
-            let style = match (focused, selected && active) {
-                (true, _) => THEME.text(),
-                (false, true) => base,
-                (false, false) => THEME.intent(),
+        Row::Agent { p, w: wi } => {
+            let Some(ws) = session.workspace(p, wi) else {
+                return;
             };
-            let left = w.saturating_sub(x - inner.x) as usize;
-            write_str(buf, x, y, &elide(&ws.label, left), style, w);
+            space_row(buf, cx, ws, p, wi, None, false);
+        }
+
+        Row::Branch { p, w: _ } => {
+            let Some(repo) = session.projects.get(p).and_then(|x| x.repo.as_ref()) else {
+                return;
+            };
+            let style = if selected && active {
+                base
+            } else {
+                THEME.branch()
+            };
+            let left = w.saturating_sub(6) as usize;
+            write_str(buf, inner.x + 6, y, &elide(&repo.branch, left), style, w);
         }
 
         Row::NewWorkspace(_) => {
@@ -517,6 +557,67 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             };
             write_str(buf, inner.x + 2, y, "+ workspace", style, w);
         }
+    }
+}
+
+/// One workspace's identity line: state, number, name, and how long since it
+/// last said anything.
+///
+/// The age is right-aligned and reserved before the name is written, so a long
+/// intent elides rather than colliding with it.
+fn space_row(
+    buf: &mut Buffer,
+    cx: &Ctx,
+    ws: &Workspace,
+    p: usize,
+    wi: usize,
+    number: Option<usize>,
+    worktree: bool,
+) {
+    let Ctx {
+        inner,
+        y,
+        session,
+        selected,
+        active,
+    } = *cx;
+    let w = inner.width;
+    let focused = session.focus == Focus::Ws { p, w: wi };
+    let (glyph, gstyle) = THEME.agent_state(state_of(ws));
+
+    let age = since(ws.touched.elapsed());
+    let age_w = age.chars().count() as u16;
+    write_str(
+        buf,
+        inner.right().saturating_sub(age_w),
+        y,
+        &age,
+        THEME.faint(),
+        age_w,
+    );
+
+    let mut x = inner.x;
+    x += write_str(buf, x, y, "  ", THEME.rule_strong(), w);
+    x += write_str(buf, x, y, glyph, gstyle, w);
+    x += write_str(buf, x, y, " ", THEME.text(), w);
+    if let Some(n) = number {
+        x += write_str(buf, x, y, &format!("{n} "), THEME.number(), w);
+    }
+
+    let style = match (focused, selected && active) {
+        (true, _) => THEME.text(),
+        (false, true) => THEME.selected(),
+        (false, false) => THEME.intent(),
+    };
+    // The name gets what is left after the age, plus a space so the two never
+    // touch, plus the worktree mark when there is one.
+    let mark = if worktree { 2 } else { 0 };
+    let left = w
+        .saturating_sub(x - inner.x)
+        .saturating_sub(age_w + 1 + mark) as usize;
+    x += write_str(buf, x, y, &elide(&ws.label, left), style, w);
+    if worktree {
+        write_str(buf, x + 1, y, "⑂", THEME.worktree(), w);
     }
 }
 
@@ -548,8 +649,9 @@ mod tests {
             Row::Blank,
             Row::Heading(Section::Spaces, 2),
             Row::Project(0),
-            Row::Workspace { p: 0, w: 0 },
-            Row::Workspace { p: 0, w: 1 },
+            Row::Workspace { p: 0, w: 0, n: 1 },
+            Row::Branch { p: 0, w: 0 },
+            Row::Workspace { p: 0, w: 1, n: 2 },
             Row::NewWorkspace(0),
             Row::Footer(Section::Spaces),
         ]
@@ -572,7 +674,10 @@ mod tests {
             "headings are not stops"
         );
         nav.step(&rows, 1);
-        assert_eq!(nav.selection(&rows), Some(Row::Workspace { p: 0, w: 0 }));
+        assert_eq!(
+            nav.selection(&rows),
+            Some(Row::Workspace { p: 0, w: 0, n: 1 })
+        );
     }
 
     #[test]
@@ -606,7 +711,10 @@ mod tests {
         let rows = sample();
         let mut nav = Nav::default();
         nav.sync(&rows, Focus::Ws { p: 0, w: 1 });
-        assert_eq!(nav.selection(&rows), Some(Row::Workspace { p: 0, w: 1 }));
+        assert_eq!(
+            nav.selection(&rows),
+            Some(Row::Workspace { p: 0, w: 1, n: 2 })
+        );
         nav.sync(&rows, Focus::Layout(0));
         assert_eq!(nav.selection(&rows), Some(Row::Layout(0)));
     }
@@ -623,7 +731,9 @@ mod tests {
 
     #[test]
     fn scrolling_keeps_the_selection_off_the_edges() {
-        let rows: Vec<Row> = (0..40).map(|w| Row::Workspace { p: 0, w }).collect();
+        let rows: Vec<Row> = (0..40)
+            .map(|w| Row::Workspace { p: 0, w, n: w + 1 })
+            .collect();
         let mut nav = Nav::default();
         let height = 10;
 
@@ -664,7 +774,9 @@ mod tests {
 
     #[test]
     fn the_wheel_cannot_scroll_past_either_end() {
-        let rows: Vec<Row> = (0..20).map(|w| Row::Workspace { p: 0, w }).collect();
+        let rows: Vec<Row> = (0..20)
+            .map(|w| Row::Workspace { p: 0, w, n: w + 1 })
+            .collect();
         let mut nav = Nav::default();
         nav.scroll_by(-5, rows.len(), 10);
         assert_eq!(nav.offset, 0);
@@ -675,11 +787,37 @@ mod tests {
     #[test]
     fn every_selectable_row_knows_what_activating_it_means() {
         for row in sample() {
-            assert_eq!(
-                row.selectable(),
-                row.target().is_some(),
-                "{row:?} is selectable but does nothing, or the reverse"
-            );
+            if row.selectable() {
+                assert!(
+                    row.target().is_some(),
+                    "{row:?} can be selected but does nothing"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn a_workspaces_second_line_goes_where_its_first_line_goes() {
+        // Clicking the branch under a name is still clicking that workspace,
+        // even though the selection never lands on it.
+        let branch = Row::Branch { p: 0, w: 0 };
+        assert!(!branch.selectable());
+        assert_eq!(
+            branch.target(),
+            Row::Workspace { p: 0, w: 0, n: 1 }.target()
+        );
+    }
+
+    #[test]
+    fn the_selection_steps_over_a_second_line() {
+        let rows = sample();
+        let mut nav = Nav::default();
+        nav.sync(&rows, Focus::Ws { p: 0, w: 0 });
+        nav.step(&rows, 1);
+        assert_eq!(
+            nav.selection(&rows),
+            Some(Row::Workspace { p: 0, w: 1, n: 2 }),
+            "`j` should reach the next workspace, not its branch line"
+        );
     }
 }

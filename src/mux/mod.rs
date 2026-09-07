@@ -36,5 +36,8 @@ pub enum Ev {
     /// damage-tracked renderer would key on.
     Output(#[allow(dead_code)] PaneId),
     Exited(PaneId),
+    /// A git read finished. Answered by path rather than by index, because a
+    /// project can be closed while its answer is still in flight.
+    Git(crate::git::Answer),
     Tick,
 }

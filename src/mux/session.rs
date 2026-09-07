@@ -33,13 +33,14 @@
 //! actually open, which is a different and much shorter list.
 
 use crate::config::{Config, LayoutDef};
+use crate::git::{self, Repo};
 use crate::mux::layout;
 use crate::mux::tree::{Dir, Node};
 use crate::mux::{Ev, Pane, PaneId};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// What `name.rs` needs to remember between titles.
 #[derive(Debug, Default)]
@@ -54,6 +55,9 @@ pub struct NameState {
 
 pub struct Workspace {
     pub label: String,
+    /// When this workspace last produced output. The nav shows how long ago,
+    /// because "how long has this been sitting there" is most of triage.
+    pub touched: Instant,
     /// The panes themselves. The tree refers to them by id, so this is an arena
     /// rather than a layout.
     pub panes: Vec<Pane>,
@@ -111,6 +115,11 @@ pub struct Project {
     pub path: PathBuf,
     pub workspaces: Vec<Workspace>,
     pub expanded: bool,
+    /// What git last said. `None` means either not a repository or not asked
+    /// yet, and the nav draws both the same way — as nothing.
+    pub repo: Option<Repo>,
+    /// When the answer arrived, so it can be asked again before it is wrong.
+    pub read_at: Option<Instant>,
 }
 
 pub struct Layout {
@@ -176,6 +185,8 @@ impl Session {
             path: path.to_path_buf(),
             workspaces: Vec::new(),
             expanded: true,
+            repo: None,
+            read_at: None,
         });
         self.projects.len() - 1
     }
@@ -195,6 +206,7 @@ impl Session {
         let root = pane.id;
         proj.workspaces.push(Workspace {
             label: name,
+            touched: Instant::now(),
             panes: vec![pane],
             tree: Node::Leaf(root),
             focus: root,
@@ -347,6 +359,7 @@ impl Session {
             };
             self.layouts[i].ws = Some(Workspace {
                 label: def.name.clone(),
+                touched: Instant::now(),
                 panes,
                 tree,
                 focus: first,
@@ -513,5 +526,86 @@ fn resize_tree(ws: &mut Workspace, area: Rect) {
             let inner = content_of(pane.label.is_some(), r);
             pane.resize(inner.height, inner.width);
         }
+    }
+}
+
+impl Session {
+    /// Note that a pane produced output, so its workspace's age resets.
+    pub fn touch(&mut self, id: PaneId) {
+        let now = Instant::now();
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if ws.panes.iter().any(|p| p.id == id) {
+                    ws.touched = now;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Projects whose git answer is missing or old enough to ask again.
+    ///
+    /// Returned as paths because the read happens on another thread, and a
+    /// project can be closed while its answer is still in flight.
+    pub fn stale_repos(&mut self, now: Instant) -> Vec<PathBuf> {
+        self.projects
+            .iter_mut()
+            .filter(|p| {
+                p.read_at
+                    .is_none_or(|t| now.duration_since(t) >= git::REFRESH)
+            })
+            .map(|p| {
+                // Marked as asked before the answer arrives, or every tick
+                // would start another read of the same directory.
+                p.read_at = Some(now);
+                p.path.clone()
+            })
+            .collect()
+    }
+
+    pub fn apply_repo(&mut self, answer: git::Answer) {
+        if let Some(proj) = self.projects.iter_mut().find(|p| p.path == answer.dir) {
+            proj.repo = answer.repo;
+        }
+    }
+}
+
+/// How long ago, coarsely.
+///
+/// Coarse on purpose: a per-second clock would redraw the nav constantly for a
+/// value nobody reads that precisely, and the buckets change a handful of times
+/// an hour.
+pub fn since(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 45 {
+        return "now".into();
+    }
+    let minutes = (secs + 30) / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h");
+    }
+    format!("{}d", hours / 24)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ages_are_bucketed_not_counted() {
+        let s = |secs| since(Duration::from_secs(secs));
+        assert_eq!(s(0), "now");
+        assert_eq!(s(44), "now", "under a minute is not worth a number");
+        assert_eq!(s(45), "1m");
+        assert_eq!(s(90), "2m");
+        assert_eq!(s(59 * 60), "59m");
+        assert_eq!(s(60 * 60), "1h");
+        assert_eq!(s(23 * 3600), "23h");
+        assert_eq!(s(24 * 3600), "1d");
+        assert_eq!(s(10 * 24 * 3600), "10d");
     }
 }

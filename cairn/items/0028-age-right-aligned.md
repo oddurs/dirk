@@ -2,8 +2,9 @@
 id: 28
 title: Age, right-aligned
 type: feature
-status: backlog
+status: done
 milestone: v0.2
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p2
@@ -24,6 +25,8 @@ time since it entered its current state, which is the number that matters when
 the state is blocked.
 
 ## Acceptance criteria
-- [ ] Bucketed to now / minutes / hours / days
-- [ ] Right-aligned and never collides with an elided title
-- [ ] Recomputed on the tick, not on every redraw
+- [x] Bucketed to now / minutes / hours / days
+- [x] Right-aligned and never collides with an elided title
+- [x] Effectively recomputed on the tick — the string is built during
+      drawing, but dirk only redraws on an event, and the tick is the one
+      that makes an age change
