@@ -432,3 +432,85 @@ fn a_command_does_not_conjure_a_session_to_answer_it() {
         .join(format!("{session}.sock"));
     assert!(!socket.exists(), "a command left a session behind");
 }
+
+#[test]
+fn sessions_are_listed_with_whether_you_can_attach_to_one() {
+    // Answered by connecting, not by the directory listing: a socket outliving
+    // its server is the ordinary state after a crash, and listing those as
+    // sessions would be listing things you cannot attach to.
+    let session = unique("listed");
+    let client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["session", "list"])
+        .output()
+        .expect("run dirk");
+    let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+    // A client is attached, which is a stronger thing to know than that a
+    // server is up — and the only one of the two that needs asking.
+    assert!(
+        listed
+            .lines()
+            .any(|l| l.starts_with(&session) && l.contains("attached")),
+        "the session with a client attached was not listed as attached:\n{listed}"
+    );
+
+    drop(client);
+    quit(&session);
+
+    // And once it is gone it is not offered as something to attach to.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["session", "list"])
+        .output()
+        .expect("run dirk");
+    let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        !listed
+            .lines()
+            .any(|l| l.starts_with(&session) && (l.contains("running") || l.contains("attached"))),
+        "a session that has ended is still offered as one to attach to:\n{listed}"
+    );
+}
+
+#[test]
+fn a_reload_does_not_disturb_what_is_running() {
+    let session = unique("reload");
+    let mut client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    client.send(b"printf 'zz%s' BEFORE\r");
+    assert!(
+        client.wait_for("zzBEFORE", Duration::from_secs(10)),
+        "no echo\n{}",
+        client.drawn()
+    );
+
+    let (ok, _) = ask(&session, &["session", "reload"]);
+    assert!(ok, "reload failed");
+
+    // The shell is still there, and still the one that was there.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        client.rows().iter().any(|r| r.contains("zzBEFORE")),
+        "a reload took the session with it\n{}",
+        client.drawn()
+    );
+    client.send(b"printf 'zz%s' AFTER\r");
+    assert!(
+        client.wait_for("zzAFTER", Duration::from_secs(10)),
+        "the pane stopped taking input after a reload\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}

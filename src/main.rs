@@ -54,6 +54,7 @@ mod mux;
 mod name;
 mod notify;
 mod server;
+mod skill;
 mod theme;
 mod tokens;
 mod ui;
@@ -150,6 +151,10 @@ fn main() -> io::Result<()> {
                 print!("{VERSION}");
                 return Ok(());
             }
+            "--skill" => {
+                print!("{}", skill::text());
+                return Ok(());
+            }
             "server" => mode = Mode::Server,
             "attach" => mode = Mode::Attach,
             "--no-session" => mode = Mode::Alone,
@@ -178,6 +183,40 @@ fn main() -> io::Result<()> {
     // A command is a noun and a verb. Answered by a running session, and never
     // by starting one: `dirk pane list` should say there is nothing to list
     // rather than conjure a session to list.
+    // Answered without a running session, because they are about which ones
+    // there are rather than about one of them.
+    if command_args_are(&args, "session", "list") {
+        for (name, running) in server::sessions() {
+            if !running {
+                // The socket outlived its server, which is the ordinary state
+                // after a crash. Said plainly rather than hidden, because it is
+                // the answer to "why can I not attach to that".
+                println!("{name}\tstale");
+                continue;
+            }
+            // Whether anyone is looking needs asking; only the session knows.
+            let path = server::socket_path(&name);
+            let req = wire::Request {
+                cmd: "session.info".into(),
+                args: Vec::new(),
+            };
+            let attached = server::ask(&path, &req)
+                .ok()
+                .and_then(|r| r.result.get("attached").and_then(|v| v.as_bool()))
+                .unwrap_or(false);
+            let spaces = server::ask(&path, &req)
+                .ok()
+                .and_then(|r| r.result.get("workspaces").and_then(|v| v.as_u64()))
+                .unwrap_or(0);
+            println!(
+                "{name}\t{}\t{spaces} {}",
+                if attached { "attached" } else { "running" },
+                if spaces == 1 { "space" } else { "spaces" }
+            );
+        }
+        return Ok(());
+    }
+
     let command_args: Vec<String> = args
         .iter()
         .skip_while(|a| !NOUNS.contains(&a.as_str()))
@@ -214,6 +253,16 @@ fn main() -> io::Result<()> {
         }
         Mode::Alone => alone(),
     }
+}
+
+/// Is this `dirk <noun> <verb>`?
+fn command_args_are(args: &[String], noun: &str, verb: &str) -> bool {
+    let words: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+    words.first() == Some(&noun) && words.get(1) == Some(&verb)
 }
 
 /// The nouns a session answers to.
@@ -642,6 +691,11 @@ impl App {
         let arg = |n: usize| req.args.get(n).cloned().unwrap_or_default();
 
         match req.cmd.as_str() {
+            "session.reload" => match Config::reload(&mut self.cfg, &mut self.session) {
+                Ok(()) => Reply::ok(serde_json::json!({ "reloaded": true })),
+                Err(e) => Reply::err(e),
+            },
+
             "session.info" => Reply::ok(serde_json::json!({
                 "workspaces": self.session.flat().len(),
                 "layouts": self.session.layouts.len(),

@@ -1003,6 +1003,44 @@ impl Session {
         }
     }
 
+    /// Take a new list of layouts without disturbing the ones that are open.
+    ///
+    /// An open layout keeps its panes. Rebuilding a running dashboard because a
+    /// colour changed elsewhere in the file is not a reload, it is a restart.
+    pub fn merge_layouts(&mut self, next: &[crate::config::LayoutDef]) {
+        let mut kept: Vec<Layout> = Vec::new();
+        for def in next {
+            let open = self
+                .layouts
+                .iter_mut()
+                .find(|l| l.def.name == def.name && l.ws.is_some())
+                .and_then(|l| l.ws.take());
+            kept.push(Layout {
+                def: def.clone(),
+                ws: open,
+            });
+        }
+        // A layout that has gone from the file but is open stays until it is
+        // closed: its panes are running programs, and a reload should not kill
+        // them.
+        for old in self.layouts.drain(..) {
+            if old.ws.is_some() && !kept.iter().any(|l| l.def.name == old.def.name) {
+                kept.push(old);
+            }
+        }
+        self.layouts = kept;
+        self.refocus();
+    }
+
+    /// Take the naming knobs that a running session reads directly.
+    pub fn set_naming(&mut self, cfg: &crate::config::Naming) {
+        self.stale_after = if cfg.show_stale {
+            cfg.stale_after_turns
+        } else {
+            0
+        };
+    }
+
     /// Type into a pane, wherever it is.
     pub fn write_to(&mut self, id: PaneId, bytes: &[u8]) -> bool {
         match self.pane_anywhere_mut(id) {

@@ -205,6 +205,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("agent.list", ""),
     ("session.info", ""),
     ("session.commands", ""),
+    ("session.reload", ""),
 ];
 
 /// Look a pane up wherever it is, with the workspace that holds it.

@@ -303,6 +303,22 @@ are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
 `--current` resolves from them — so a command from inside a pane reaches the
 session holding it without the caller looking anything up first.
 
+`dirk --skill` prints what an agent needs to know to drive a session — generated
+from the command table, so it cannot describe a surface that no longer exists.
+Most of its value is the traps: each one is something that would otherwise be
+found out by getting it wrong.
+
+```console
+$ dirk session list          # every session, and whether anyone is watching
+$ dirk session reload        # re-read config.toml without restarting
+```
+
+A reload keeps what is running. An open layout keeps its panes — rebuilding a
+dashboard because a colour changed elsewhere in the file is not a reload, it is
+a restart — and a file that does not parse is reported with the running
+configuration kept, because a typo should not cost you the session you were
+working in.
+
 **Reads do not mark an agent seen.** Focusing a workspace is what says you have
 looked at it; asking about one over a socket is not looking. Without that rule a
 status line polling the session would quietly clear every notification it was

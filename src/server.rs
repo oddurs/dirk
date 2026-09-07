@@ -309,6 +309,31 @@ pub fn inode(path: &Path) -> io::Result<u64> {
     std::fs::metadata(path).map(|m| m.ino())
 }
 
+/// Every session with a socket, and whether anyone is listening on it.
+///
+/// Answered by connecting rather than by the directory listing: a socket file
+/// outliving its server is the ordinary state of affairs after a crash, and a
+/// list that reported those as sessions would be a list of things you cannot
+/// attach to.
+pub fn sessions() -> Vec<(String, bool)> {
+    let dir = socket_path("x")
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let mut out: Vec<(String, bool)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_stem()?.to_str()?.to_string();
+            (path.extension()? == "sock").then(|| (name, is_running(&path)))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// A session name has to be one path segment.
 ///
 /// It is interpolated into a path that is later removed, so `../../.ssh/config`

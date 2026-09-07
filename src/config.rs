@@ -474,6 +474,29 @@ impl Config {
         cfg
     }
 
+    /// Read the file again and apply what can be applied to a running session.
+    ///
+    /// A file that does not parse is reported and the running configuration is
+    /// kept: a typo should not cost you the session you were working in.
+    pub fn reload(current: &mut Config, session: &mut crate::mux::Session) -> Result<(), String> {
+        let path = config_home().join("dirk").join("config.toml");
+        let next = match std::fs::read_to_string(&path) {
+            Ok(text) => toml::from_str::<Config>(&text).map_err(|e| e.to_string())?,
+            // No file is a valid configuration: the defaults.
+            Err(_) => Config::default(),
+        };
+        let mut next = next;
+        next.layouts.retain(|l| l.runnable());
+
+        // Layouts that are open keep the panes they already have; the rest of
+        // the list is replaced. Rebuilding an open dashboard because a colour
+        // changed is not a reload, it is a restart.
+        session.merge_layouts(&next.layouts);
+        session.set_naming(&next.naming);
+        *current = next;
+        Ok(())
+    }
+
     pub fn shell(&self) -> String {
         if !self.shell.is_empty() {
             return self.shell.clone();
