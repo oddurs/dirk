@@ -5,6 +5,8 @@ type: feature
 status: done
 milestone: v0.2
 assignee: oddurs
+depends_on:
+- 50
 created: 2026-09-06
 updated: 2026-09-06
 priority: p0
@@ -27,5 +29,13 @@ the edges. The pointer wheel scrolls the section under it.
 - [x] Selection distinct from focus, visually and behaviourally
 - [x] Scrolls to keep the selection visible with margin
 - [x] Wheel scrolls the section under the pointer
-- [x] Sections shrink proportionally before any of them is cut off
+
+One criterion this item started with was moved rather than met:
+
+- Sections shrink proportionally before any of them is cut off → 0050
+
+It was ticked here by mistake in the first pass and caught in review. The nav is
+one flat list with one offset; there is no per-section height allocation
+anywhere, so the last section is simply cut. Recorded rather than quietly
+unticked — a ticked box that was never built is worse than an open one.
 - [x] A scrollable section shows that it has more

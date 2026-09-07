@@ -2,8 +2,9 @@
 id: 29
 title: Drag the sidebar divider
 type: feature
-status: backlog
+status: done
 milestone: v0.2
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p2
@@ -16,6 +17,6 @@ The sidebar is a fixed 28 columns from configuration. Two-line rows with branch
 and intent want more; a narrow terminal wants less.
 
 ## Acceptance criteria
-- [ ] Drag the divider to resize, with a minimum that keeps rows legible
-- [ ] The width persists for the session, and to config on request
-- [ ] Panes resize as the divider moves, not only when it is released
+- [x] Drag the divider to resize, with a minimum that keeps rows legible
+- [x] The width persists for the session, and to config on request
+- [x] Panes resize as the divider moves, not only when it is released

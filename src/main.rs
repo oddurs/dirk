@@ -43,6 +43,7 @@
 //! all. There is no polling anywhere in this file.
 
 mod config;
+mod git;
 mod hit;
 mod keys;
 mod mux;
@@ -131,8 +132,8 @@ fn main() -> io::Result<()> {
     let mut terminal = setup()?;
     let size = terminal.size()?;
 
-    let session = Session::new(&cfg, tx);
-    let mut app = App::new(cfg, session, size);
+    let session = Session::new(&cfg, tx.clone());
+    let mut app = App::new(cfg, session, size, tx);
     app.bootstrap();
 
     let result = app.run(&mut terminal, rx);
@@ -143,6 +144,10 @@ fn main() -> io::Result<()> {
 // ── Terminal lifecycle ──────────────────────────────────────────────────
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
+
+/// Narrower than this and a row cannot show a name, which is the only reason
+/// the nav is there.
+const MIN_NAV: u16 = 20;
 
 fn setup() -> io::Result<Term> {
     enable_raw_mode()?;
@@ -202,16 +207,22 @@ struct App {
     /// Where panes live, kept so a pane can be spawned at the right size
     /// before it has ever been drawn.
     content: Rect,
+    /// Kept so background work -- a git read, say -- can post its answer back
+    /// to the one loop that owns the state.
+    tx: Sender<Ev>,
     /// Where the nav is looking, and what it last drew. The rows are kept so a
     /// keystroke can act on the same list the pointer sees.
     nav: Nav,
     nav_rows: Vec<Row>,
     side: Rect,
+    /// True while the pointer is dragging the divider. Held as state because a
+    /// drag is three events and only the first one lands on the divider.
+    dragging: bool,
     quit: bool,
 }
 
 impl App {
-    fn new(cfg: Config, session: Session, size: ratatui::layout::Size) -> Self {
+    fn new(cfg: Config, session: Session, size: ratatui::layout::Size, tx: Sender<Ev>) -> Self {
         let width = size.width;
         let height = size.height;
         let sidebar_w = cfg.sidebar_width;
@@ -224,9 +235,11 @@ impl App {
             sidebar: true,
             status: String::new(),
             status_at: Instant::now(),
+            tx,
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
+            dragging: false,
             content: Rect {
                 x: sidebar_w,
                 y: 0,
@@ -274,12 +287,17 @@ impl App {
             Ev::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
             Ev::Term(Event::Mouse(m)) => self.on_mouse(m),
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
-            Ev::Output(_) => self.rename_pass(),
+            Ev::Output(id) => {
+                self.session.touch(id);
+                self.rename_pass();
+            }
+            Ev::Git(answer) => self.session.apply_repo(answer),
             Ev::Exited(id) => {
                 self.session.reap(id);
                 self.session.refocus();
             }
             Ev::Tick => {
+                self.read_repos();
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)
@@ -291,12 +309,34 @@ impl App {
         }
     }
 
+    /// Ask git about any project whose answer has gone stale.
+    ///
+    /// One thread per read, and the answer comes back as an event. A `git` that
+    /// has gone to a network remote or is waiting on an index lock would
+    /// otherwise stall the whole program for the sake of a caption.
+    fn read_repos(&mut self) {
+        for dir in self.session.stale_repos(Instant::now()) {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let repo = crate::git::read(&dir);
+                let _ = tx.send(Ev::Git(crate::git::Answer { dir, repo }));
+            });
+        }
+    }
+
     /// Ask `name.rs` about every workspace. Cheap: it is a few string tests
     /// per workspace, and it short-circuits on the first one that fails.
     fn rename_pass(&mut self) {
         let now = Instant::now();
         for p in 0..self.session.projects.len() {
             let repo = self.session.projects[p].name.clone();
+            // Without this, a workspace labelled with its own branch name looks
+            // hand-written and naming backs off from it permanently.
+            let branch = self.session.projects[p]
+                .repo
+                .as_ref()
+                .map(|r| r.branch.clone())
+                .unwrap_or_default();
             for w in 0..self.session.projects[p].workspaces.len() {
                 let ws = &self.session.projects[p].workspaces[w];
                 let title = ws.active_pane().and_then(|x| x.title());
@@ -310,7 +350,7 @@ impl App {
                     &current,
                     title.as_deref(),
                     &repo,
-                    "",
+                    &branch,
                     panes,
                     now,
                 ) {
@@ -464,7 +504,35 @@ impl App {
                 // Folding is not going anywhere, so the nav keeps the keyboard.
                 return;
             }
-            Target::Workspace { p, w } => self.session.focus = Focus::Ws { p, w },
+            Target::Workspace { p, w } => {
+                // The rows a keystroke acts on were built for the last frame,
+                // and a workspace can close between frames. Focusing one that
+                // is gone leaves no focused pane at all.
+                if self.session.workspace(p, w).is_none() {
+                    return;
+                }
+                // Clicking a workspace that is already focused and has several
+                // panes opens it, which is the only thing left for that click
+                // to mean.
+                let expand = self.session.focus == Focus::Ws { p, w }
+                    && self
+                        .session
+                        .workspace(p, w)
+                        .is_some_and(|ws| ws.panes.len() > 1);
+                if expand && let Some(ws) = self.session.workspace_mut(p, w) {
+                    ws.expanded = !ws.expanded;
+                    return;
+                }
+                self.session.focus = Focus::Ws { p, w };
+            }
+            Target::NavPane { p, w, index } => {
+                self.session.focus = Focus::Ws { p, w };
+                if let Some(ws) = self.session.workspace_mut(p, w)
+                    && let Some(&id) = ws.tree.leaves().get(index)
+                {
+                    ws.focus = id;
+                }
+            }
             Target::NewWorkspace(p) => {
                 self.session.new_workspace(p, area.height, area.width);
             }
@@ -482,6 +550,10 @@ impl App {
                 if let Some(path) = path {
                     self.open(&path);
                 }
+            }
+            Target::SortAgents => {
+                self.nav.cycle_sort();
+                return;
             }
             Target::Pane { .. } => return,
         }
@@ -533,6 +605,7 @@ impl App {
                 }
             }
             KeyCode::Char('o') => self.act(Target::OpenProject),
+            KeyCode::Char('s') => self.act(Target::SortAgents),
             _ => {}
         }
     }
@@ -576,6 +649,10 @@ impl App {
             KeyCode::Char('w') => {
                 self.nav.active = !self.nav.active;
                 if self.nav.active {
+                    // Giving the keyboard to something that is not on screen
+                    // looks exactly like a freeze, and the prefix cannot be
+                    // reached from inside nav mode to undo it.
+                    self.sidebar = true;
                     // Start where the eye already is.
                     self.nav.sync(&self.nav_rows, self.session.focus);
                 }
@@ -646,6 +723,29 @@ impl App {
     fn on_mouse(&mut self, m: MouseEvent) {
         let target = self.hits.at(m.column, m.row);
 
+        // The divider, before anything else: a drag that started on it owns
+        // every event until the button comes up, wherever the pointer has got
+        // to by then.
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if self.on_divider(m.column) => {
+                self.dragging = true;
+                return;
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
+                // Only a floor here. `Ord::clamp` panics when min exceeds max,
+                // and on a terminal narrower than forty columns half of it is
+                // under the floor -- so a clamp would abort rather than
+                // resize. The ceiling is `areas`' job, and it already does it.
+                self.cfg.sidebar_width = m.column.max(MIN_NAV);
+                return;
+            }
+            MouseEventKind::Up(_) if self.dragging => {
+                self.dragging = false;
+                return;
+            }
+            _ => {}
+        }
+
         // The wheel over the nav scrolls the nav, not whatever pane is behind
         // the pointer.
         if m.column < self.side.right() && self.side.width > 0 {
@@ -672,6 +772,15 @@ impl App {
         if self.picker.is_none() {
             self.send_mouse(&m);
         }
+    }
+
+    /// The divider is the nav's last column. Two columns wide as a target,
+    /// because one is very hard to hit.
+    fn on_divider(&self, column: u16) -> bool {
+        self.sidebar
+            && self.side.width > 0
+            && column + 1 >= self.side.right()
+            && column <= self.side.right()
     }
 
     fn send_mouse(&mut self, m: &MouseEvent) {
