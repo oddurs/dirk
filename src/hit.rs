@@ -48,6 +48,8 @@ pub enum Target {
         index: usize,
     },
     NewWorkspace(usize),
+    /// Start an agent where you are looking, making somewhere for it if need be.
+    NewAgent,
     OpenProject,
     PickerRow(usize),
     /// The two ways out, at the right of the rail. One parks the work and one

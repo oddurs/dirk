@@ -96,6 +96,7 @@ literal one through.
 | `u` | release a held name, so naming may claim the workspace again |
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
+| `a` | start an agent here |
 | `d` | **detach** — leave, and let everything keep running |
 | `q` | **quit** — end every shell and every agent |
 
@@ -140,6 +141,68 @@ fit on a screen and the one that is blocked still says so. `rows = "short"`
 drops the branch line, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
 
+### Knowing an agent is done
+
+Four states, and the one that matters is `done` — finished work nobody has
+looked at. Focusing the workspace is what marks it seen; asking about it over
+the socket is not.
+
+dirk works them out from four signals, ranked, and a weak one is never allowed
+to make a strong claim:
+
+| | signal | may claim |
+| --- | --- | --- |
+| 1 | **the agent says so** — a hook runs `dirk agent state done --current` | anything |
+| 2 | the terminal — the window title | anything |
+| 3 | the screen — a menu of two or more numbered answers | blocked, working |
+| 4 | silence — nothing produced for a while, having produced something | done only |
+
+A wrong `working` costs nothing. A wrong `blocked` is an interruption you did
+not need, and two of those is how a feature gets turned off — so silence may
+promote *working → done* and may never say *blocked*.
+
+**Rank one is worth installing.** `dirk agent hooks claude` prints a snippet;
+everything below it is dirk guessing at something the agent already knows.
+
+```console
+$ dirk agent hooks claude          # what to paste, and where
+$ dirk agent list                  # state, and which signal decided it
+```
+
+A report is a claim about a moment, not a lease. It stands until the next one,
+or until the pane produces output — because a pane producing text is not
+finished, whatever it said a minute ago. Without that rule a harness whose hook
+fires on stop but not on start sticks on `done` while it grinds.
+
+### Starting one
+
+`a` starts an agent where you are looking, making a workspace for it if the pane
+you are in is busy. The workspace exists in order to hold an agent — it is why
+naming is built around what the agent says it is doing — so it is one keystroke
+rather than a new workspace and then a command typed into it.
+
+Which agent comes from the project, then `default_agent`. A Rust repository and
+a TypeScript one can want different tools, and being asked twelve times a day is
+how a shortcut stops being one.
+
+### Which harnesses
+
+claude, codex, opencode, aider, goose, amp, cursor-agent and gemini ship
+recognised. The field adds one a month, so the table is configuration:
+
+```toml
+[[agent]]
+name    = "sculptor"
+argv    = ["sculptor/cli"]        # only consulted for interpreters like node
+blocked = { menu = true, match = ["Proceed?"] }
+```
+
+A block whose `name` matches a shipped one replaces it whole rather than
+merging — somebody overriding claude's markers does not want to inherit half of
+ours. Markers are substrings, not patterns: this runs against the screen on
+every tick, and a regular expression out of a config file is a way to make a
+redraw depend on somebody else's backtracking.
+
 ### Marks and the font
 
 dirk cannot choose your font; your terminal does. What it can do is not assume
@@ -177,10 +240,16 @@ shell         = ""           # empty means $SHELL
 mark = ""                    # empty takes the glyph set's; naming one makes it yours
 name = "dirk"
 
+default_agent = "claude"     # what `a` starts, when a project does not say
+
 [nav]
 glyphs    = "unicode"        # unicode | ascii
 attention = "when-needed"    # when-needed | always | never
 rows      = "tall"           # tall gives a workspace its branch on a second line
+
+[[project]]
+path  = "~/Code/dirk"
+agent = "claude"             # twelve repositories do not want one answer
 
 # A layout whose programs are not all on PATH is dropped at startup: an entry
 # that could only ever show `command not found` is worse than no entry.
