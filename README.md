@@ -5,6 +5,7 @@
 [![license: GPLv3+](https://img.shields.io/badge/license-GPLv3+-blue.svg)](COPYING)
 
 A terminal multiplexer that knows what its sessions are for.
+[**oddurs.github.io/dirk**](https://oddurs.github.io/dirk/)
 
 ```
 ┌────────────────────────────────┬────────────────────────────────────┐
@@ -665,6 +666,25 @@ paints and drives it with real keystrokes.
 `$PREFIX/share/man/man1`, and the documentation in `$PREFIX/share/doc/dirk`.
 `make uninstall` takes all three back out. `make dist` makes a source tarball
 someone else could build from, ChangeLog included.
+
+## The website
+
+[oddurs.github.io/dirk](https://oddurs.github.io/dirk/) is built by
+`site/`, a workspace member, and deployed from the repository on every push
+that touches it.
+
+```console
+$ make site        # build into site/dist
+$ make site-serve  # serve it, and rebuild when anything it reads changes
+$ make shots       # regenerate the terminal renders from the real binary
+```
+
+It is a cargo target rather than an off-the-shelf generator because half of
+what belongs on the site is generated from the program. The palette is parsed
+out of `src/theme.rs`, so a colour changed there changes on the page and there
+is nowhere else for it to be. The roadmap comes from `ROADMAP.md`, the
+changelog from `NEWS`, and the screens are real output from the real binary on
+a real pseudo-terminal — text rather than an image, so you can select them.
 
 ## What it is built on
 

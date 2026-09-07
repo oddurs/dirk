@@ -1,0 +1,65 @@
+{#- The one layout. Everything else fills it in. -#}
+<!doctype html>
+<html lang="en" prefix="og: https://ogp.me/ns#">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.url != "/" %}{{ page.title }} · {% endif %}{{ site.title }} — {{ site.tagline }}</title>
+<meta name="description" content="{{ page.description or site.description }}">
+<link rel="canonical" href="{{ site.origin }}{{ site.base }}{{ page.url | trim('/') }}{% if page.url != '/' %}/{% endif %}">
+
+<meta property="og:url" content="{{ site.origin }}{{ site.base }}{{ page.url | trim('/') }}{% if page.url != '/' %}/{% endif %}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ site.title }}">
+<meta property="og:title" content="{% if page.url != '/' %}{{ page.title }} · {% endif %}{{ site.title }}">
+<meta property="og:description" content="{{ page.description or site.description }}">
+<meta name="twitter:card" content="summary">
+
+<link rel="icon" href="{{ site.base }}favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{{ site.base }}css/tokens.css">
+<link rel="stylesheet" href="{{ site.base }}css/system.css">
+
+{#- Before the first paint, so a reader who chose light does not get a frame
+    of dark first. Inline because a request would be a frame too late. -#}
+<script>try{var t=localStorage.getItem("dirk-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<header class="chrome">
+  <div class="shell bar">
+    <a class="brand" href="{{ site.base }}"><span class="mark" aria-hidden="true">◆</span>{{ site.title }}</a>
+    <span class="badge">v{{ site.version }}</span>
+    <nav aria-label="Main">
+      {%- for section in site.nav %}{% for link in section.links %}
+      <a href="{{ site.base }}{{ link.url | trim('/') }}{% if link.url != '/' %}/{% endif %}"
+         {% if link.url == page.url %}aria-current="page"{% endif %}
+         {% if loop.index > 3 %}data-optional{% endif %}>{{ link.title }}</a>
+      {%- endfor %}{% endfor %}
+      <a href="{{ site.repo }}" rel="noopener">GitHub</a>
+      <button class="ghost" data-theme-toggle type="button"
+              aria-label="Switch between light and dark">◐</button>
+    </nav>
+  </div>
+</header>
+
+<main id="content">
+{% block content %}{% endblock %}
+</main>
+
+<footer class="chrome">
+  <div class="shell bar">
+    <span>{{ site.title }} {{ site.version }} — free software under
+      <a href="{{ site.repo }}/blob/main/COPYING" rel="noopener">GPLv3 or later</a>.</span>
+    <span style="margin-inline-start:auto">
+      <a href="{{ site.repo }}" rel="noopener">Source</a> ·
+      <a href="{{ site.repo }}/issues" rel="noopener">Issues</a> ·
+      <a href="{{ site.base }}roadmap/">Roadmap</a>
+    </span>
+  </div>
+</footer>
+
+<script src="{{ site.base }}js/site.js" defer></script>
+</body>
+</html>

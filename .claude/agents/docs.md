@@ -21,6 +21,7 @@ You keep dirk's documentation true.
 - **CONTRIBUTING.md** — the social half. What a good change looks like.
 - **THANKS** — what this rests on, and who wrote it.
 - **NEWS** — not yours. Use the `news` agent.
+- **The website** — not yours either. Use the `site` agent.
 
 ## The rules
 

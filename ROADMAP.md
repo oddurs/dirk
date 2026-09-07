@@ -130,7 +130,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v1.0 — Production
 
-`####······` 33% · 4 of 12 done · due 2027-04-01
+`#####·····` 47% · 8 of 17 done · due 2027-04-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -143,6 +143,7 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0047` Theme configuration <sup>feature · p2 · config</sup>
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
+- [ ] `0090` The documentation pages are a second copy of the README <sup>feature · p2 · web</sup>
 
 ### in review
 
@@ -154,4 +155,8 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0083` The agent harness belongs in the repository <sup>chore · p1 · docs</sup>
 - [x] `0084` The GNU furniture the project still lacks <sup>docs · p2 · docs</sup>
 - [x] `0085` Repository settings a public project should have <sup>chore · p2 · packaging</sup>
+- [x] `0086` A website, and a cargo target that builds it <sup>feature · p1 · web</sup>
+- [x] `0087` A design system the program cannot drift from <sup>feature · p1 · web</sup>
+- [x] `0088` Real terminal output, on the page <sup>feature · p2 · web</sup>
+- [x] `0089` GitHub Pages, deployed by the workflow <sup>chore · p1 · web</sup>
 

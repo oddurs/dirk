@@ -99,3 +99,21 @@ jobs:
             exit 1
           fi
           echo "clean"
+
+  # The site is built on every pull request and deployed on none of them: a
+  # change that breaks it should fail in review rather than after the merge.
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: site
+      - run: cargo run --locked -p site -- build --base /dirk/
+      - name: the build produced a site
+        run: |
+          test -s site/dist/index.html
+          test -s site/dist/css/tokens.css
+          test -s site/dist/docs/install/index.html
+          echo "$(find site/dist -type f | wc -l) files"
