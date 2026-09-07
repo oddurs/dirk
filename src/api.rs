@@ -89,7 +89,7 @@ fn pane_json(ws_id: u64, pane: &crate::mux::Pane, focused: bool) -> Value {
         "workspace": workspace_id(ws_id),
         "cwd": pane.cwd,
         "program": pane.argv.first(),
-        "agent": pane.occupant.agent().map(|k| k.name),
+        "agent": pane.occupant.agent().map(|k| k.name.clone()),
         "agent_name": pane.agent_name,
         "available": pane.occupant.available(),
         "dead": pane.dead,
@@ -177,10 +177,15 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
                 };
                 list.push(json!({
                     "name": pane.agent_name,
-                    "kind": kind.name,
+                    "kind": kind.name.clone(),
                     "pane": pane_id(ws.id, pane.id),
                     "workspace": workspace_id(ws.id),
                     "state": ws.state.glyph_name(),
+                    // Which signal decided it. A badge you cannot explain is a
+                    // badge you stop believing, and when one is wrong this is
+                    // what says which source was wrong.
+                    "why": ws.source.name(),
+                    "available": pane.occupant.available(),
                     "intent": ws.intent,
                 }));
             }
@@ -212,6 +217,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("layout.list", ""),
     ("layout.open", "<name>"),
     ("agent.list", ""),
+    (
+        "agent.state",
+        "<blocked|working|done|idle|starting> [workspace|pane]",
+    ),
+    ("agent.start", "<kind> [pane]"),
+    ("agent.hooks", "<kind>"),
     ("session.info", ""),
     ("session.commands", ""),
     ("session.reload", ""),

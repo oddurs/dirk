@@ -117,6 +117,17 @@ pub struct Workspace {
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
+    /// What the agent itself said it was doing, and when it said it.
+    ///
+    /// A report is a fact where everything else here is a guess, so it wins.
+    /// It is not a lease and does not expire on a clock -- a reported `done`
+    /// has to survive until you look at it or the seen rule means nothing.
+    /// Two things end one: the next report, and output, which contradicts a
+    /// claim that nothing is happening.
+    pub reported: Option<(crate::agent::State, Instant)>,
+    /// What decided the current state. Reported for the sake of being able to
+    /// explain a badge that is wrong.
+    pub source: crate::agent::Source,
     /// The panes themselves. The tree refers to them by id, so this is an arena
     /// rather than a layout.
     pub panes: Vec<Pane>,
@@ -297,6 +308,8 @@ impl Session {
             asked: None,
             turns: 0,
             touched: Instant::now(),
+            reported: None,
+            source: crate::agent::Source::None,
             expanded: false,
             panes: vec![pane],
             tree: Node::Leaf(root),
@@ -474,6 +487,8 @@ impl Session {
                 asked: None,
                 turns: 0,
                 touched: Instant::now(),
+                reported: None,
+                source: crate::agent::Source::None,
                 expanded: false,
                 panes,
                 tree,
@@ -763,6 +778,8 @@ enum Observed {
     Working,
     /// Stopped. Whether that is `Done` or `Idle` depends on you, not on it.
     Waiting,
+    /// The agent said so. Carries what it said, and it is not second-guessed.
+    Said(crate::agent::State),
 }
 
 fn observe(ws: &Workspace, now: Instant) -> Observed {
@@ -772,6 +789,19 @@ fn observe(ws: &Workspace, now: Instant) -> Observed {
     if pane.dead {
         return Observed::NoAgent;
     }
+
+    // Rank one, and the only source here that is not a guess. Taken before the
+    // occupant is even consulted: `agent start` reports `starting` for a pane
+    // whose process has not appeared in the table yet, and that gap is exactly
+    // the moment the state is most worth having.
+    if let Some((said, at)) = ws.reported {
+        // Output contradicts a claim that nothing is happening, and nothing
+        // else. A pane producing text is not finished, whatever it said.
+        if !(said.quiescent() && pane.touched > at) {
+            return Observed::Said(said);
+        }
+    }
+
     let Some(kind) = pane.occupant.agent() else {
         return Observed::NoAgent;
     };
@@ -1154,7 +1184,7 @@ impl Session {
         if let Some(pane) = ws.active_pane()
             && let Some(kind) = pane.occupant.agent()
         {
-            t.set("agent", kind.name);
+            t.set("agent", &kind.name);
         }
         let agents = ws
             .panes
@@ -1353,18 +1383,26 @@ fn next_state(observed: Observed, seen: bool) -> crate::agent::State {
         Observed::Working => State::Working,
         Observed::Waiting if seen => State::Idle,
         Observed::Waiting => State::Done,
+        // A reported `done` still becomes `idle` once you have looked at it.
+        // The report says the work finished; whether you have seen that is not
+        // something the agent can know.
+        Observed::Said(State::Done) if seen => State::Idle,
+        Observed::Said(said) => said,
     }
 }
 
 fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
-    use crate::agent::State;
+    use crate::agent::Source;
 
     // Looking at it is what "seen" means. Nothing else marks it, and reads over
     // the API must not -- otherwise a status line would clear your own
     // notifications by asking about them.
     if focused {
         ws.seen = true;
-    } else if observed == Observed::Working {
+    } else if matches!(
+        observed,
+        Observed::Working | Observed::Said(crate::agent::State::Working)
+    ) {
         // Any moment of work you are not watching leaves the result unseen.
         //
         // This was once only the *edge* into working, which missed the flow the
@@ -1378,13 +1416,13 @@ fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
         ws.state_since = Instant::now();
         ws.turns = ws.turns.saturating_add(1);
     }
-    ws.state = match observed {
-        Observed::NoAgent => State::None,
-        Observed::Blocked => State::Blocked,
-        Observed::Working => State::Working,
-        Observed::Waiting if ws.seen => State::Idle,
-        Observed::Waiting => State::Done,
+    ws.source = match observed {
+        Observed::Said(_) => Source::Reported,
+        Observed::Blocked => Source::Screen,
+        Observed::Waiting => Source::Silence,
+        _ => Source::None,
     };
+    ws.state = next_state(observed, ws.seen);
 }
 
 /// How long ago, coarsely.
@@ -1484,6 +1522,8 @@ mod tests {
             asked: None,
             turns: 0,
             touched: Instant::now(),
+            reported: None,
+            source: crate::agent::Source::None,
             panes: Vec::new(),
             tree: Node::Leaf(0),
             expanded: false,

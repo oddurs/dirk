@@ -144,6 +144,68 @@ pub struct Config {
     pub naming: Naming,
     pub notify: Notify,
     pub nav: Nav,
+    /// Harnesses dirk should recognise, on top of the ones it ships with.
+    #[serde(rename = "agent")]
+    pub agents: Vec<AgentDef>,
+    /// Which agent `a` starts, when a project does not say.
+    pub default_agent: String,
+    /// Per-project settings. Everything here has a global answer too; this is
+    /// where a dozen repositories stop wanting the same one.
+    #[serde(rename = "project")]
+    pub projects: Vec<ProjectDef>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectDef {
+    pub path: PathBuf,
+    /// Which agent `a` starts here.
+    #[serde(default)]
+    pub agent: String,
+}
+
+/// One harness, as a configuration file describes it.
+///
+/// The shipped ones are expressed in exactly this shape, so the schema is
+/// proven by the things already using it rather than by a second code path.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDef {
+    pub name: String,
+    /// Process names it runs under. Empty means its own name.
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// Fragments of a command line, for when it runs under an interpreter.
+    #[serde(default)]
+    pub argv: Vec<String>,
+    /// How to start one. Empty means its own name.
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub blocked: BlockedDef,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockedDef {
+    /// Whether a marker only counts alongside a menu of numbered answers.
+    #[serde(default = "yes")]
+    pub menu: bool,
+    #[serde(default, rename = "match")]
+    pub markers: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for BlockedDef {
+    fn default() -> Self {
+        BlockedDef {
+            menu: true,
+            markers: Vec::new(),
+        }
+    }
 }
 
 /// How the column down the left is drawn.
@@ -184,6 +246,59 @@ pub struct GlyphDef {
     pub name: String,
     pub text: String,
     pub cells: u16,
+}
+
+impl Config {
+    /// The harnesses to recognise: the shipped ones, plus the file's.
+    ///
+    /// A block whose name matches a shipped one **replaces** it whole rather
+    /// than merging field by field. Predictable beats clever -- somebody
+    /// overriding claude's markers does not want to inherit half of ours -- and
+    /// a merge would make "which markers am I actually using" unanswerable
+    /// without reading two files.
+    pub fn kinds(&self) -> Vec<crate::agent::Kind> {
+        let mut out = crate::agent::defaults();
+        for def in &self.agents {
+            let kind = crate::agent::Kind {
+                name: def.name.clone(),
+                names: match def.names.is_empty() {
+                    true => vec![def.name.clone()],
+                    false => def.names.clone(),
+                },
+                argv: def.argv.clone(),
+                command: match def.command.is_empty() {
+                    true => vec![def.name.clone()],
+                    false => def.command.clone(),
+                },
+                blocked: def.blocked.markers.clone(),
+                choices: def.blocked.menu,
+            };
+            match out.iter().position(|k| k.name == kind.name) {
+                Some(i) => out[i] = kind,
+                None => out.push(kind),
+            }
+        }
+        out
+    }
+}
+
+impl Config {
+    /// Which agent to start in a project: what it asks for, then the global
+    /// answer, then nothing -- which means asking.
+    ///
+    /// Twelve repositories do not want one answer, and being asked the same
+    /// question twelve times a day is how a shortcut stops being one.
+    pub fn agent_for(&self, path: &std::path::Path) -> Option<String> {
+        let named = self
+            .projects
+            .iter()
+            .find(|p| expand(&p.path.to_string_lossy()) == path)
+            .map(|p| p.agent.clone())
+            .filter(|a| !a.is_empty());
+        named
+            .or_else(|| Some(self.default_agent.clone()))
+            .filter(|a| !a.is_empty())
+    }
 }
 
 impl Nav {
@@ -426,6 +541,9 @@ impl Default for Config {
             naming: Naming::default(),
             notify: Notify::default(),
             nav: Nav::default(),
+            agents: Vec::new(),
+            default_agent: String::new(),
+            projects: Vec::new(),
         }
     }
 }
@@ -507,7 +625,7 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
         // Command keys win, so a layout bound to one is unreachable. Silently
         // is the problem: the entry is listed with a key that does nothing.
         const RESERVED: &[char] = &[
-            'n', 'o', 'x', 'r', 'v', 's', 'd', 'b', 'w', 'q', 'j', 'k', ';',
+            'n', 'o', 'a', 'x', 'r', 'v', 's', 'd', 'b', 'w', 'q', 'j', 'k', ';',
         ];
         if let Some(k) = l.key.filter(|k| RESERVED.contains(k)) {
             out.push(format!(
@@ -527,6 +645,14 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
                 "layout {}: defined twice; only the first is reachable",
                 l.name
             ));
+        }
+    }
+    // An agent that can never match anything is a definition that does nothing,
+    // and saying so is cheaper than wondering why a harness is never
+    // recognised.
+    for def in &cfg.agents {
+        if def.names.is_empty() && def.argv.is_empty() && def.name.is_empty() {
+            out.push("agent: an entry with no name, names or argv can never match".into());
         }
     }
     // A set that does not exist is drawn as the default one, and a mark that
@@ -658,4 +784,84 @@ fn on_path(cmd: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|d| d.join(cmd).is_file()))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(text: &str) -> Config {
+        toml::from_str::<Config>(text).expect("parses")
+    }
+
+    #[test]
+    fn a_harness_from_the_file_is_recognised_like_a_shipped_one() {
+        // The whole point: the field adds one a month, and an addition should
+        // be an edit rather than a release.
+        let cfg = parsed(
+            r#"
+            [[agent]]
+            name = "sculptor"
+            blocked = { menu = true, match = ["Proceed?"] }
+            "#,
+        );
+        let kinds = cfg.kinds();
+        let it = kinds.iter().find(|k| k.name == "sculptor").expect("added");
+        // A name is enough: it stands for the process name and the command too.
+        assert_eq!(it.names, ["sculptor"]);
+        assert_eq!(it.command, ["sculptor"]);
+        assert_eq!(
+            crate::agent::identify(
+                &crate::agent::Proc {
+                    program: "sculptor".into(),
+                    args: String::new(),
+                },
+                &kinds
+            )
+            .agent()
+            .map(|k| k.name.as_str()),
+            Some("sculptor")
+        );
+        // And the shipped ones are still there.
+        assert!(kinds.iter().any(|k| k.name == "claude"));
+    }
+
+    #[test]
+    fn overriding_a_shipped_harness_replaces_it_rather_than_merging() {
+        // Predictable beats clever. Somebody replacing claude's markers does
+        // not want to inherit half of ours, and a merge makes "which markers am
+        // I actually using" unanswerable without reading two files.
+        let cfg = parsed(
+            r#"
+            [[agent]]
+            name = "claude"
+            blocked = { menu = false, match = ["Ready:"] }
+            "#,
+        );
+        let kinds = cfg.kinds();
+        assert_eq!(
+            kinds.iter().filter(|k| k.name == "claude").count(),
+            1,
+            "the shipped one was left beside the replacement"
+        );
+        let claude = kinds.iter().find(|k| k.name == "claude").unwrap();
+        assert_eq!(claude.blocked, ["Ready:"]);
+        assert!(!claude.choices);
+    }
+
+    #[test]
+    fn a_harness_that_can_never_match_is_reported() {
+        let mut cfg = Config::default();
+        cfg.agents.push(AgentDef {
+            name: String::new(),
+            names: Vec::new(),
+            argv: Vec::new(),
+            command: Vec::new(),
+            blocked: BlockedDef::default(),
+        });
+        assert!(
+            complaints(&cfg).iter().any(|c| c.starts_with("agent:")),
+            "an entry matching nothing was accepted in silence"
+        );
+    }
 }
