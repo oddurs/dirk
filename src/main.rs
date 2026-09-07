@@ -211,6 +211,9 @@ struct App {
     nav: Nav,
     nav_rows: Vec<Row>,
     side: Rect,
+    /// True while the pointer is dragging the divider. Held as state because a
+    /// drag is three events and only the first one lands on the divider.
+    dragging: bool,
     quit: bool,
 }
 
@@ -232,6 +235,7 @@ impl App {
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
+            dragging: false,
             content: Rect {
                 x: sidebar_w,
                 y: 0,
@@ -496,7 +500,29 @@ impl App {
                 // Folding is not going anywhere, so the nav keeps the keyboard.
                 return;
             }
-            Target::Workspace { p, w } => self.session.focus = Focus::Ws { p, w },
+            Target::Workspace { p, w } => {
+                // Clicking a workspace that is already focused and has several
+                // panes opens it, which is the only thing left for that click
+                // to mean.
+                let expand = self.session.focus == Focus::Ws { p, w }
+                    && self
+                        .session
+                        .workspace(p, w)
+                        .is_some_and(|ws| ws.panes.len() > 1);
+                if expand && let Some(ws) = self.session.workspace_mut(p, w) {
+                    ws.expanded = !ws.expanded;
+                    return;
+                }
+                self.session.focus = Focus::Ws { p, w };
+            }
+            Target::NavPane { p, w, index } => {
+                self.session.focus = Focus::Ws { p, w };
+                if let Some(ws) = self.session.workspace_mut(p, w)
+                    && let Some(&id) = ws.tree.leaves().get(index)
+                {
+                    ws.focus = id;
+                }
+            }
             Target::NewWorkspace(p) => {
                 self.session.new_workspace(p, area.height, area.width);
             }
@@ -514,6 +540,10 @@ impl App {
                 if let Some(path) = path {
                     self.open(&path);
                 }
+            }
+            Target::SortAgents => {
+                self.nav.cycle_sort();
+                return;
             }
             Target::Pane { .. } => return,
         }
@@ -678,6 +708,28 @@ impl App {
     fn on_mouse(&mut self, m: MouseEvent) {
         let target = self.hits.at(m.column, m.row);
 
+        // The divider, before anything else: a drag that started on it owns
+        // every event until the button comes up, wherever the pointer has got
+        // to by then.
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if self.on_divider(m.column) => {
+                self.dragging = true;
+                return;
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
+                let full = self.side.width + self.content.width;
+                // A nav narrower than this cannot show a name, and one wider
+                // than half the terminal is not a nav any more.
+                self.cfg.sidebar_width = m.column.clamp(20, full / 2);
+                return;
+            }
+            MouseEventKind::Up(_) if self.dragging => {
+                self.dragging = false;
+                return;
+            }
+            _ => {}
+        }
+
         // The wheel over the nav scrolls the nav, not whatever pane is behind
         // the pointer.
         if m.column < self.side.right() && self.side.width > 0 {
@@ -704,6 +756,15 @@ impl App {
         if self.picker.is_none() {
             self.send_mouse(&m);
         }
+    }
+
+    /// The divider is the nav's last column. Two columns wide as a target,
+    /// because one is very hard to hit.
+    fn on_divider(&self, column: u16) -> bool {
+        self.sidebar
+            && self.side.width > 0
+            && column + 1 >= self.side.right()
+            && column <= self.side.right()
     }
 
     fn send_mouse(&mut self, m: &MouseEvent) {

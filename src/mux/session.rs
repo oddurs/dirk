@@ -62,6 +62,10 @@ pub struct Workspace {
     /// rather than a layout.
     pub panes: Vec<Pane>,
     pub tree: Node,
+    /// Whether the nav shows this workspace's panes. Collapsed by default: the
+    /// tree should stay the height of the space list until it is asked for
+    /// more.
+    pub expanded: bool,
     /// Which pane has the keyboard. An id rather than an index, because indices
     /// shift when a pane is removed and focus would silently move with them.
     pub focus: PaneId,
@@ -207,6 +211,7 @@ impl Session {
         proj.workspaces.push(Workspace {
             label: name,
             touched: Instant::now(),
+            expanded: false,
             panes: vec![pane],
             tree: Node::Leaf(root),
             focus: root,
@@ -360,6 +365,7 @@ impl Session {
             self.layouts[i].ws = Some(Workspace {
                 label: def.name.clone(),
                 touched: Instant::now(),
+                expanded: false,
                 panes,
                 tree,
                 focus: first,

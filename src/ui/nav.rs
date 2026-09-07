@@ -81,7 +81,7 @@ impl Section {
                 ("n", "new", Action::NewWorkspace),
                 ("o", "project", Action::OpenProject),
             ],
-            Section::Agents => &[("↵", "go", Action::Hint)],
+            Section::Agents => &[("↵", "go", Action::Hint), ("s", "sort", Action::Sort)],
         }
     }
 }
@@ -93,6 +93,7 @@ enum Action {
     Hint,
     NewWorkspace,
     OpenProject,
+    Sort,
 }
 
 impl Action {
@@ -103,6 +104,7 @@ impl Action {
         match self {
             Action::Hint => None,
             Action::OpenProject => Some(Target::OpenProject),
+            Action::Sort => Some(Target::SortAgents),
             Action::NewWorkspace => match session.focus {
                 Focus::Ws { p, .. } => Some(Target::NewWorkspace(p)),
                 Focus::Layout(_) => None,
@@ -128,6 +130,12 @@ pub enum Row {
     Branch {
         p: usize,
         w: usize,
+    },
+    /// One pane of an expanded workspace.
+    Pane {
+        p: usize,
+        w: usize,
+        index: usize,
     },
     /// The same workspace, in the agents list. A separate variant so that
     /// selecting one does not also look selected in the other.
@@ -159,6 +167,7 @@ impl Row {
             Row::Workspace { p, w, .. } | Row::Agent { p, w } | Row::Branch { p, w } => {
                 Target::Workspace { p, w }
             }
+            Row::Pane { p, w, index } => Target::NavPane { p, w, index },
             Row::NewWorkspace(p) => Target::NewWorkspace(p),
             _ => return None,
         })
@@ -166,7 +175,7 @@ impl Row {
 }
 
 /// Every row the nav would draw if it had unlimited height.
-pub fn rows(session: &Session) -> Vec<Row> {
+pub fn rows(session: &Session, sort: Sort) -> Vec<Row> {
     let mut out = Vec::new();
 
     if !session.layouts.is_empty() {
@@ -195,12 +204,18 @@ pub fn rows(session: &Session) -> Vec<Row> {
             if proj.repo.as_ref().is_some_and(|r| !r.branch.is_empty()) {
                 out.push(Row::Branch { p, w });
             }
+            // A workspace with one pane draws no subtree: there is nothing the
+            // row above does not already say.
+            let ws = &proj.workspaces[w];
+            if ws.expanded && ws.panes.len() > 1 {
+                out.extend((0..ws.tree.leaves().len()).map(|index| Row::Pane { p, w, index }));
+            }
         }
         out.push(Row::NewWorkspace(p));
     }
     out.push(Row::Footer(Section::Spaces));
 
-    let agents = attention(session);
+    let agents = attention(session, sort);
     if !agents.is_empty() {
         out.push(Row::Blank);
         out.push(Row::Heading(Section::Agents, agents.len()));
@@ -211,13 +226,59 @@ pub fn rows(session: &Session) -> Vec<Row> {
     out
 }
 
-/// The workspaces that are asking for something.
+/// How the agents list is ordered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Sort {
+    /// What is owed: blocked, then finished-and-unseen, then working, then
+    /// idle. Oldest first inside each, because the thing that has been waiting
+    /// longest is the thing that has been waiting longest.
+    #[default]
+    Attention,
+    /// Most recently active first, for following what is happening rather than
+    /// clearing what is owed.
+    Recent,
+}
+
+impl Sort {
+    fn label(self) -> &'static str {
+        match self {
+            Sort::Attention => "attention",
+            Sort::Recent => "recent",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Sort::Attention => Sort::Recent,
+            Sort::Recent => Sort::Attention,
+        }
+    }
+}
+
+/// Lower is more urgent. `blocked` is first because it is the only state
+/// waiting on a human; `done` next because it is finished work nobody has
+/// looked at.
+fn rank(state: &str) -> u8 {
+    match state {
+        "blocked" => 0,
+        "done" => 1,
+        "working" => 2,
+        "idle" => 3,
+        _ => 4,
+    }
+}
+
+/// The workspaces that are asking for something, in the order they are asking.
 ///
-/// "Has published an intent" is the same crude signal the state glyph uses, and
-/// it is what dirk can honestly tell today: a shell has no intent and a coding
-/// agent publishes one continuously. 0031 makes the states real and 0021 orders
-/// this by what is actually owed.
-fn attention(session: &Session) -> Vec<(usize, usize)> {
+/// Spaces are listed in a stable order so the number beside one is a jump key
+/// you can learn. That is right for navigation and exactly wrong for triage:
+/// the agent that has been blocked for ten minutes is wherever its workspace
+/// happens to sit. This is the same set, ordered by what is owed.
+///
+/// "Has published an intent" is the crude signal dirk can honestly use today —
+/// a shell has no intent and a coding agent publishes one continuously. 0031
+/// makes the states real; the ordering here is already what it should be.
+fn attention(session: &Session, sort: Sort) -> Vec<(usize, usize)> {
     let mut v: Vec<(usize, usize)> = Vec::new();
     for (p, proj) in session.projects.iter().enumerate() {
         for (w, ws) in proj.workspaces.iter().enumerate() {
@@ -226,6 +287,15 @@ fn attention(session: &Session) -> Vec<(usize, usize)> {
             }
         }
     }
+    v.sort_by_key(|&(p, w)| {
+        let ws = &session.projects[p].workspaces[w];
+        let age = ws.touched.elapsed().as_secs();
+        match sort {
+            // Oldest first within a rank, so `age` sorts descending.
+            Sort::Attention => (rank(state_of(ws)), u64::MAX - age),
+            Sort::Recent => (0, age),
+        }
+    });
     v
 }
 
@@ -235,6 +305,7 @@ fn attention(session: &Session) -> Vec<(usize, usize)> {
 pub struct Nav {
     pub selected: usize,
     pub offset: usize,
+    pub sort: Sort,
     /// True while the nav is taking keys directly. A nav that needs the prefix
     /// before every `j` is not a nav.
     pub active: bool,
@@ -301,6 +372,10 @@ impl Nav {
         self.offset = self.offset.min(len - height);
     }
 
+    pub fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+    }
+
     pub fn scroll_by(&mut self, delta: isize, len: usize, height: usize) {
         let max = len.saturating_sub(height);
         self.offset = (self.offset as isize + delta).clamp(0, max as isize) as usize;
@@ -315,7 +390,7 @@ pub fn render(
     hits: &mut HitMap,
 ) -> Vec<Row> {
     fill(buf, area, THEME.panel());
-    let all = rows(session);
+    let all = rows(session, nav.sort);
     if area.width < 8 || area.height == 0 {
         return all;
     }
@@ -360,6 +435,7 @@ pub fn render(
             row,
             &Ctx {
                 inner,
+                sort: nav.sort,
                 y,
                 session,
                 selected: nav.selected == index && row.selectable(),
@@ -389,6 +465,7 @@ pub fn render(
 /// was a struct that had not been written down yet.
 struct Ctx<'a> {
     inner: Rect,
+    sort: Sort,
     y: u16,
     session: &'a Session,
     /// This row is the selection.
@@ -404,6 +481,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
         session,
         selected,
         active,
+        ..
     } = *cx;
     let w = inner.width;
     let base = if selected && active {
@@ -427,9 +505,14 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 section.title(),
                 THEME.title(),
             );
-            let n = count.to_string();
-            let x = inner.right().saturating_sub(n.chars().count() as u16);
-            write_str(buf, x, y, &n, THEME.faint(), w);
+            // The agents list is the only one whose order is a choice, so it
+            // is the only one that has to say what the choice currently is.
+            let right = match section {
+                Section::Agents => cx.sort.label().to_string(),
+                _ => count.to_string(),
+            };
+            let x = inner.right().saturating_sub(right.chars().count() as u16);
+            write_str(buf, x, y, &right, THEME.faint(), w);
         }
 
         Row::Footer(section) => {
@@ -549,6 +632,47 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             write_str(buf, inner.x + 6, y, &elide(&repo.branch, left), style, w);
         }
 
+        Row::Pane { p, w: wi, index } => {
+            let Some(ws) = session.workspace(p, wi) else {
+                return;
+            };
+            let Some(&id) = ws.tree.leaves().get(index) else {
+                return;
+            };
+            let Some(pane) = ws.pane(id) else {
+                return;
+            };
+            let last = index + 1 == ws.tree.leaves().len();
+            let style = if selected && active {
+                base
+            } else {
+                THEME.faint()
+            };
+
+            let mut x = inner.x + 4;
+            x += write_str(
+                buf,
+                x,
+                y,
+                if last { "└ " } else { "├ " },
+                THEME.rule_strong(),
+                w,
+            );
+            // A pane's own label if a layout gave it one, otherwise whatever
+            // the program inside is calling itself.
+            let name = pane
+                .label
+                .clone()
+                .or_else(|| pane.title())
+                .unwrap_or_else(|| {
+                    pane.cwd
+                        .file_name()
+                        .map_or_else(String::new, |f| f.to_string_lossy().into_owned())
+                });
+            let left = w.saturating_sub(x - inner.x) as usize;
+            write_str(buf, x, y, &elide(&name, left), style, w);
+        }
+
         Row::NewWorkspace(_) => {
             let style = if selected && active {
                 base
@@ -580,6 +704,7 @@ fn space_row(
         session,
         selected,
         active,
+        ..
     } = *cx;
     let w = inner.width;
     let focused = session.focus == Focus::Ws { p, w: wi };
@@ -597,7 +722,12 @@ fn space_row(
     );
 
     let mut x = inner.x;
-    x += write_str(buf, x, y, "  ", THEME.rule_strong(), w);
+    let arrow = match (ws.panes.len() > 1, ws.expanded) {
+        (false, _) => "  ",
+        (true, false) => "▸ ",
+        (true, true) => "▾ ",
+    };
+    x += write_str(buf, x, y, arrow, THEME.rule_strong(), w);
     x += write_str(buf, x, y, glyph, gstyle, w);
     x += write_str(buf, x, y, " ", THEME.text(), w);
     if let Some(n) = number {
@@ -819,5 +949,42 @@ mod tests {
             Some(Row::Workspace { p: 0, w: 1, n: 2 }),
             "`j` should reach the next workspace, not its branch line"
         );
+    }
+
+    #[test]
+    fn attention_puts_the_blocked_agent_first() {
+        // blocked is the only state waiting on a human, and done is finished
+        // work nobody has looked at. Both outrank anything still running.
+        let mut states = ["idle", "working", "done", "blocked", "unknown"];
+        states.sort_by_key(|s| rank(s));
+        assert_eq!(states, ["blocked", "done", "working", "idle", "unknown"]);
+    }
+
+    #[test]
+    fn the_sort_toggle_comes_back_to_where_it_started() {
+        let s = Sort::default();
+        assert_eq!(s, Sort::Attention, "triage is the default, not chronology");
+        assert_eq!(s.next().next(), s);
+        assert_ne!(s.label(), s.next().label());
+    }
+
+    #[test]
+    fn a_pane_row_goes_to_that_pane_and_not_just_its_workspace() {
+        let pane = Row::Pane {
+            p: 1,
+            w: 2,
+            index: 3,
+        };
+        assert!(pane.selectable());
+        assert_eq!(
+            pane.target(),
+            Some(Target::NavPane {
+                p: 1,
+                w: 2,
+                index: 3
+            })
+        );
+        // And it is a different destination from the workspace row above it.
+        assert_ne!(pane.target(), Row::Workspace { p: 1, w: 2, n: 1 }.target());
     }
 }

@@ -2,8 +2,9 @@
 id: 21
 title: The agents section, ordered by attention
 type: feature
-status: planned
+status: done
 milestone: v0.2
+assignee: oddurs
 depends_on:
 - 31
 created: 2026-09-06
@@ -35,7 +36,7 @@ Depends on real agent states (0009) to be more than a re-sort of a guess; ships
 before them so the shape is settled first.
 
 ## Acceptance criteria
-- [ ] Ordered by attention, with ties broken by age
-- [ ] Numbers stay attached to the workspace, not the position
-- [ ] The section is empty and takes no space when nothing is owed
-- [ ] Clicking a row focuses that workspace and marks it seen
+- [x] Ordered by attention, with ties broken by age
+- [x] Numbers stay attached to the workspace, not the position
+- [x] The section is empty and takes no space when nothing is owed
+- [x] Clicking a row focuses that workspace and marks it seen
