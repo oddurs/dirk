@@ -488,8 +488,17 @@ impl Session {
     /// and `reap` does the structural work — so closing by hand and a program
     /// exiting on its own take exactly the same path.
     pub fn close_focused(&mut self) {
-        if let Some(pane) = self.active_pane_mut() {
-            pane.close();
+        let Some(pane) = self.active_pane_mut() else {
+            return;
+        };
+        let (id, already_gone) = (pane.id, pane.dead);
+        pane.close();
+        // Killing a child that has already exited produces no new event, so a
+        // stopped pane would sit there for ever waiting to be reaped by
+        // something that was never going to arrive. This is the one case that
+        // has to reap itself.
+        if already_gone {
+            self.reap(id);
         }
     }
 

@@ -588,3 +588,46 @@ command = ["/bin/sh"]
         h.drawn()
     );
 }
+
+#[test]
+fn a_stopped_layout_pane_can_still_be_closed() {
+    // Holding a stopped pane introduced its own trap: `close` kills the child,
+    // and killing one that has already exited produces no new event -- so the
+    // pane sat there waiting to be reaped by something that was never coming.
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Test"
+key = "9"
+split = "rows"
+
+[[layout.pane]]
+title = "report"
+command = ["/bin/sh", "-c", "printf 'zz%s' KEPT; exit 3"]
+
+[[layout.pane]]
+title = "alive"
+command = ["/bin/sh"]
+"#,
+    );
+    assert!(h.wait_for(READY, START), "never started");
+    h.prefix(b"9");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("exited 3").is_some()),
+        "the pane never reported stopping\n{}",
+        h.drawn()
+    );
+
+    // Focus is on the first leaf, which is the stopped one.
+    h.prefix(b"x");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzKEPT").is_none()),
+        "x did not close the stopped pane\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("alive").is_some(),
+        "closing it took the layout with it\n{}",
+        h.drawn()
+    );
+}
