@@ -6,6 +6,71 @@ See the end of the file for copying conditions.
 Please send bug reports and suggestions through the project's issue tracker.
 
 
+* Noteworthy changes in release 0.2.0 (2026-09-06)
+
+** The nav
+
+The sidebar is three lists: layouts, spaces and agents.  The order is the
+argument -- layouts are places you go, spaces are where work lives, and agents
+are what is asking for you, so attention flows down the column.
+
+A workspace row is two lines.  The first is identity: state, number, name, and
+how long since it last said anything.  The second is which checkout it is,
+marked when that checkout is a worktree.  A workspace with nothing for its
+second line draws one line rather than a blank one.
+
+The same workspace appears under spaces and under agents.  That is not
+duplication: spaces answers "what is open, and where" and agents answers "what
+needs me", and they are sorted differently for that reason.  The agents list is
+ordered by what is owed -- blocked, then finished-and-unseen, then working, then
+idle, oldest first inside each -- and the numbers stay attached to the
+workspace, so a jump key does not move when the order does.
+
+Each section is allocated height before anything is drawn, so a long list of
+spaces cannot push the agents section off the bottom.  A section that fits is
+never scrolled.  The selection is distinct from focus and the nav takes keys of
+its own while it holds them.  The divider drags.
+
+** Layouts
+
+A layout is a named arrangement of programs, declared in the configuration file
+as a tree of panes with sizes, and opened as a space of its own.  A layout with
+one program and a five-pane dashboard differ only in how many leaves they have.
+
+A pane a layout declared carries a label, drawn as a rule above it.  When its
+program exits the pane keeps its rectangle and its last output, says how it
+ended on that rule, and `r` starts it again in the same slot.  The output is
+usually the point: a board that prints and exits is a reasonable panel.
+
+Panes run in the directory of whatever was focused when the layout opened, and
+closing a layout returns you exactly where you were.
+
+A layout whose programs are not all installed is dropped at startup.  It is all
+or nothing, because half a dashboard is not a dashboard.
+
+** Panes
+
+A workspace holds a tree of splits rather than a row of equal panes, so nested
+arrangements are expressible and a split in a direction the parent already runs
+in keeps the shares equal.  Closing a pane gives its space to its own siblings
+and moves nothing else.
+
+** Chrome
+
+Section headings are words rather than letter-spaced capitals.  The bar carries
+a quit button at its right, which takes two clicks: it ends every shell and
+every agent in the session.
+
+** Known limitations
+
+Unchanged from 0.1.0, less the ones above: sessions still do not survive the
+terminal closing, there is no scrollback view or copy mode, keybindings are not
+configurable, and the state glyph beside a workspace is still inferred from
+whether its pane has published a title rather than read from the agent -- so an
+agent waiting on a human is not distinguished from one that is working.  That
+last is the whole of v0.3.
+
+
 * Noteworthy changes in release 0.1.0 (2026-09-06)
 
 This is the first release.  It runs as a single process: closing the terminal
