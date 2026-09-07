@@ -39,14 +39,79 @@ fn config_home() -> std::path::PathBuf {
     dir
 }
 
-fn unique(kind: &str) -> String {
+/// A session name that takes its session with it.
+///
+/// Every test used to end with `quit(&session)`, which a failing assertion
+/// never reaches -- so a red run left one daemon per failed test on the
+/// machine, invisible unless you thought to run `dirk session list`. A panic
+/// unwinds, and unwinding runs `Drop`, so the end of a session belongs here
+/// rather than at the end of a function that may not get there.
+struct Live(String);
+
+impl std::ops::Deref for Live {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Live {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        // Over the socket rather than by attaching: this may be running inside
+        // a panic, and taking a terminal over on the way out of one is a way to
+        // lose the message that said what went wrong.
+        let _ = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+            .args(["--session", &self.0, "session", "quit"])
+            .env("XDG_CONFIG_HOME", config_home())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let socket = socket_path(&self.0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while socket.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_file(&socket);
+    }
+}
+
+/// End a session on purpose, mid-test, and wait for it to be gone.
+///
+/// Over the socket rather than by attaching and pressing `q`: taking a terminal
+/// over in order to end a session is a lot of machinery for something that is
+/// now one command.
+fn end(session: &str) {
+    let _ = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--session", session, "session", "quit"])
+        .env("XDG_CONFIG_HOME", config_home())
+        .output();
+    let socket = socket_path(session);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn socket_path(session: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join(format!("dirk-{}", unsafe { libc::getuid() }))
+        .join(format!("{session}.sock"))
+}
+
+fn unique(kind: &str) -> Live {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    format!(
+    Live(format!(
         "test-{kind}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
-    )
+    ))
 }
 
 /// One client attached to a named session.
@@ -212,24 +277,6 @@ impl Drop for Client {
     }
 }
 
-/// Ask the session to end, and wait for its socket to go.
-fn quit(session: &str) {
-    let mut last = Client::attach(session);
-    if last.wait_for(READY, START) {
-        last.send(&[0]);
-        std::thread::sleep(Duration::from_millis(150));
-        last.send(b"q");
-    }
-    let socket = std::env::temp_dir()
-        .join(format!("dirk-{}", unsafe { libc::getuid() }))
-        .join(format!("{session}.sock"));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while socket.exists() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = std::fs::remove_file(&socket);
-}
-
 #[test]
 fn the_session_outlives_the_terminal_it_was_started_from() {
     let session = unique("outlives");
@@ -259,7 +306,6 @@ fn the_session_outlives_the_terminal_it_was_started_from() {
         second.drawn()
     );
     drop(second);
-    quit(&session);
 }
 
 #[test]
@@ -286,7 +332,6 @@ fn reattaching_shows_what_happened_while_nobody_was_watching() {
         second.drawn()
     );
     drop(second);
-    quit(&session);
 }
 
 #[test]
@@ -314,7 +359,6 @@ fn a_second_client_takes_over_and_the_first_is_told_why() {
         first.drawn()
     );
     drop(second);
-    quit(&session);
 }
 
 #[test]
@@ -341,7 +385,7 @@ fn a_server_nobody_can_reach_does_not_keep_running() {
         let still_there = std::process::Command::new("ps")
             .args(["-A", "-o", "args="])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&session))
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&*session))
             .unwrap_or(false);
         if !still_there {
             return;
@@ -388,7 +432,6 @@ fn a_client_that_took_over_is_the_one_being_drawn_for() {
         second.drawn()
     );
     drop(second);
-    quit(&session);
 }
 
 #[test]
@@ -420,7 +463,6 @@ fn a_session_uses_the_whole_terminal_it_is_shown_on() {
         "nothing was drawn past column 80 of a 120-column terminal"
     );
     drop(client);
-    quit(&session);
 }
 
 /// The first `"id": "..."` in an answer.
@@ -494,7 +536,6 @@ fn a_session_answers_for_itself() {
     assert!(!ok, "reading a pane that does not exist should fail");
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -533,12 +574,12 @@ fn sessions_are_listed_with_whether_you_can_attach_to_one() {
     assert!(
         listed
             .lines()
-            .any(|l| l.starts_with(&session) && l.contains("attached")),
+            .any(|l| l.starts_with(&*session) && l.contains("attached")),
         "the session with a client attached was not listed as attached:\n{listed}"
     );
 
     drop(client);
-    quit(&session);
+    end(&session);
 
     // And once it is gone it is not offered as something to attach to.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
@@ -549,7 +590,7 @@ fn sessions_are_listed_with_whether_you_can_attach_to_one() {
     assert!(
         !listed
             .lines()
-            .any(|l| l.starts_with(&session) && (l.contains("running") || l.contains("attached"))),
+            .any(|l| l.starts_with(&*session) && (l.contains("running") || l.contains("attached"))),
         "a session that has ended is still offered as one to attach to:\n{listed}"
     );
 }
@@ -589,7 +630,6 @@ fn a_reload_does_not_disturb_what_is_running() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -609,7 +649,7 @@ fn a_command_from_inside_a_pane_reaches_the_session_holding_it() {
     // No `--session`: the environment is what a pane has.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
         .args(["pane", "list"])
-        .env("DIRK_SESSION", &session)
+        .env("DIRK_SESSION", &*session)
         .env("XDG_CONFIG_HOME", config_home())
         .output()
         .expect("run dirk");
@@ -624,7 +664,6 @@ fn a_command_from_inside_a_pane_reaches_the_session_holding_it() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -657,7 +696,7 @@ fn the_shape_of_a_session_comes_back_after_it_has_ended() {
 
     // End the session entirely, server and all.
     drop(client);
-    quit(&session);
+    end(&session);
 
     // And start it again from nothing.
     let second = Client::attach(&session);
@@ -672,7 +711,6 @@ fn the_shape_of_a_session_comes_back_after_it_has_ended() {
         second.drawn()
     );
     drop(second);
-    quit(&session);
 }
 
 #[test]
@@ -772,7 +810,6 @@ fn a_session_reached_over_a_pipe_pair_draws_the_same_thing() {
         client.drawn()
     );
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -805,7 +842,6 @@ fn a_dropped_link_comes_back_to_the_same_session() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -954,7 +990,6 @@ fn detaching_leaves_everything_running() {
         second.drawn()
     );
     drop(second);
-    quit(&session);
 }
 
 #[test]
@@ -970,7 +1005,6 @@ fn the_bar_offers_both_ways_out_and_says_which_is_which() {
     );
     assert!(drawn.contains("quit"), "no way out that ends it:\n{drawn}");
     drop(client);
-    quit(&session);
 }
 
 // ── What an agent says about itself ─────────────────────────────────────
@@ -1002,7 +1036,6 @@ fn a_reported_state_outranks_what_the_screen_looks_like() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1036,7 +1069,6 @@ fn output_contradicts_a_claim_that_nothing_is_happening() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1069,7 +1101,6 @@ fn a_reported_block_does_not_outlive_the_answer_you_gave_it() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1080,7 +1111,6 @@ fn a_state_nobody_defined_is_refused() {
     let (ok, _) = ask(&session, &["agent", "state", "pondering"]);
     assert!(!ok, "a state that does not exist was accepted");
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1106,7 +1136,6 @@ fn starting_an_agent_refuses_a_pane_that_is_busy() {
     assert!(why.contains("busy"), "said the wrong thing: {why}");
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1124,7 +1153,6 @@ fn starting_an_agent_with_no_pane_means_the_one_you_are_in() {
     assert!(out.contains("claude"), "said the wrong thing: {out}");
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1136,7 +1164,6 @@ fn an_agent_nobody_configured_is_refused_by_name() {
     assert!(!ok, "it tried to start something that does not exist");
     assert!(why.contains("no such agent"), "said the wrong thing: {why}");
     drop(client);
-    quit(&session);
 }
 
 /// Every workspace id in an answer, in the order they appear.
@@ -1227,7 +1254,6 @@ fn the_noise_is_made_where_the_human_is() {
     );
 
     drop(client);
-    quit(&session);
 }
 
 #[test]
@@ -1250,5 +1276,54 @@ fn nothing_rings_about_the_workspace_you_are_looking_at() {
     );
 
     drop(client);
-    quit(&session);
+}
+
+#[test]
+fn a_session_ends_with_the_test_that_made_it() {
+    // The guard, on its own. A failing assertion never reaches the end of a
+    // test function, so a red run used to leave one daemon per failure on the
+    // machine -- invisible unless you thought to run `dirk session list`.
+    // Unwinding runs `Drop`, so this is where the end of a session belongs.
+    let socket;
+    {
+        let session = unique("guard");
+        socket = socket_path(&session);
+        let client = Client::attach(&session);
+        assert!(client.wait_for(READY, START), "never started");
+        assert!(socket.exists(), "no socket to clean up");
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !socket.exists(),
+        "the session outlived the test that made it"
+    );
+}
+
+#[test]
+fn a_socket_nothing_is_listening_on_can_be_swept_up() {
+    // A server that dies without unbinding leaves its socket, and only a new
+    // session of the same name ever removed one -- so `session list` filled up
+    // with things you cannot attach to and there was no way to clear them.
+    let dead = socket_path("test-stale-swept");
+    if let Some(dir) = dead.parent() {
+        std::fs::create_dir_all(dir).expect("socket dir");
+    }
+    std::fs::write(&dead, b"").expect("a socket nobody is listening on");
+
+    // And one that is answering, which must survive.
+    let live = unique("swept");
+    let client = Client::attach(&live);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&live, &["session", "prune"]);
+    assert!(ok, "prune failed: {out}");
+    assert!(!dead.exists(), "the stale socket was left behind:\n{out}");
+    assert!(
+        socket_path(&live).exists(),
+        "it removed a socket somebody was listening on:\n{out}"
+    );
+    drop(client);
 }

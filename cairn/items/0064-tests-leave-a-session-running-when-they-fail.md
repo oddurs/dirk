@@ -2,7 +2,7 @@
 id: 64
 title: Tests leave a session running when they fail
 type: bug
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07

@@ -107,7 +107,7 @@ JSON; `--current` means the pane you are in.
   pane      list|focus|split|read|send-keys|close
   layout    list|open
   agent     list|start|state|hooks
-  session   info|list|reload|commands
+  session   info|list|reload|commands|quit|prune
 
 Options:
       --session NAME     which session, default \"default\"
@@ -285,6 +285,33 @@ fn main() -> io::Result<()> {
     // Answered without a session, because installing a hook is something you do
     // before there is one -- and because the answer is a snippet to paste, which
     // is worse for having been through JSON on the way.
+    // Answered without a session for the same reason `session list` is: it is
+    // about which sessions there are rather than about one of them, and the
+    // ones it removes are by definition not answering.
+    if command_args_are(&args, "session", "prune") {
+        let mut gone = 0usize;
+        for (name, running) in server::sessions() {
+            if running {
+                continue;
+            }
+            // Asked again rather than trusting the listing: a session can come
+            // up between the two, and removing a socket somebody is listening
+            // on orphans a running server nobody can reach.
+            let path = server::socket_path(&name);
+            if server::is_running(&path) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                gone += 1;
+                say(&format!("{name}\tremoved\n"));
+            }
+        }
+        if gone == 0 {
+            say("nothing to remove\n");
+        }
+        return Ok(());
+    }
+
     if command_args_are(&args, "agent", "hooks") {
         let kind = words(&args).get(2).copied().unwrap_or("claude").to_string();
         say(&crate::agent::hooks(&kind));
@@ -1110,6 +1137,13 @@ impl App {
                 }
                 Err(e) => Reply::err(e),
             },
+
+            // The counterpart to attaching and pressing `q`. A session you
+            // want gone should not require a terminal to go and stand in.
+            "session.quit" => {
+                self.quit = true;
+                Reply::ok(serde_json::json!({ "quit": true }))
+            }
 
             "session.info" => Reply::ok(serde_json::json!({
                 "workspaces": self.session.flat().len(),

@@ -9,7 +9,6 @@ A terminal multiplexer that knows what its sessions are for.
 `##########` 100% · 7 of 7 done · due 2026-09-06
 
 Panes on a pty, a clickable sidebar, a rail, and naming. Single process:
-closing the terminal ends the session. Shipped.
 
 ### done
 
@@ -26,8 +25,6 @@ closing the terminal ends the session. Shipped.
 `##########` 100% · 16 of 16 done · due 2026-10-15
 
 The sidebar becomes the product. Three sections — layouts, spaces, agents — with
-two-line rows carrying project, worktree, branch and intent. Static layouts, and
-the split tree they need underneath. This is the milestone dirk is for.
 
 ### done
 
@@ -53,8 +50,6 @@ the split tree they need underneath. This is the milestone dirk is for.
 `##########` 100% · 7 of 7 done · due 2026-11-15
 
 Real agent detection and real lifecycle states, so `blocked` — the only state
-waiting on a human — is shown rather than guessed. Attention routing and
-notifications on top of it.
 
 ### done
 
@@ -71,9 +66,6 @@ notifications on top of it.
 `##########` 100% · 6 of 6 done · due 2026-12-01
 
 The rest of namesync, natively. The port took the policy — when a name should
-change — and left everything around it: the tokens a name is made of, the
-templates that arrange them, the locks that protect a hand-written one, and the
-second source that is consulted when a title says nothing.
 
 ### done
 
@@ -89,8 +81,6 @@ second source that is consulted when a title says nothing.
 `##########` 100% · 7 of 7 done · due 2027-01-15
 
 A daemon, detach and reattach, persistence across restarts, and a socket API
-with a CLI so an agent inside a pane can drive dirk. The milestone that lets
-dirk replace herdr rather than sit beside it.
 
 ### done
 
@@ -104,11 +94,9 @@ dirk replace herdr rather than sit beside it.
 
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`######····` 52% · 11 of 21 done · due 2027-02-15
+`#######···` 62% · 13 of 21 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
-and configurable keys. The unglamorous half, and the half that decides whether
-this is usable all day.
 
 ### backlog
 
@@ -117,16 +105,19 @@ this is usable all day.
 - [ ] `0040` Search the scrollback <sup>feature · p1 · mux</sup>
 - [ ] `0041` Tabs: the level between a space and its panes <sup>feature · p1 · mux</sup>
 - [ ] `0042` Command palette <sup>feature · p1 · nav</sup>
-- [ ] `0043` Pane zoom, move and swap <sup>feature · p2 · mux</sup>
 - [ ] `0044` Create and manage worktrees from the nav <sup>feature · p1 · git</sup>
 - [ ] `0060` A view per client, rather than one client at a time <sup>feature · p2 · server</sup>
-- [ ] `0063` Nothing removes a socket its server has left behind <sup>feature · p3 · server</sup>
-- [ ] `0064` Tests leave a session running when they fail <sup>bug · p2 · server</sup>
+
+### in progress
+
+- [ ] `0043` Pane zoom, move and swap <sup>feature · p2 · mux</sup>
 
 ### done
 
 - [x] `0061` agent start: launch an agent, not just recognise one <sup>feature · p1 · agents</sup>
 - [x] `0062` A CLI answer through a closed pipe should not panic <sup>bug · p1 · server</sup>
+- [x] `0063` Nothing removes a socket its server has left behind <sup>feature · p3 · server</sup>
+- [x] `0064` Tests leave a session running when they fail <sup>bug · p2 · server</sup>
 - [x] `0065` Detach, and two exits that say which is which <sup>bug · p0 · nav</sup>
 - [x] `0066` One glyph table, with cell widths <sup>feature · p1 · chrome</sup>
 - [x] `0067` Harnesses are configuration, not a table in agent.rs <sup>feature · p1 · agents</sup>
@@ -142,7 +133,6 @@ this is usable all day.
 `··········` 0% · 0 of 8 done · due 2027-04-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
-to depend on.
 
 ### backlog
 

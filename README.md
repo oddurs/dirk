@@ -559,6 +559,8 @@ found out by getting it wrong.
 ```console
 $ dirk session list          # every session, and whether anyone is watching
 $ dirk session reload        # re-read config.toml without restarting
+$ dirk session quit          # end one without going and standing in it
+$ dirk session prune         # remove sockets nothing is listening on
 ```
 
 A reload keeps what is running. An open layout keeps its panes — rebuilding a
