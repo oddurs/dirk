@@ -2,8 +2,9 @@
 id: 20
 title: 'Two-line rows: identity above, intent below'
 type: feature
-status: planned
+status: done
 milestone: v0.2
+assignee: oddurs
 depends_on:
 - 10
 created: 2026-09-06
@@ -36,8 +37,8 @@ branch belongs with the intent because together they say what this checkout is
 for; on the identity line it would compete with the project name.
 
 ## Acceptance criteria
-- [ ] Identity and intent on separate lines, with the second indented and dim
-- [ ] Worktrees marked distinctly from ordinary checkouts
-- [ ] Both lines elide independently, at the point they are read
-- [ ] Clicking either line selects the workspace
-- [ ] A row with no intent yet draws one line, not a blank second one
+- [x] Identity and intent on separate lines, with the second indented and dim
+- [x] Worktrees marked distinctly from ordinary checkouts
+- [x] Both lines elide independently, at the point they are read
+- [x] Clicking either line selects the workspace
+- [x] A row with no intent yet draws one line, not a blank second one

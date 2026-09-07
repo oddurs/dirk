@@ -36,13 +36,22 @@ pub enum Target {
         p: usize,
         w: usize,
     },
-    /// One pane inside the focused workspace.
+    /// One pane inside the focused workspace, by draw order.
     Pane {
+        index: usize,
+    },
+    /// A pane reached from the nav, which may be in a workspace that is not
+    /// focused yet.
+    NavPane {
+        p: usize,
+        w: usize,
         index: usize,
     },
     NewWorkspace(usize),
     OpenProject,
     PickerRow(usize),
+    /// The agents list is the only one whose order is a choice.
+    SortAgents,
 }
 
 #[derive(Default)]

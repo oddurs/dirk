@@ -130,6 +130,8 @@ pub struct Config {
     pub layouts: Vec<LayoutDef>,
     /// Empty means `$SHELL`.
     pub shell: String,
+    /// Wide enough for two-line rows: a name, an age beside it, and a branch
+    /// under it. 28 was right when a row was a glyph and a word.
     pub sidebar_width: u16,
     pub scrollback: usize,
     pub naming: Naming,
@@ -163,7 +165,7 @@ impl Default for Config {
             projects_root: home().join("Code"),
             layouts: default_layouts(),
             shell: String::new(),
-            sidebar_width: 28,
+            sidebar_width: 34,
             scrollback: 5000,
             naming: Naming::default(),
         }

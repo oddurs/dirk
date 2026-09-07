@@ -100,7 +100,7 @@ names and leaves the rest alone.
 
 ```toml
 projects_root = "~/Code"     # where `o` looks
-sidebar_width = 28
+sidebar_width = 34
 scrollback    = 5000
 shell         = ""           # empty means $SHELL
 
