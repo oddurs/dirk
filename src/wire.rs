@@ -65,6 +65,12 @@ pub enum Kind {
     /// it keeps the wire from becoming a way to ask the other end to run a
     /// command of the sender's choosing.
     Alert = 7,
+    /// Text for the clipboard of whichever machine the human is at.
+    ///
+    /// The same argument as `Alert`: the session knows *what* was selected and
+    /// the client is the end with a clipboard. Running `pbcopy` in the server
+    /// would put a remote session's selection on the build box.
+    Clip = 8,
 }
 
 impl Kind {
@@ -77,6 +83,7 @@ impl Kind {
             5 => Kind::Command,
             6 => Kind::Reply,
             7 => Kind::Alert,
+            8 => Kind::Clip,
             _ => return None,
         })
     }

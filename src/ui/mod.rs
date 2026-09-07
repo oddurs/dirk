@@ -17,6 +17,7 @@
 
 //! The chrome: everything dirk draws that is not a pane.
 
+pub mod found;
 pub mod nav;
 pub mod pane;
 pub mod picker;

@@ -77,6 +77,13 @@ pub struct Pane {
     /// Unique among live agents, because a name is how one is addressed. It
     /// follows the agent rather than the pane, and goes when it does.
     pub agent_name: Option<String>,
+    /// How far back in the scrollback this pane is being read.
+    ///
+    /// Zero is the live screen. Kept here rather than only in vt100 because it
+    /// decides whether the pane says it is not at the bottom, and because it
+    /// has to be put back to zero when new output arrives -- a pane you scrolled
+    /// away from and then typed into should show you what you typed.
+    pub scroll: usize,
     /// When this pane last produced output.
     ///
     /// Per pane, not per workspace: a workspace holding an agent beside a
@@ -188,6 +195,7 @@ impl Pane {
             closing: false,
             occupant: crate::agent::Occupant::default(),
             agent_name: None,
+            scroll: 0,
             touched: std::time::Instant::now(),
             writer,
             master,

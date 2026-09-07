@@ -40,6 +40,12 @@ use ratatui::layout::Rect;
 /// What the rail should say right now, as opposed to what it always says.
 pub struct Now<'a> {
     pub clock: &'a str,
+    /// How far back the focused pane is being read. Zero is the live screen.
+    ///
+    /// Its own field rather than folded into the note: a note is transient and
+    /// this is a state you can sit in for a minute, and a pane being read from
+    /// the past looks exactly like a program that has stopped.
+    pub scrolled: usize,
     /// A transient note, or the prefix indicator. Empty most of the time.
     pub note: &'a str,
     /// The quit button has been clicked once and is waiting for the second.
@@ -58,6 +64,7 @@ pub fn render(
     let Now {
         clock,
         note: status,
+        scrolled,
         quit_armed: armed,
     } = *now;
     fill(buf, area, THEME.rail());
@@ -150,6 +157,9 @@ pub fn render(
         if !status.is_empty() {
             parts.push(status.to_string());
         }
+        if scrolled > 0 {
+            parts.push(format!("{scrolled} back"));
+        }
         let n = session
             .projects
             .iter()
@@ -159,11 +169,14 @@ pub fn render(
         parts.push(clock.to_string());
         parts.join(&format!("  {}  ", g.text(G::Sep)))
     };
+    // Elided to what is left after the brand rather than dropped. Saturating
+    // put it at column zero on top of the brand; dropping it took the clock and
+    // the counts with it, which is worse than a shortened note.
+    let room = detach_x.saturating_sub(x + 2);
+    let right = elide(&right, room as usize, g.text(G::Ellipsis));
     let right_w = cells(&right);
-    // Only if it fits after the brand. Saturating put it at column zero, on top
-    // of the brand, which is worse than leaving it out.
     let mut right_x = detach_x.saturating_sub(right_w + 1);
-    if right_x > x + 1 {
+    if right_w > 0 {
         write_str(
             buf,
             right_x,

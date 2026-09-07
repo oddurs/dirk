@@ -478,6 +478,17 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
                     crate::sound::play(&cfg.sound, which);
                 }
             }
+            // Both ways, because neither reaches every terminal. The command
+            // is the machine this client is running on; the escape sequence
+            // asks the terminal, which is the one that crosses ssh.
+            Kind::Clip => {
+                let Ok(text) = serde_json::from_slice::<String>(&body) else {
+                    continue;
+                };
+                out.write_all(&crate::clipboard::osc52(&text))?;
+                out.flush()?;
+                crate::clipboard::put(&config().clipboard, &text);
+            }
             Kind::Bye => {
                 let why: String = serde_json::from_slice(&body).unwrap_or_default();
                 restore();
