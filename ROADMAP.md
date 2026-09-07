@@ -66,6 +66,24 @@ notifications on top of it.
 - [x] `0051` An agent run under an interpreter reports as the interpreter <sup>bug · p1 · agents</sup>
 - [x] `0052` Naming should hold off while an agent is blocked <sup>feature · p1 · naming</sup>
 
+## v0.3.1 — Naming, in full
+
+`##########` 100% · 6 of 6 done · due 2026-12-01
+
+The rest of namesync, natively. The port took the policy — when a name should
+change — and left everything around it: the tokens a name is made of, the
+templates that arrange them, the locks that protect a hand-written one, and the
+second source that is consulted when a title says nothing.
+
+### done
+
+- [x] `0054` Tokens: what a name is made of <sup>feature · p0 · naming</sup>
+- [x] `0055` Templates: how a name is arranged <sup>feature · p0 · naming</sup>
+- [x] `0056` Locks: a name you wrote is yours <sup>feature · p1 · naming</sup>
+- [x] `0057` The rest of the naming configuration <sup>feature · p1 · naming</sup>
+- [x] `0058` Stale: an agent that has stopped saying anything new <sup>feature · p2 · naming</sup>
+- [x] `0059` The LLM source: a second opinion when the title says nothing <sup>feature · p0 · naming</sup>
+
 ## v0.4 — Sessions that outlive their terminal
 
 `··········` 0% · 0 of 7 done · due 2027-01-15

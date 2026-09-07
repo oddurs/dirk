@@ -38,6 +38,11 @@ pub enum Ev {
     Exited(PaneId),
     /// A sample of what is running in each pane finished.
     Agents(crate::agent::Reading),
+    /// A second-source intent arrived for a pane whose title said nothing.
+    Suggested {
+        pane: PaneId,
+        intent: String,
+    },
     /// A git read finished. Answered by path rather than by index, because a
     /// project can be closed while its answer is still in flight.
     Git(crate::git::Answer),

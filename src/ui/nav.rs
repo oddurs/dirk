@@ -935,13 +935,18 @@ fn space_row(
     };
     // The name gets what is left after the age, plus a space so the two never
     // touch, plus the worktree mark when there is one.
-    let mark = if worktree { 2 } else { 0 };
+    let mark = if worktree { 2 } else { 0 } + if ws.naming.held { 2 } else { 0 };
     let left = w
         .saturating_sub(x - inner.x)
         .saturating_sub(age_w + 1 + mark) as usize;
     x += write_str(buf, x, y, &elide(&ws.label, left), style, w);
     if worktree {
-        write_str(buf, x + 1, y, "⑂", THEME.worktree(), w);
+        x += write_str(buf, x + 1, y, "⑂", THEME.worktree(), w) + 1;
+    }
+    // A held name is one dirk has stood down from. Worth saying, because the
+    // alternative is a workspace that mysteriously stops being renamed.
+    if ws.naming.held {
+        write_str(buf, x + 1, y, "·", THEME.faint(), w);
     }
 }
 

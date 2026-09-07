@@ -162,15 +162,166 @@ impl Default for Notify {
     }
 }
 
-/// The namesync policy, as knobs.
+/// The naming policy, as knobs.
+///
+/// Every default is what the policy did before it was configurable, so a file
+/// that sets none of these changes nothing.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Naming {
     pub enabled: bool,
-    /// How long a title must hold still before it is committed as a name.
+    /// How long a title must hold still before it is committed.
     pub debounce_ms: u64,
-    /// Floor on how often one workspace may be renamed.
+    /// Floor between two renames of one workspace.
     pub min_interval_ms: u64,
+    /// Token overlap above which a new intent is "the same thing, reworded".
+    pub similarity_threshold: f32,
+    /// Never overwrite a name a human set. This is what stops the policy
+    /// fighting you.
+    pub respect_manual_names: bool,
+    /// A blocked agent's title describes the dialog, not the work.
+    pub skip_while_blocked: bool,
+    /// Drop a leading project name, so a row under `ptop` does not read
+    /// `ptop-adopt-remaining-lessons`.
+    pub strip_project_prefix: bool,
+    /// Titles that are programs rather than intents. Compared case-insensitively
+    /// against the whole title.
+    pub ignore_titles: Vec<String>,
+    /// Mark an agent that has stopped revising its title. A signal for a
+    /// human, never acted on.
+    pub show_stale: bool,
+    /// How many state transitions with no new intent count as stale.
+    pub stale_after_turns: u32,
+    pub targets: Targets,
+    pub templates: Templates,
+    pub sources: Sources,
+}
+
+/// Where an intent can come from.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Sources {
+    pub llm: Llm,
+}
+
+/// A second source, for panes whose title says nothing.
+///
+/// Off unless asked for. The primary source is the agent's own terminal title,
+/// which costs nothing and needs no key; this exists for the case that has no
+/// title at all.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Llm {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub model: String,
+    /// The *name* of the variable holding the key, never the key. A
+    /// configuration file is a thing people paste into issues.
+    pub api_key_env: String,
+    pub timeout_ms: u64,
+    /// How much of the screen to send, in characters.
+    pub max_chars: usize,
+    /// How many lines of the pane count as "the screen".
+    pub viewport_lines: u16,
+    /// Floor between two questions about one workspace. A naming call per turn
+    /// per workspace, all day, for a caption, is not a trade anyone would make
+    /// on purpose.
+    pub interval_ms: u64,
+}
+
+impl Default for Llm {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "https://api.anthropic.com/v1/messages".into(),
+            model: "claude-opus-5".into(),
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            // Generous: this is a non-streaming request to a model that thinks
+            // before it answers, and a timeout is indistinguishable from "no
+            // candidate" -- so one set too tight makes the feature quietly
+            // never work.
+            timeout_ms: 30_000,
+            max_chars: 4_000,
+            viewport_lines: 60,
+            interval_ms: 600_000,
+        }
+    }
+}
+
+/// What naming is allowed to name.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Targets {
+    pub workspace: bool,
+    pub agent: bool,
+}
+
+impl Default for Targets {
+    fn default() -> Self {
+        Self {
+            workspace: true,
+            agent: true,
+        }
+    }
+}
+
+/// How each name is arranged, over the tokens in `tokens.rs`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Templates {
+    pub workspace: String,
+    pub agent: String,
+}
+
+impl Default for Templates {
+    fn default() -> Self {
+        Self {
+            workspace: "{intent}".into(),
+            agent: "{intent-slug}".into(),
+        }
+    }
+}
+
+/// Programs that show their own name as a terminal title. Without this list
+/// they arrive as intents and become workspace labels.
+fn default_ignore_titles() -> Vec<String> {
+    [
+        "claude",
+        "claude code",
+        "codex",
+        "pi",
+        "copilot",
+        "cursor",
+        "droid",
+        "aider",
+        "goose",
+        "bash",
+        "zsh",
+        "fish",
+        "sh",
+        "nu",
+        "pwsh",
+        "powershell",
+        "nvim",
+        "vim",
+        "nano",
+        "helix",
+        "hx",
+        "emacs",
+        "less",
+        "man",
+        "node",
+        "python",
+        "irb",
+        "psql",
+        "lazygit",
+        "htop",
+        "top",
+        "btop",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 impl Default for Naming {
@@ -179,6 +330,16 @@ impl Default for Naming {
             enabled: true,
             debounce_ms: 1200,
             min_interval_ms: 15_000,
+            similarity_threshold: 0.6,
+            respect_manual_names: true,
+            skip_while_blocked: true,
+            strip_project_prefix: true,
+            ignore_titles: default_ignore_titles(),
+            show_stale: true,
+            stale_after_turns: 6,
+            targets: Targets::default(),
+            templates: Templates::default(),
+            sources: Sources::default(),
         }
     }
 }
@@ -296,6 +457,17 @@ impl Config {
                     l.name,
                     l.key.unwrap_or(' ')
                 );
+            }
+        }
+        // Reported before the terminal is taken over, where it can be read. A
+        // mistyped token renders as silence otherwise: a label simply shorter
+        // than intended, with nothing to say why.
+        for (what, template) in [
+            ("workspace", &cfg.naming.templates.workspace),
+            ("agent", &cfg.naming.templates.agent),
+        ] {
+            for token in crate::tokens::unknown(template) {
+                eprintln!("dirk: {what} template: no such token {{{token}}}");
             }
         }
         cfg.layouts.retain(|l| l.runnable());

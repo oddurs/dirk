@@ -93,6 +93,7 @@ literal one through.
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
 | `1` `2` `3` | jump to a page |
 | `d` | hide the nav |
+| `u` | release a held name, so naming may claim the workspace again |
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `q` | quit |
@@ -151,14 +152,65 @@ split = "rows"
     size    = "30%"
 
 [naming]
-enabled          = true
-debounce_ms      = 1200      # how long a title must hold still
-min_interval_ms  = 15000     # floor between two renames of one workspace
+enabled              = true
+debounce_ms          = 1200   # how long a title must hold still
+min_interval_ms      = 15000  # floor between two renames of one workspace
+similarity_threshold = 0.6    # above this, a new title is the same thing reworded
+respect_manual_names = true   # never overwrite a name you wrote
+skip_while_blocked   = true   # a blocked agent's title is the question, not the work
+strip_project_prefix = true   # "ptop-adopt-lessons" under "ptop" reads "Adopt-lessons"
+# Titles that are programs rather than intents. Ships with a list; setting this
+# replaces it.
+ignore_titles        = ["nvim", "lazygit", "claude", "htop"]
+show_stale           = true   # mark an agent that has stopped saying anything new
+stale_after_turns    = 6      # counted in state changes, not in minutes
+
+# A second source of intent, for panes whose title says nothing. Off unless
+# asked for. The name of the variable holding your key, never the key.
+[naming.sources.llm]
+enabled        = false
+endpoint       = "https://api.anthropic.com/v1/messages"
+model          = "claude-opus-5"
+api_key_env    = "ANTHROPIC_API_KEY"
+timeout_ms     = 8000
+max_chars      = 4000    # how much of the screen to send
+viewport_lines = 60
+interval_ms    = 600000  # floor between two questions about one workspace
+
+[naming.targets]
+workspace = true
+agent     = true
+
+# A name is a template over the tokens below. An absent token leaves no gap.
+[naming.templates]
+workspace = "{intent}"
+agent     = "{intent-slug}"
 
 [notify]
 enabled          = true
 min_interval_ms  = 60000     # floor between two interruptions about one space
 ```
+
+### The tokens a name is made of
+
+| | |
+| --- | --- |
+| `project` `branch` `worktree` | which checkout this is |
+| `n` | the workspace's number — display, not identity |
+| `intent` `intent-slug` | what the agent says it is doing |
+| `agent` `agents` | the kind, and a count when there is more than one |
+| `since` | how long in the **current state** — who has been blocked longest |
+| `age` | how long on the **current intent** — what has been grinding all day |
+| `locked` `stale` | flags, present as a word or absent entirely |
+
+`since` and `age` are different clocks and confusing them makes both useless. An
+agent that has started and finished six times is still working on one task, and
+`age` is the number that says so.
+
+A token that is not known is *absent*, not empty, so `"{project} {worktree}
+{branch}"` renders `dirk main` rather than `dirk  main`. A template naming a
+token that does not exist is reported at startup rather than rendering as
+silence.
 
 ## Naming, in detail
 
@@ -169,13 +221,41 @@ state store and sinks all disappear. The policy is unchanged:
 
 | Rule | Behaviour |
 | --- | --- |
-| Hand-written names win | If a label is not the one dirk last wrote, a human wrote it. Never touched again. |
+| Hand-written names win | If a label is not the one dirk last wrote, a human wrote it. The hold is recorded, marked in the nav, and released with `u`. |
+| Clearing a name hands it back | An empty label is not a name — it is the clearest statement that the last one was unwanted, so it releases the hold rather than freezing the workspace blank. |
 | Defaults are adoptable | `w3`, `tab 2`, the bare repo name — nobody chose these, so they get claimed. |
 | Rewordings are not new intent | "naming plugin" → "naming plugins" scores 1.0 on stemmed token overlap and is skipped. |
 | Settle before committing | Titles churn early in a turn; a rename waits for the intent to hold still. |
 | One rename per workspace per interval | So a fast session cannot strobe the sidebar. |
-| Junk is never a name | Shell prompts, bare paths, echoed commands and the plain repo name are rejected. |
+| Junk is never a name | Shell prompts, bare paths, echoed commands, the plain repo name, and anything in `ignore_titles` are rejected. |
 | No guessing across agents | A workspace holding two panes has no single intent. |
+
+### The second source
+
+Naming reads the agent's own terminal title. That is the right primary source —
+the work is already done, it costs nothing, and it needs no key — and it fails in
+exactly one way: a pane where nothing publishes a title has no intent at all,
+and its workspace keeps its project name for ever.
+
+`[naming.sources.llm]` covers that case, and is off unless you ask for it. When
+it is on, dirk sends the tail of such a pane's screen and asks for a phrase.
+
+**The model is a source, not a decider.** The phrase it returns is a *candidate
+intent*, and it then goes through precisely the policy every title goes through:
+junk rejection, the hand-written-name lock, the debounce, the similarity check,
+the rate limit. Nothing about *when* a name changes moves into the model.
+
+That is what lets this exist without contradicting the argument the project
+started from. The claim was never that models are bad at naming — it was that
+generating a name is the part already solved, and deciding when to use one is
+the part that is not.
+
+It is asked only about panes with no title, no more often than
+`interval_ms`, and never on the drawing thread. Every failure — no key, no
+`curl`, a timeout, a malformed answer — leaves naming exactly where it was
+without it. Your key is read from the environment; the configuration file holds
+only the *name* of the variable, because a configuration file is a thing people
+paste into issues.
 
 ## Build
 

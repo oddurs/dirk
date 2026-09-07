@@ -47,10 +47,12 @@ mod config;
 mod git;
 mod hit;
 mod keys;
+mod llm;
 mod mux;
 mod name;
 mod notify;
 mod theme;
+mod tokens;
 mod ui;
 
 use config::Config;
@@ -305,13 +307,15 @@ impl App {
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
             Ev::Output(id) => {
                 self.session.touch(id);
+                self.session.track_intents(&self.cfg.naming);
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
+            Ev::Suggested { pane, intent } => self.session.apply_suggestion(pane, intent),
             Ev::Agents(reading) => {
                 self.sampling = false;
                 self.session.apply_agents(reading);
-                self.session.name_agents();
+                self.session.name_agents(&self.cfg.naming);
             }
             Ev::Exited(id) => {
                 self.session.reap(id);
@@ -320,6 +324,8 @@ impl App {
             Ev::Tick => {
                 self.read_agents();
                 self.read_repos();
+                self.session.track_intents(&self.cfg.naming);
+                self.ask_for_intents();
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)
@@ -366,6 +372,27 @@ impl App {
                 format!("{} {what}", change.label),
                 self.cfg.brand.name.clone(),
             );
+        }
+    }
+
+    /// Ask the second source about panes whose title says nothing.
+    ///
+    /// Off the drawing thread like every other external call, and the answer
+    /// arrives as an event. A request that hangs must not be able to stop dirk
+    /// redrawing, which is the whole reason for the shape.
+    fn ask_for_intents(&mut self) {
+        let cfg = &self.cfg.naming.sources.llm;
+        if !self.cfg.naming.enabled || !cfg.enabled {
+            return;
+        }
+        for (pane, screen) in self.session.wants_intent(cfg, Instant::now()) {
+            let cfg = cfg.clone();
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                if let Some(intent) = crate::llm::suggest(&cfg, &screen) {
+                    let _ = tx.send(Ev::Suggested { pane, intent });
+                }
+            });
         }
     }
 
@@ -439,13 +466,22 @@ impl App {
                 .unwrap_or_default();
             for w in 0..self.session.projects[p].workspaces.len() {
                 let ws = &self.session.projects[p].workspaces[w];
-                let title = ws.active_pane().and_then(|x| x.title());
+                // The title first, always. The second source is for the pane
+                // that has none, and its candidate goes through this same
+                // policy with no exemptions.
+                let title = ws
+                    .active_pane()
+                    .and_then(|x| x.title())
+                    .or_else(|| ws.suggested.clone());
                 let panes = ws.panes.len();
                 let current = ws.label.clone();
                 let blocked = ws.state == agent::State::Blocked;
 
                 let ws = &mut self.session.projects[p].workspaces[w];
-                if let name::Decision::Rename(label) = name::decide(
+                if !self.cfg.naming.targets.workspace {
+                    continue;
+                }
+                if let name::Decision::Rename(intent) = name::decide(
                     &self.cfg.naming,
                     &mut ws.naming,
                     &current,
@@ -456,6 +492,20 @@ impl App {
                     blocked,
                     now,
                 ) {
+                    // The decision is what the intent should be; the template
+                    // is how it is arranged. Rendered after, so the policy
+                    // compares intents with intents rather than with whatever
+                    // a template happened to produce.
+                    let mut tokens = self.session.tokens(p, w);
+                    tokens.set("intent", intent.clone());
+                    tokens.set("intent-slug", name::slugify(&intent, name::AGENT_NAME_MAX));
+                    let label = tokens::render(&self.cfg.naming.templates.workspace, &tokens);
+                    let ws = &mut self.session.projects[p].workspaces[w];
+                    let label = if label.is_empty() { intent } else { label };
+                    // Recorded as written, so "did a human change this" compares
+                    // the live label against the label rather than against the
+                    // intent it was rendered from.
+                    ws.naming.applied = Some(label.clone());
                     ws.label = label;
                 }
             }
@@ -774,6 +824,13 @@ impl App {
             }
             KeyCode::Char('o') => self.open_picker(),
             KeyCode::Char('x') => self.session.close_focused(),
+            KeyCode::Char('u') => {
+                if self.session.release_hold() {
+                    self.note("naming released");
+                } else {
+                    self.note("not held");
+                }
+            }
             KeyCode::Char('r') => {
                 if !self.session.restart_focused(self.content) {
                     self.note("nothing to restart");

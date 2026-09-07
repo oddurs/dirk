@@ -199,6 +199,16 @@ waiting on a human — is shown rather than guessed. Attention routing and
 notifications on top of it."""
 
 [[milestone]]
+name = "v0.3.1"
+title = "Naming, in full"
+due = "2026-12-01"
+description = """
+The rest of namesync, natively. The port took the policy — when a name should
+change — and left everything around it: the tokens a name is made of, the
+templates that arrange them, the locks that protect a hand-written one, and the
+second source that is consulted when a title says nothing."""
+
+[[milestone]]
 name = "v0.4"
 title = "Sessions that outlive their terminal"
 due = "2027-01-15"

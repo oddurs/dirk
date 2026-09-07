@@ -48,9 +48,25 @@ pub struct NameState {
     /// The title currently settling, and when it first appeared.
     pub pending: Option<(String, Instant)>,
     pub last_rename: Option<Instant>,
-    /// The last label dirk itself wrote. If the label differs from this, a
-    /// human renamed it and dirk must not touch it again.
+    /// The last label dirk itself wrote — the rendered one, not the intent it
+    /// came from. If the live label differs from this, a human changed it.
+    ///
+    /// It has to be the rendered label: with a template, the intent and the
+    /// label are different strings, and comparing the label against the intent
+    /// makes every workspace look hand-written the moment it is named.
     pub applied: Option<String>,
+    /// The last intent dirk named from.
+    ///
+    /// Separate from `applied` for the same reason: "has the intent changed" and
+    /// "did a human edit this label" are different questions, and with a
+    /// template they have different answers.
+    pub last_intent: Option<String>,
+    /// A human named this one and dirk has stood down.
+    ///
+    /// Held explicitly rather than worked out afresh each pass, so it can be
+    /// shown in the interface and taken back. An inferred hold is one nobody
+    /// can see or release.
+    pub held: bool,
 }
 
 pub struct Workspace {
@@ -70,6 +86,28 @@ pub struct Workspace {
     /// `done` is a state that pushes no further change — so the second
     /// notification was not delayed, it was lost.
     pub notified: Option<(crate::agent::State, Instant)>,
+    /// When the state last changed. `since` is measured from here, and answers
+    /// "who has been blocked longest".
+    pub state_since: Instant,
+    /// When the intent last changed. `age` is measured from here, and answers
+    /// "what has been grinding on the same thing all day". A workspace that has
+    /// started and finished six times is still on one task, and this is the
+    /// clock that says so.
+    pub intent_since: Instant,
+    /// The intent the clock above is measuring.
+    pub intent: Option<String>,
+    /// An intent from the second source, used only when the title has none.
+    /// It enters the policy through the same door a title does.
+    pub suggested: Option<String>,
+    /// When the second source was last asked about this workspace.
+    pub asked: Option<Instant>,
+    /// State transitions since the intent last changed.
+    ///
+    /// Counted in transitions rather than in wall-clock time: an agent that has
+    /// started and finished six times without revising what it says it is doing
+    /// has either finished or is stuck, and how long that took is not the
+    /// signal.
+    pub turns: u32,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -168,6 +206,8 @@ pub struct Session {
     /// into the slot — exactly what "exactly where you were" promised not to do.
     previous: Option<PaneId>,
     pub shell: String,
+    /// Transitions with no new intent that count as stale. Zero is off.
+    stale_after: u32,
     scrollback: usize,
     next_id: u64,
     tx: Sender<Ev>,
@@ -186,6 +226,11 @@ impl Session {
             focus: Focus::Ws { p: 0, w: 0 },
             previous: None,
             shell: cfg.shell(),
+            stale_after: if cfg.naming.show_stale {
+                cfg.naming.stale_after_turns
+            } else {
+                0
+            },
             scrollback: cfg.scrollback,
             next_id: 1,
             tx,
@@ -237,6 +282,12 @@ impl Session {
             state: crate::agent::State::None,
             seen: true,
             notified: None,
+            state_since: Instant::now(),
+            intent_since: Instant::now(),
+            intent: None,
+            suggested: None,
+            asked: None,
+            turns: 0,
             touched: Instant::now(),
             expanded: false,
             panes: vec![pane],
@@ -406,6 +457,12 @@ impl Session {
                 state: crate::agent::State::None,
                 seen: true,
                 notified: None,
+                state_since: Instant::now(),
+                intent_since: Instant::now(),
+                intent: None,
+                suggested: None,
+                asked: None,
+                turns: 0,
                 touched: Instant::now(),
                 expanded: false,
                 panes,
@@ -652,6 +709,16 @@ pub struct Change {
     pub focused: bool,
 }
 
+/// The last `lines` of a pane's screen, as text.
+fn viewport(pane: &Pane, lines: u16) -> Option<String> {
+    let term = pane.term.lock().ok()?;
+    let screen = term.screen();
+    let (rows, cols) = screen.size();
+    let last = rows.saturating_sub(1);
+    let from = last.saturating_sub(lines);
+    Some(screen.contents_between(from, 0, last, cols))
+}
+
 /// An agent that has been quiet for this long has stopped.
 ///
 /// One that is thinking redraws its spinner continuously, so silence is the
@@ -836,13 +903,183 @@ impl Session {
         changes
     }
 
+    /// Note the intent a workspace's agent is publishing, so `age` can measure
+    /// how long it has been the same one.
+    pub fn track_intents(&mut self, cfg: &crate::config::Naming) {
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                let title = ws.active_pane().and_then(|p| p.title());
+                let now = crate::name::normalize(title.as_deref().unwrap_or_default());
+                // A title the policy would reject is not an intent. Without
+                // this, a pane whose title is a shell prompt or the agent's own
+                // name counts as having one -- and those are exactly the panes
+                // the second source exists for, so they would never be asked
+                // about and would keep their project name for ever.
+                let now = (!now.is_empty()
+                    && !crate::name::is_junk(&now, &proj.name, &cfg.ignore_titles))
+                .then_some(now);
+                if now != ws.intent {
+                    // Only when it actually changed. A title republished
+                    // unchanged is the same intent, and `age` is what says how
+                    // long that has been true.
+                    ws.intent_since = Instant::now();
+                    ws.intent = now;
+                    ws.turns = 0;
+                }
+            }
+        }
+    }
+
+    /// Workspaces whose title says nothing, with what is on their screen.
+    ///
+    /// Only panes holding an agent, only when there is no title to work from,
+    /// and only past the floor between questions — the second source exists for
+    /// the case the first cannot cover, not as a second opinion on it.
+    pub fn wants_intent(
+        &mut self,
+        cfg: &crate::config::Llm,
+        now: Instant,
+    ) -> Vec<(PaneId, String)> {
+        let floor = Duration::from_millis(cfg.interval_ms);
+        let mut out = Vec::new();
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if ws.intent.is_some() {
+                    continue;
+                }
+                // A workspace holding two agents has no single intent, so the
+                // policy will refuse whatever comes back. Asking would be paid
+                // for and discarded.
+                if ws.panes.len() > 1 {
+                    continue;
+                }
+                if ws.asked.is_some_and(|t| now.duration_since(t) < floor) {
+                    continue;
+                }
+                // Read and released before the workspace is written to.
+                let asked = match ws.active_pane() {
+                    Some(pane) if pane.occupant.agent().is_some() && !pane.dead => {
+                        viewport(pane, cfg.viewport_lines)
+                            .filter(|s| !s.trim().is_empty())
+                            .map(|screen| (pane.id, screen))
+                    }
+                    _ => None,
+                };
+                let Some(asked) = asked else { continue };
+                // Marked before the answer arrives, or every tick would
+                // start another question about the same workspace.
+                ws.asked = Some(now);
+                out.push(asked);
+            }
+        }
+        out
+    }
+
+    pub fn apply_suggestion(&mut self, pane: PaneId, intent: String) {
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if ws.panes.iter().any(|p| p.id == pane) {
+                    ws.suggested = Some(intent);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Everything a name can be made of, for one workspace.
+    pub fn tokens(&self, p: usize, w: usize) -> crate::tokens::Tokens {
+        use crate::tokens::Tokens;
+        let mut t = Tokens::default();
+        let Some(proj) = self.projects.get(p) else {
+            return t;
+        };
+        let Some(ws) = proj.workspaces.get(w) else {
+            return t;
+        };
+
+        t.set("project", proj.name.clone());
+        if let Some(repo) = &proj.repo {
+            t.set("branch", repo.branch.clone());
+            t.flag("worktree", "worktree", repo.worktree);
+        }
+
+        // Positional, and it changes when spaces are reordered -- display
+        // rather than identity.
+        let n = self.flat().iter().position(|&x| x == (p, w)).map(|i| i + 1);
+        if let Some(n) = n {
+            t.set("n", n.to_string());
+        }
+
+        if let Some(intent) = &ws.intent {
+            t.set("intent", intent.clone());
+            t.set(
+                "intent-slug",
+                crate::name::slugify(intent, crate::name::AGENT_NAME_MAX),
+            );
+        }
+
+        // Two clocks. `since` restarts on every state change; `age` only when
+        // the intent does.
+        t.set("since", since(ws.state_since.elapsed()));
+        t.set("age", since(ws.intent_since.elapsed()));
+
+        if let Some(pane) = ws.active_pane()
+            && let Some(kind) = pane.occupant.agent()
+        {
+            t.set("agent", kind.name);
+        }
+        let agents = ws
+            .panes
+            .iter()
+            .filter(|p| p.occupant.agent().is_some())
+            .count();
+        if agents > 1 {
+            t.set("agents", agents.to_string());
+        }
+
+        t.flag("locked", "held", ws.naming.held);
+        t.flag("stale", "stale", self.is_stale(ws));
+        t
+    }
+
+    /// Has this agent stopped saying anything new?
+    ///
+    /// A signal for a human and never acted on: nothing is renamed, skipped or
+    /// notified because of it.
+    pub fn is_stale(&self, ws: &Workspace) -> bool {
+        self.stale_after > 0 && ws.intent.is_some() && ws.turns >= self.stale_after
+    }
+
+    /// Release the hold on the focused workspace, so naming may claim it again.
+    ///
+    /// Reachable without knowing a command, because a hold nobody can release
+    /// is a workspace stuck with a name for ever.
+    pub fn release_hold(&mut self) -> bool {
+        let Some(ws) = self.focused_workspace_mut() else {
+            return false;
+        };
+        if !ws.naming.held {
+            return false;
+        }
+        ws.naming.held = false;
+        // Adopted, not forgotten. Clearing this makes the very next pass see a
+        // label dirk did not write and take the hold straight back -- so `u`
+        // would say "released" and release nothing.
+        ws.naming.applied = Some(ws.label.clone());
+        ws.naming.last_intent = None;
+        true
+    }
+
     /// Give every agent a name, and take it back when the agent goes.
     ///
     /// Suggested from the intent of the workspace it is in, which is the same
     /// thing its label comes from, so `dirk agent send-keys mux-core` names
     /// something you would recognise. Unique among live agents, because that is
     /// what a name is for.
-    pub fn name_agents(&mut self) {
+    pub fn name_agents(&mut self, cfg: &crate::config::Naming) {
+        if !cfg.targets.agent {
+            return;
+        }
         let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Existing names are kept, so a name does not move under an agent that
         // is still running.
@@ -979,6 +1216,18 @@ impl Session {
     }
 }
 
+/// What `apply` is about to set, so the clock can be reset before it is.
+fn next_state(observed: Observed, seen: bool) -> crate::agent::State {
+    use crate::agent::State;
+    match observed {
+        Observed::NoAgent => State::None,
+        Observed::Blocked => State::Blocked,
+        Observed::Working => State::Working,
+        Observed::Waiting if seen => State::Idle,
+        Observed::Waiting => State::Done,
+    }
+}
+
 fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
     use crate::agent::State;
 
@@ -997,6 +1246,10 @@ fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
         ws.seen = false;
     }
 
+    if ws.state != next_state(observed, ws.seen) {
+        ws.state_since = Instant::now();
+        ws.turns = ws.turns.saturating_add(1);
+    }
     ws.state = match observed {
         Observed::NoAgent => State::None,
         Observed::Blocked => State::Blocked,
@@ -1095,6 +1348,12 @@ mod tests {
             state,
             seen,
             notified: None,
+            state_since: Instant::now(),
+            intent_since: Instant::now(),
+            intent: None,
+            suggested: None,
+            asked: None,
+            turns: 0,
             touched: Instant::now(),
             panes: Vec::new(),
             tree: Node::Leaf(0),
