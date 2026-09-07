@@ -52,7 +52,9 @@ pub enum Target {
     PickerRow(usize),
     /// The agents list is the only one whose order is a choice.
     SortAgents,
-    /// The quit button at the right of the rail.
+    /// The two ways out, at the right of the rail. One parks the work and one
+    /// ends it, which is why they are two buttons and not one.
+    Detach,
     Quit,
     /// A count in the rail: go to the workspace that has been in that state
     /// longest.

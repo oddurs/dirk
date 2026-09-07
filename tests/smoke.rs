@@ -289,7 +289,7 @@ fn splitting_twice_gives_three_side_by_side_columns() {
     // The sidebar is hidden so the panes are wide enough that neither the
     // echoed command nor the marker wraps; a wrapped marker is not a layout
     // failure but would read as one.
-    h.prefix(b"d");
+    h.prefix(b"b");
 
     // Both splits before anything is written. A marker written first would be
     // written at the old width and moved by the resize that follows.
@@ -1039,6 +1039,30 @@ interval_ms = 0
             })
         }),
         "naming stopped working with the second source enabled\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_nav_hides_and_comes_back() {
+    // Guarded because this key moved: `d` used to hide the nav and now detaches,
+    // and a test that presses the wrong one and passes anyway is how that goes
+    // unnoticed.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+    assert!(h.find("spaces").is_some(), "the nav was never there");
+
+    h.prefix(b"b");
+    assert!(
+        h.wait_until(Duration::from_secs(5), |s| s.find("spaces").is_none()),
+        "the nav did not hide\n{}",
+        h.drawn()
+    );
+
+    h.prefix(b"b");
+    assert!(
+        h.wait_for("spaces", Duration::from_secs(5)),
+        "the nav did not come back\n{}",
         h.drawn()
     );
 }

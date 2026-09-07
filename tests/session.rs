@@ -880,3 +880,69 @@ fn a_link_that_keeps_failing_is_tried_less_often_and_then_not_at_all() {
     );
     drop(client);
 }
+
+#[test]
+fn detaching_leaves_everything_running() {
+    // The headline feature of 0.4 with no way to use it: `q` ended every shell
+    // and every agent, and leaving without doing that meant closing the
+    // terminal window.
+    let session = unique("detach");
+    let mut client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    // Something to come back to that is not the default.
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let id = first_id(&list);
+    let (ok, _) = ask(&session, &["workspace", "rename", &id, "Still", "running"]);
+    assert!(ok, "rename failed");
+    assert!(
+        client.wait_for("Still running", START),
+        "the rename never showed"
+    );
+
+    client.send(&[0]); // the prefix
+    client.send(b"d");
+
+    assert!(
+        client.ended(Duration::from_secs(10)).is_some(),
+        "the client did not leave\n{}",
+        client.drawn()
+    );
+    let (ok, after) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "the session went with the client: {after}");
+    assert!(
+        after.contains("Still running"),
+        "the workspace did not survive detaching: {after}"
+    );
+
+    // And it is attachable again, which is the whole point.
+    let second = Client::attach(&session);
+    assert!(
+        second.wait_for("Still running", START),
+        "could not come back to it\n{}",
+        second.drawn()
+    );
+    drop(second);
+    quit(&session);
+}
+
+#[test]
+fn the_bar_offers_both_ways_out_and_says_which_is_which() {
+    // A single glyph cannot say whether it parks your work or ends it.
+    let session = unique("exits");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let drawn = client.drawn();
+    assert!(
+        drawn.contains("detach"),
+        "no way out that keeps the work:\n{drawn}"
+    );
+    assert!(drawn.contains("quit"), "no way out that ends it:\n{drawn}");
+    drop(client);
+    quit(&session);
+}

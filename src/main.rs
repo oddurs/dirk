@@ -116,8 +116,9 @@ Options:
   -V, --version          output version information and exit
 
 dirk reads ~/.config/dirk/config.toml when it exists, and runs on built-in
-defaults when it does not.  The prefix key is Ctrl-Space; press it and then 'q'
-to quit, or Ctrl-Space again to send one through to whatever is inside.
+defaults when it does not.  The prefix key is Ctrl-Space.  Press it and then
+'d' to detach, leaving everything running, or 'q' to quit and end it.  Press
+Ctrl-Space twice to send one through to whatever is inside.
 
 Environment:
   DIRK_SSH               the program --remote reaches the far side with
@@ -1440,6 +1441,10 @@ impl App {
                     self.session.focus = at;
                 }
             }
+            Target::Detach => {
+                self.detach();
+                return;
+            }
             Target::Quit => {
                 match self.quit_armed {
                     Some(_) => self.quit = true,
@@ -1522,6 +1527,26 @@ impl App {
         }
     }
 
+    /// Leave, and let the session carry on.
+    ///
+    /// The mechanism was already here and nothing called it: the server handles
+    /// a client going away, and the client handles being told to go. This is
+    /// the second one, said on purpose rather than because a terminal closed.
+    fn detach(&mut self) {
+        if self.session_name.is_none() {
+            // `--no-session`: there is nothing behind this process to leave
+            // running, so detaching would only be quitting with a nicer word.
+            self.note("no session to detach from");
+            return;
+        }
+        match self.view.take() {
+            Some(mut view) => {
+                let _ = wire::send_json(&mut view.out, wire::Kind::Bye, &"detached");
+            }
+            None => self.note("nothing attached"),
+        }
+    }
+
     fn command(&mut self, k: KeyEvent) {
         let (rows, cols) = (self.content.height, self.content.width);
         match k.code {
@@ -1532,6 +1557,7 @@ impl App {
                 }
             }
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('d') => self.detach(),
             KeyCode::Char('n') => {
                 if let Focus::Ws { p, .. } = self.session.focus {
                     self.session.new_workspace(p, rows, cols);
@@ -1555,7 +1581,7 @@ impl App {
             }
             KeyCode::Char('|') | KeyCode::Char('v') => self.session.split(Dir::Cols, rows, cols),
             KeyCode::Char('-') | KeyCode::Char('s') => self.session.split(Dir::Rows, rows, cols),
-            KeyCode::Char('d') => self.sidebar = !self.sidebar,
+            KeyCode::Char('b') => self.sidebar = !self.sidebar,
             KeyCode::Char('w') => {
                 self.nav.active = !self.nav.active;
                 if self.nav.active {

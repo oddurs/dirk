@@ -435,7 +435,9 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
         }
         // Command keys win, so a layout bound to one is unreachable. Silently
         // is the problem: the entry is listed with a key that does nothing.
-        const RESERVED: &[char] = &['n', 'o', 'x', 'r', 'v', 's', 'd', 'w', 'q', 'j', 'k', ';'];
+        const RESERVED: &[char] = &[
+            'n', 'o', 'x', 'r', 'v', 's', 'd', 'b', 'w', 'q', 'j', 'k', ';',
+        ];
         if let Some(k) = l.key.filter(|k| RESERVED.contains(k)) {
             out.push(format!(
                 "layout {}: key {k:?} is a command key and will not reach it",

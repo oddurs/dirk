@@ -2,7 +2,7 @@
 id: 65
 title: Detach, and two exits that say which is which
 type: bug
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07
