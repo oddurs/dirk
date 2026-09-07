@@ -896,22 +896,14 @@ fn an_agent_is_given_a_name_you_could_type() {
     assert!(h.wait_for(READY, START), "never started");
 
     // Name the workspace first: an agent's name comes from the intent of the
-    // workspace it is in, so `dirk agent send-keys reviewing-the-parser` names
-    // something you would recognise.
+    // workspace it is in, so `dirk agent send-keys reviewing-the-parser` will
+    // name something you would recognise.
     h.send(b"printf '\\033]2;Reviewing the parser\\007'\r");
-    assert!(
-        h.wait_for("Reviewing the parser", Duration::from_secs(15)),
-        "the workspace was never named\n{}",
-        h.drawn()
-    );
 
-    // Two panes, so the workspace has a subtree worth opening.
-    h.prefix(b"|");
-
-    // Found in the nav, not merely on screen: the pane echoes the command that
-    // set the title, and that is not the row being looked for. Waited for rather
-    // than read once, because the split has to be drawn before the row it moves
-    // can be found, and a fixed pause is not a synchronisation.
+    // In the nav, not merely on screen. The pane echoes the command that set
+    // the title and that appears at once, so waiting on it would race the
+    // naming debounce -- and splitting before the name lands means it never
+    // does, since a workspace holding two panes has no single intent.
     let nav_row = |h: &Harness| {
         h.rows().iter().position(|r| {
             r.chars()
@@ -921,8 +913,16 @@ fn an_agent_is_given_a_name_you_could_type() {
         })
     };
     assert!(
-        h.wait_until(Duration::from_secs(15), |h| nav_row(h).is_some()),
-        "the workspace row was never drawn\n{}",
+        h.wait_until(Duration::from_secs(20), |h| nav_row(h).is_some()),
+        "the workspace was never named\n{}",
+        h.drawn()
+    );
+
+    // Two panes, so the workspace has a subtree worth opening.
+    h.prefix(b"|");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| nav_row(h).is_some()),
+        "the workspace row went missing after the split\n{}",
         h.drawn()
     );
     let row = nav_row(&h).expect("the workspace row");
