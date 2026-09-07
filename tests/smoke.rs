@@ -842,3 +842,100 @@ fn work_that_finishes_while_you_are_elsewhere_reads_as_done() {
         h.drawn()
     );
 }
+
+#[test]
+fn the_rail_counts_what_is_owed_and_nothing_else() {
+    let claude = fake_agent("claude");
+    let mut h = Harness::start_with_config(&format!(
+        "shell = {:?}\n[notify]\nenabled = false\n",
+        claude.display().to_string()
+    ));
+    assert!(h.wait_for(READY, START), "never started");
+
+    let rail = |h: &Harness| h.rows().last().cloned().unwrap_or_default();
+
+    // Nothing owed, nothing said. A pair of zeroes is not information.
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("agents"))),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+    assert!(
+        !rail(&h).contains("! "),
+        "counted a block that had not happened\n{}",
+        rail(&h)
+    );
+
+    // Blocked shows up, in the rail, with a count.
+    h.send(b"printf 'Do you want to proceed?\\n> 1. Yes\\n  2. No\\n'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| rail(h).contains("! 1")),
+        "the rail did not count a blocked agent\n{}",
+        h.drawn()
+    );
+
+    // And goes away again when it does.
+    h.send(b"clear\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| !rail(h).contains("! 1")),
+        "the count outlived the block\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn an_agent_is_given_a_name_you_could_type() {
+    let claude = fake_agent("claude");
+    let mut h = Harness::start_with_config(&format!(
+        "shell = {:?}\n[notify]\nenabled = false\n",
+        claude.display().to_string()
+    ));
+    assert!(h.wait_for(READY, START), "never started");
+
+    // Name the workspace first: an agent's name comes from the intent of the
+    // workspace it is in, so `dirk agent send-keys reviewing-the-parser` will
+    // name something you would recognise.
+    h.send(b"printf '\\033]2;Reviewing the parser\\007'\r");
+
+    // In the nav, not merely on screen. The pane echoes the command that set
+    // the title and that appears at once, so waiting on it would race the
+    // naming debounce -- and splitting before the name lands means it never
+    // does, since a workspace holding two panes has no single intent.
+    let nav_row = |h: &Harness| {
+        h.rows().iter().position(|r| {
+            r.chars()
+                .take(34)
+                .collect::<String>()
+                .contains("Reviewing the parser")
+        })
+    };
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| nav_row(h).is_some()),
+        "the workspace was never named\n{}",
+        h.drawn()
+    );
+
+    // Two panes, so the workspace has a subtree worth opening.
+    h.prefix(b"|");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| nav_row(h).is_some()),
+        "the workspace row went missing after the split\n{}",
+        h.drawn()
+    );
+    let row = nav_row(&h).expect("the workspace row");
+    h.click(4, row as u16);
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            h.rows().iter().any(|r| r.contains("reviewing-the-parser"))
+        }),
+        "no agent name in the expanded workspace\n{}",
+        h.drawn()
+    );
+    // Uniqueness is a property of the names, not of what the nav happens to
+    // show: a pane that has published a title displays that instead, which is
+    // more useful in that row. `name::unique` is tested directly.
+}

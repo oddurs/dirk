@@ -140,6 +140,26 @@ pub struct Config {
     pub sidebar_width: u16,
     pub scrollback: usize,
     pub naming: Naming,
+    pub notify: Notify,
+}
+
+/// When dirk is allowed to interrupt you.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Notify {
+    pub enabled: bool,
+    /// Floor between two notifications about the same workspace. An agent that
+    /// blocks, unblocks and blocks again inside a minute is one interruption.
+    pub min_interval_ms: u64,
+}
+
+impl Default for Notify {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_interval_ms: 60_000,
+        }
+    }
 }
 
 /// The namesync policy, as knobs.
@@ -173,6 +193,7 @@ impl Default for Config {
             sidebar_width: 34,
             scrollback: 5000,
             naming: Naming::default(),
+            notify: Notify::default(),
         }
     }
 }

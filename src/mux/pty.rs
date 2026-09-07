@@ -72,6 +72,11 @@ pub struct Pane {
     pub closing: bool,
     /// What is running here, as of the last sample.
     pub occupant: crate::agent::Occupant,
+    /// What to call the agent in here, when there is one.
+    ///
+    /// Unique among live agents, because a name is how one is addressed. It
+    /// follows the agent rather than the pane, and goes when it does.
+    pub agent_name: Option<String>,
     /// When this pane last produced output.
     ///
     /// Per pane, not per workspace: a workspace holding an agent beside a
@@ -177,6 +182,7 @@ impl Pane {
             exit: None,
             closing: false,
             occupant: crate::agent::Occupant::default(),
+            agent_name: None,
             touched: std::time::Instant::now(),
             writer,
             master,

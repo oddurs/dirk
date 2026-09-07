@@ -253,11 +253,77 @@ pub fn strip_project(text: &str, project: &str) -> String {
     }
 }
 
+/// The longest an agent name may be, matching herdr's `[a-z][a-z0-9_-]{0,31}`.
+pub const AGENT_NAME_MAX: usize = 32;
+
+/// Turn an intent into a name you can type.
+///
+/// Ported from namesync, where it made agent names out of the same intents that
+/// make workspace labels. A name has to be typed at a command line, so it is
+/// lowercase, hyphenated, starts with a letter and has a length.
+pub fn slugify(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for c in normalize(text).to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let s = out.trim_matches('-');
+    if s.is_empty() {
+        return String::new();
+    }
+    // Must start with a letter, so a name is never mistaken for a number.
+    let mut s = if s.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        s.to_string()
+    } else {
+        format!("x-{s}")
+    };
+
+    if s.chars().count() > max {
+        s = s.chars().take(max).collect();
+        // Cut at a word boundary when one is close, rather than mid-word.
+        if let Some(cut) = s.rfind('-')
+            && cut >= max * 6 / 10
+        {
+            s.truncate(cut);
+        }
+    }
+    s.trim_end_matches('-').to_string()
+}
+
+/// A name no live agent already has.
+///
+/// Names must be unique among live agents, because they are how one is
+/// addressed. A collision takes a suffix, and the base is shortened to make
+/// room rather than the name growing past its limit.
+pub fn unique(desired: &str, taken: &std::collections::HashSet<String>) -> String {
+    if desired.is_empty() {
+        return String::new();
+    }
+    if !taken.contains(desired) {
+        return desired.to_string();
+    }
+    for i in 2..100u32 {
+        let suffix = format!("-{i}");
+        let room = AGENT_NAME_MAX.saturating_sub(suffix.len());
+        let base: String = desired.chars().take(room).collect();
+        let candidate = format!("{}{suffix}", base.trim_end_matches('-'));
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+    }
+    String::new()
+}
+
 /// Why a rename did not happen. Carried so the status line and the log can
 /// explain themselves instead of silently doing nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Skip {
     Disabled,
+    /// The title is the question it is asking, not the work it is doing.
+    Blocked,
     NoIntent,
     Junk,
     Manual,
@@ -290,10 +356,27 @@ pub fn decide(
     repo: &str,
     branch: &str,
     pane_count: usize,
+    blocked: bool,
     now: Instant,
 ) -> Decision {
     if !cfg.enabled {
         return Decision::Skip(Skip::Disabled);
+    }
+    // A blocked agent's title describes the dialog, not the work. Naming from
+    // it produces a label like "Do you want to proceed", which is wrong and
+    // sticky -- it is what the workspace is called until the next intent.
+    //
+    // This branch was written when the policy was ported and could not be
+    // reached: dirk had no idea what blocked meant until 0031.
+    if blocked {
+        // Forgotten, not merely skipped. `rename_pass` runs on every chunk of
+        // output and the state is recomputed once per frame, so the pass that
+        // first sees the question still sees `working` and records it as
+        // pending. Skipping every later pass then leaves it there, and the
+        // moment the block clears it is committed -- which is exactly the label
+        // this guard exists to prevent.
+        state.pending = None;
+        return Decision::Skip(Skip::Blocked);
     }
     // A workspace holding two panes has no single intent, so neither title
     // speaks for it.
@@ -380,8 +463,8 @@ mod tests {
         let now = Instant::now();
         // Debounce needs two passes: the first records the title, the second
         // finds it unchanged and commits.
-        decide(&cfg(), state, current, Some(title), repo, "", 1, now);
-        decide(&cfg(), state, current, Some(title), repo, "", 1, now)
+        decide(&cfg(), state, current, Some(title), repo, "", 1, false, now);
+        decide(&cfg(), state, current, Some(title), repo, "", 1, false, now)
     }
 
     #[test]
@@ -520,6 +603,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 t0
             ),
             Decision::Skip(Skip::Settling)
@@ -534,6 +618,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 t0
             ),
             Decision::Skip(Skip::Settling)
@@ -549,6 +634,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 later
             ),
             Decision::Rename(_)
@@ -564,9 +650,29 @@ mod tests {
         };
         let mut st = NameState::default();
         let t0 = Instant::now();
-        decide(&cfg, &mut st, "w1", Some("First intent"), "dirk", "", 1, t0);
+        decide(
+            &cfg,
+            &mut st,
+            "w1",
+            Some("First intent"),
+            "dirk",
+            "",
+            1,
+            false,
+            t0,
+        );
         assert!(matches!(
-            decide(&cfg, &mut st, "w1", Some("First intent"), "dirk", "", 1, t0),
+            decide(
+                &cfg,
+                &mut st,
+                "w1",
+                Some("First intent"),
+                "dirk",
+                "",
+                1,
+                false,
+                t0
+            ),
             Decision::Rename(_)
         ));
 
@@ -579,6 +685,7 @@ mod tests {
             "dirk",
             "",
             1,
+            false,
             t0,
         );
         assert_eq!(
@@ -590,6 +697,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 t0
             ),
             Decision::Skip(Skip::RateLimited)
@@ -608,10 +716,76 @@ mod tests {
                 "dirk",
                 "",
                 2,
+                false,
                 Instant::now()
             ),
             Decision::Skip(Skip::MultiPane)
         );
+    }
+
+    #[test]
+    fn a_blocked_agent_is_not_named_after_the_question_it_is_asking() {
+        let mut st = NameState::default();
+        let now = Instant::now();
+        assert_eq!(
+            decide(
+                &cfg(),
+                &mut st,
+                "w1",
+                Some("Do you want to proceed?"),
+                "dirk",
+                "",
+                1,
+                true,
+                now
+            ),
+            Decision::Skip(Skip::Blocked)
+        );
+        // And the name it had is untouched by the block.
+        assert!(st.applied.is_none());
+    }
+
+    #[test]
+    fn a_name_is_something_you_could_type() {
+        assert_eq!(
+            slugify("Building the mux core", 32),
+            "building-the-mux-core"
+        );
+        assert_eq!(
+            slugify("feat/packaging-manifests", 32),
+            "feat-packaging-manifests"
+        );
+        // Starts with a letter, whatever the intent started with.
+        assert_eq!(slugify("0031 real states", 32), "x-0031-real-states");
+        assert_eq!(slugify("!!!", 32), "");
+    }
+
+    #[test]
+    fn a_long_name_is_cut_at_a_word() {
+        let n = slugify("Reading the vt100 grid and writing it into ratatui", 24);
+        assert!(n.chars().count() <= 24, "{n}");
+        assert!(!n.ends_with('-'));
+        // Cut at a boundary rather than mid-word, when one is close enough.
+        assert_eq!(n, "reading-the-vt100-grid");
+    }
+
+    #[test]
+    fn two_agents_doing_the_same_thing_get_different_names() {
+        let mut taken = std::collections::HashSet::new();
+        let first = unique("reviewer", &taken);
+        assert_eq!(first, "reviewer");
+        taken.insert(first);
+        assert_eq!(unique("reviewer", &taken), "reviewer-2");
+    }
+
+    #[test]
+    fn a_suffix_never_pushes_a_name_past_its_limit() {
+        let long = "a".repeat(AGENT_NAME_MAX);
+        let mut taken = std::collections::HashSet::new();
+        taken.insert(long.clone());
+        let next = unique(&long, &taken);
+        assert!(next.chars().count() <= AGENT_NAME_MAX, "{next}");
+        assert!(next.ends_with("-2"));
     }
 
     #[test]

@@ -118,7 +118,7 @@ pub fn render(
         parts.join("  ·  ")
     };
     let right_w = right.chars().count() as u16;
-    let right_x = quit_x.saturating_sub(right_w + 1);
+    let mut right_x = quit_x.saturating_sub(right_w + 1);
     write_str(
         buf,
         right_x,
@@ -127,6 +127,37 @@ pub fn render(
         THEME.dim().patch(THEME.rail()),
         right_w,
     );
+
+    // ── What is owed ────────────────────────────────────────────────────
+    // Only when it is not zero. An empty middle is the fastest possible way to
+    // say that nothing needs you, and a pair of zeroes is not information.
+    let (blocked, done) = session.counts();
+    for (n, glyph, style, state) in [
+        (done, "+", THEME.ok(), crate::agent::State::Done),
+        (blocked, "!", THEME.critical(), crate::agent::State::Blocked),
+    ] {
+        if n == 0 {
+            continue;
+        }
+        let text = format!("{glyph} {n}");
+        let w = text.chars().count() as u16;
+        // Saturating at zero would stack them on each other and on the brand,
+        // and the later hit rect would win, making the first one unclickable.
+        if right_x < w + 3 {
+            break;
+        }
+        right_x -= w + 3;
+        write_str(buf, right_x, area.y, &text, style.patch(THEME.rail()), w);
+        hits.push(
+            Rect {
+                x: right_x,
+                y: area.y,
+                width: w,
+                height: 1,
+            },
+            Target::Attention(state),
+        );
+    }
 
     // ── Chips ───────────────────────────────────────────────────────────
     // Every workspace in tree order. The bar is a jump target, so the chips

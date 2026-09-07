@@ -51,6 +51,15 @@ pub struct Kind {
     /// Without this, every such turn read as blocked, which masks `done` and
     /// inverts the attention order.
     choices: bool,
+    /// Fragments of a command line that identify this agent when it is run
+    /// under an interpreter, and only then.
+    ///
+    /// An agent installed through npm is executed as `node`, so the executable
+    /// says nothing and the only place its identity appears is its arguments.
+    /// Consulted for nothing else: dirk does not read someone's argv to work
+    /// out what they are, it reads it to disambiguate an interpreter that has
+    /// told it nothing.
+    argv: &'static [&'static str],
     /// Text that appears when this agent is waiting for an answer.
     ///
     /// The part of this file most likely to be wrong: these are strings another
@@ -65,18 +74,21 @@ pub const KINDS: &[Kind] = &[
     Kind {
         name: "claude",
         names: &["claude"],
+        argv: &["claude-code", "claude/cli.js", ".claude/local"],
         blocked: &["Do you want", "Would you like"],
         choices: true,
     },
     Kind {
         name: "codex",
         names: &["codex"],
+        argv: &["codex/cli", "openai/codex"],
         blocked: &["Allow command?", "Approve?"],
         choices: true,
     },
     Kind {
         name: "aider",
         names: &["aider"],
+        argv: &["aider/main", "aider.main"],
         blocked: &["(Y)es/(N)o", "Add to chat?"],
         // Its marker is already the answer set, so there is no menu to find.
         choices: false,
@@ -84,10 +96,18 @@ pub const KINDS: &[Kind] = &[
     Kind {
         name: "goose",
         names: &["goose"],
+        argv: &["goose/cli"],
         blocked: &["Do you approve"],
         choices: true,
     },
 ];
+
+/// Programs that are somebody else's identity.
+///
+/// A process running one of these has told us nothing about itself, so its
+/// arguments are worth reading. Closed on purpose: this is the only case where
+/// dirk looks at a command line at all.
+const INTERPRETERS: &[&str] = &["node", "python", "python3", "deno", "bun", "ruby", "perl"];
 
 /// Shells, so that "at a prompt" is a state rather than an unrecognised
 /// program. `agent start` will need to know a pane is free.
@@ -125,23 +145,51 @@ impl Occupant {
     }
 }
 
-/// Classify one process name. `comm` may be a full path or a bare name
-/// depending on the platform and the process, so only the basename is matched.
-pub fn classify(comm: &str) -> Occupant {
-    let base = comm.rsplit('/').next().unwrap_or(comm).trim();
+/// A process, as `ps` described it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Proc {
+    /// The program, as invoked.
+    pub program: String,
+    /// Everything after it, joined. Only read when `program` is an interpreter.
+    pub args: String,
+}
+
+/// Classify a process.
+pub fn identify(proc: &Proc) -> Occupant {
+    let base = basename(&proc.program);
     if base.is_empty() {
         return Occupant::Unknown;
     }
-    // A login shell is "-zsh".
-    let base = base.strip_prefix('-').unwrap_or(base);
 
     if let Some(kind) = KINDS.iter().find(|k| k.names.contains(&base)) {
         return Occupant::Agent(*kind);
     }
+    // Linux truncates `comm` to fifteen characters; a program invoked by path
+    // is not truncated, but this is cheap insurance for the ones that are.
+    if let Some(kind) = KINDS
+        .iter()
+        .find(|k| k.names.iter().any(|n| n.starts_with(base)))
+    {
+        return Occupant::Agent(*kind);
+    }
+
+    if INTERPRETERS.contains(&base)
+        && let Some(kind) = KINDS
+            .iter()
+            .find(|k| k.argv.iter().any(|m| proc.args.contains(m)))
+    {
+        return Occupant::Agent(*kind);
+    }
+
     if SHELLS.contains(&base) {
         return Occupant::Shell;
     }
     Occupant::Program(base.to_string())
+}
+
+fn basename(path: &str) -> &str {
+    let base = path.rsplit('/').next().unwrap_or(path).trim();
+    base.strip_prefix('-').unwrap_or(base)
 }
 
 /// One reading of the process table: process group to the name of its leader.
@@ -158,9 +206,9 @@ pub fn classify(comm: &str) -> Occupant {
 ///
 /// A group whose leader has exited yields no entry, which the caller reads as
 /// "no news" and keeps what it had.
-pub fn table() -> HashMap<i32, String> {
+pub fn table() -> HashMap<i32, Proc> {
     let Ok(ps) = Command::new("ps")
-        .args(["-A", "-o", "pid=,pgid=,comm="])
+        .args(["-A", "-o", "pid=,pgid=,args="])
         .output()
     else {
         return HashMap::new();
@@ -177,11 +225,17 @@ pub fn table() -> HashMap<i32, String> {
 /// should be. Every line was discarded and the table came back empty — on both
 /// platforms, silently, since an empty table just means "no news about any
 /// pane".
-pub fn parse(text: &str) -> HashMap<i32, String> {
+pub fn parse(text: &str) -> HashMap<i32, Proc> {
     let mut out = HashMap::new();
     for line in text.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(pid), Some(pgid)) = (fields.next(), fields.next()) else {
+        let line = line.trim_start();
+        // Two numbers and then the command line, which is the rest of the line
+        // whatever is in it. `args` rather than `comm` because an agent run
+        // under an interpreter has nothing to say in its executable name.
+        let Some((pid, rest)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some((pgid, cmd)) = rest.trim_start().split_once(char::is_whitespace) else {
             continue;
         };
         let (Ok(pid), Ok(pgid)) = (pid.parse::<i32>(), pgid.parse::<i32>()) else {
@@ -190,11 +244,16 @@ pub fn parse(text: &str) -> HashMap<i32, String> {
         if pid != pgid {
             continue;
         }
-        // A command can contain spaces ("Google Chrome Helper"), so it is the
-        // whole of the rest of the line rather than the next field.
-        let comm = fields.collect::<Vec<_>>().join(" ");
-        if !comm.is_empty() {
-            out.insert(pgid, comm);
+        let cmd = cmd.trim();
+        let (program, args) = cmd.split_once(char::is_whitespace).unwrap_or((cmd, ""));
+        if !program.is_empty() {
+            out.insert(
+                pgid,
+                Proc {
+                    program: program.to_string(),
+                    args: args.trim().to_string(),
+                },
+            );
         }
     }
     out
@@ -288,6 +347,14 @@ pub struct Reading {
 mod tests {
     use super::*;
 
+    /// Most of these ask about a program name alone, which is the common case.
+    fn classify(program: &str) -> Occupant {
+        identify(&Proc {
+            program: program.to_string(),
+            args: String::new(),
+        })
+    }
+
     #[test]
     fn a_known_agent_is_recognised_by_its_basename() {
         assert_eq!(classify("claude").agent().map(|k| k.name), Some("claude"));
@@ -327,15 +394,15 @@ mod tests {
         assert_eq!(classify("   "), Occupant::Unknown);
     }
 
-    /// Real `ps -A -o pid=,pgid=,comm=` output, padding and all.
+    /// Real `ps -A -o pid=,pgid=,args=` output, padding and all.
     const PS: &str = "\
     1       1 /sbin/launchd
   337     337 /usr/libexec/logd
 18776   18776 claude
-61207   84361 sleep
-84361   84361 /bin/zsh
-99123   84361 node
-  512     512 Google Chrome Helper
+61207   84361 sleep 30
+84361   84361 /bin/zsh -l
+99123   99123 node /Users/x/.npm/lib/node_modules/@anthropic-ai/claude-code/cli.js
+  512     512 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer
 ";
 
     #[test]
@@ -346,8 +413,14 @@ mod tests {
         // platforms and said nothing, because an empty table reads as "no news".
         let table = parse(PS);
         assert!(!table.is_empty(), "the whole table was discarded");
-        assert_eq!(table.get(&1).map(String::as_str), Some("/sbin/launchd"));
-        assert_eq!(table.get(&18776).map(String::as_str), Some("claude"));
+        assert_eq!(
+            table.get(&1).map(|p| p.program.as_str()),
+            Some("/sbin/launchd")
+        );
+        assert_eq!(
+            table.get(&18776).map(|p| p.program.as_str()),
+            Some("claude")
+        );
     }
 
     #[test]
@@ -357,7 +430,10 @@ mod tests {
         // (`sleep`) first, because pids wrap. Taking the first row would report
         // a child -- and a `bash` under a running agent would mark the pane
         // free for another one.
-        assert_eq!(table.get(&84361).map(String::as_str), Some("/bin/zsh"));
+        assert_eq!(
+            table.get(&84361).map(|p| p.program.as_str()),
+            Some("/bin/zsh")
+        );
     }
 
     #[test]
@@ -366,14 +442,6 @@ mod tests {
         // and keeps the last good answer.
         let table = parse("61207   84361 sleep\n");
         assert!(table.is_empty());
-    }
-
-    #[test]
-    fn a_command_with_spaces_survives_intact() {
-        assert_eq!(
-            parse(PS).get(&512).map(String::as_str),
-            Some("Google Chrome Helper")
-        );
     }
 
     #[test]
@@ -431,6 +499,6 @@ mod tests {
             !table.is_empty(),
             "ps returned nothing usable on this machine"
         );
-        assert!(table.values().all(|c| !c.is_empty()));
+        assert!(table.values().all(|p| !p.program.is_empty()));
     }
 }

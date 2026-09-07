@@ -837,7 +837,12 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                     // Failing a label or a title, say what is running: that is more
                     // use than the directory, which the row above already implies.
                     match &pane.occupant {
-                        crate::agent::Occupant::Agent(k) => k.name.to_string(),
+                        // Its name, which is how it is addressed, rather than
+                        // its kind, which every agent of that kind shares.
+                        crate::agent::Occupant::Agent(k) => pane
+                            .agent_name
+                            .clone()
+                            .unwrap_or_else(|| k.name.to_string()),
                         crate::agent::Occupant::Program(p) => p.clone(),
                         // "free" rather than "shell": what matters about a
                         // prompt is that an agent could be started in it.

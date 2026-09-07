@@ -2,8 +2,9 @@
 id: 32
 title: Attention counts in the rail
 type: feature
-status: backlog
+status: done
 milestone: v0.3
+assignee: oddurs
 depends_on:
 - 31
 created: 2026-09-06
@@ -25,6 +26,6 @@ Counts, and only when they are non-zero:
 An empty middle is the fastest possible way to say nothing needs you.
 
 ## Acceptance criteria
-- [ ] Blocked and done counts, hidden at zero
-- [ ] Clicking a count jumps to the oldest workspace in that state
-- [ ] Recomputed on state change, not on a timer
+- [x] Blocked and done counts, hidden at zero
+- [x] Clicking a count jumps to the oldest workspace in that state
+- [x] Recomputed on state change, not on a timer

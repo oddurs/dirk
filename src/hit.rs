@@ -54,6 +54,9 @@ pub enum Target {
     SortAgents,
     /// The quit button at the right of the rail.
     Quit,
+    /// A count in the rail: go to the workspace that has been in that state
+    /// longest.
+    Attention(crate::agent::State),
 }
 
 #[derive(Default)]
