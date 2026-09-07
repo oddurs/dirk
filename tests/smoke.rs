@@ -842,3 +842,46 @@ fn work_that_finishes_while_you_are_elsewhere_reads_as_done() {
         h.drawn()
     );
 }
+
+#[test]
+fn the_rail_counts_what_is_owed_and_nothing_else() {
+    let claude = fake_agent("claude");
+    let mut h = Harness::start_with_config(&format!(
+        "shell = {:?}\n[notify]\nenabled = false\n",
+        claude.display().to_string()
+    ));
+    assert!(h.wait_for(READY, START), "never started");
+
+    let rail = |h: &Harness| h.rows().last().cloned().unwrap_or_default();
+
+    // Nothing owed, nothing said. A pair of zeroes is not information.
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("agents"))),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+    assert!(
+        !rail(&h).contains("! "),
+        "counted a block that had not happened\n{}",
+        rail(&h)
+    );
+
+    // Blocked shows up, in the rail, with a count.
+    h.send(b"printf 'Do you want to proceed?\\n> 1. Yes\\n  2. No\\n'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| rail(h).contains("! 1")),
+        "the rail did not count a blocked agent\n{}",
+        h.drawn()
+    );
+
+    // And goes away again when it does.
+    h.send(b"clear\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| !rail(h).contains("! 1")),
+        "the count outlived the block\n{}",
+        h.drawn()
+    );
+}

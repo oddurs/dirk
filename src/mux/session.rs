@@ -63,6 +63,8 @@ pub struct Workspace {
     /// exists at all: finished work nobody has noticed is what is worth
     /// showing.
     pub seen: bool,
+    /// When dirk last interrupted you about this workspace.
+    pub notified: Option<Instant>,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -229,6 +231,7 @@ impl Session {
             label: name,
             state: crate::agent::State::None,
             seen: true,
+            notified: None,
             touched: Instant::now(),
             expanded: false,
             panes: vec![pane],
@@ -397,6 +400,7 @@ impl Session {
                 label: def.name.clone(),
                 state: crate::agent::State::None,
                 seen: true,
+                notified: None,
                 touched: Instant::now(),
                 expanded: false,
                 panes,
@@ -634,6 +638,15 @@ impl Session {
     }
 }
 
+/// A state that changed, for whoever wants to say so out loud.
+#[derive(Debug, Clone)]
+pub struct Change {
+    pub at: Focus,
+    pub label: String,
+    pub to: crate::agent::State,
+    pub focused: bool,
+}
+
 /// An agent that has been quiet for this long has stopped.
 ///
 /// One that is thinking redraws its spinner continuously, so silence is the
@@ -784,14 +797,24 @@ impl Session {
     /// Run on the tick and on output, which is often enough that a state change
     /// is visible within a frame of happening and cheap because only panes
     /// holding an agent are read at all.
-    pub fn update_states(&mut self, now: Instant) {
+    pub fn update_states(&mut self, now: Instant) -> Vec<Change> {
+        let mut changes = Vec::new();
         let focus = self.focus;
         for p in 0..self.projects.len() {
             for w in 0..self.projects[p].workspaces.len() {
                 let here = Focus::Ws { p, w };
                 let observed = observe(&self.projects[p].workspaces[w], now);
                 let ws = &mut self.projects[p].workspaces[w];
+                let was = ws.state;
                 apply(ws, observed, focus == here);
+                if ws.state != was {
+                    changes.push(Change {
+                        at: here,
+                        label: ws.label.clone(),
+                        to: ws.state,
+                        focused: focus == here,
+                    });
+                }
             }
         }
         for i in 0..self.layouts.len() {
@@ -805,6 +828,58 @@ impl Session {
             };
             apply(ws, observed, focus == here);
         }
+        changes
+    }
+
+    /// The workspace in a given state that has been in it longest.
+    ///
+    /// Where the counts in the rail jump to: the thing that has been waiting
+    /// longest is the thing to look at first.
+    pub fn oldest_in(&self, state: crate::agent::State) -> Option<Focus> {
+        self.projects
+            .iter()
+            .enumerate()
+            .flat_map(|(p, proj)| {
+                proj.workspaces
+                    .iter()
+                    .enumerate()
+                    .map(move |(w, ws)| (p, w, ws))
+            })
+            .filter(|(_, _, ws)| ws.state == state)
+            .max_by_key(|(_, _, ws)| ws.touched.elapsed())
+            .map(|(p, w, _)| Focus::Ws { p, w })
+    }
+
+    /// How many workspaces are blocked, and how many have finished unseen.
+    pub fn counts(&self) -> (usize, usize) {
+        let mut blocked = 0;
+        let mut done = 0;
+        for proj in &self.projects {
+            for ws in &proj.workspaces {
+                match ws.state {
+                    crate::agent::State::Blocked => blocked += 1,
+                    crate::agent::State::Done => done += 1,
+                    _ => {}
+                }
+            }
+        }
+        (blocked, done)
+    }
+
+    /// Whether this workspace may be interrupted about, noting that it was.
+    ///
+    /// An agent that blocks, unblocks and blocks again inside a minute is one
+    /// interruption.
+    pub fn may_notify(&mut self, at: Focus, now: Instant, floor: Duration) -> bool {
+        let Focus::Ws { p, w } = at else { return false };
+        let Some(ws) = self.workspace_mut(p, w) else {
+            return false;
+        };
+        if ws.notified.is_some_and(|t| now.duration_since(t) < floor) {
+            return false;
+        }
+        ws.notified = Some(now);
+        true
     }
 }
 
@@ -923,6 +998,7 @@ mod tests {
             label: String::new(),
             state,
             seen,
+            notified: None,
             touched: Instant::now(),
             panes: Vec::new(),
             tree: Node::Leaf(0),

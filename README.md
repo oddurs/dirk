@@ -27,7 +27,7 @@ A terminal multiplexer that knows what its sessions are for.
 │   * Building the mux core  now │                                    │
 │   ↵ go  ·  s sort              │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ◆ dirk  ▊1 mux core  ▏2 reading the grid    2 spaces · 14:22    ✕ │
+│ ◆ dirk  ▊1 mux core  ▏2 reading the grid  ! 1  + 2  2 spaces · 14:22  ✕ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -154,6 +154,10 @@ split = "rows"
 enabled          = true
 debounce_ms      = 1200      # how long a title must hold still
 min_interval_ms  = 15000     # floor between two renames of one workspace
+
+[notify]
+enabled          = true
+min_interval_ms  = 60000     # floor between two interruptions about one space
 ```
 
 ## Naming, in detail

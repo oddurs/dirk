@@ -258,6 +258,8 @@ pub fn strip_project(text: &str, project: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Skip {
     Disabled,
+    /// The title is the question it is asking, not the work it is doing.
+    Blocked,
     NoIntent,
     Junk,
     Manual,
@@ -290,10 +292,20 @@ pub fn decide(
     repo: &str,
     branch: &str,
     pane_count: usize,
+    blocked: bool,
     now: Instant,
 ) -> Decision {
     if !cfg.enabled {
         return Decision::Skip(Skip::Disabled);
+    }
+    // A blocked agent's title describes the dialog, not the work. Naming from
+    // it produces a label like "Do you want to proceed", which is wrong and
+    // sticky -- it is what the workspace is called until the next intent.
+    //
+    // This branch was written when the policy was ported and could not be
+    // reached: dirk had no idea what blocked meant until 0031.
+    if blocked {
+        return Decision::Skip(Skip::Blocked);
     }
     // A workspace holding two panes has no single intent, so neither title
     // speaks for it.
@@ -380,8 +392,8 @@ mod tests {
         let now = Instant::now();
         // Debounce needs two passes: the first records the title, the second
         // finds it unchanged and commits.
-        decide(&cfg(), state, current, Some(title), repo, "", 1, now);
-        decide(&cfg(), state, current, Some(title), repo, "", 1, now)
+        decide(&cfg(), state, current, Some(title), repo, "", 1, false, now);
+        decide(&cfg(), state, current, Some(title), repo, "", 1, false, now)
     }
 
     #[test]
@@ -520,6 +532,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 t0
             ),
             Decision::Skip(Skip::Settling)
@@ -534,6 +547,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 t0
             ),
             Decision::Skip(Skip::Settling)
@@ -549,6 +563,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 later
             ),
             Decision::Rename(_)
@@ -564,9 +579,29 @@ mod tests {
         };
         let mut st = NameState::default();
         let t0 = Instant::now();
-        decide(&cfg, &mut st, "w1", Some("First intent"), "dirk", "", 1, t0);
+        decide(
+            &cfg,
+            &mut st,
+            "w1",
+            Some("First intent"),
+            "dirk",
+            "",
+            1,
+            false,
+            t0,
+        );
         assert!(matches!(
-            decide(&cfg, &mut st, "w1", Some("First intent"), "dirk", "", 1, t0),
+            decide(
+                &cfg,
+                &mut st,
+                "w1",
+                Some("First intent"),
+                "dirk",
+                "",
+                1,
+                false,
+                t0
+            ),
             Decision::Rename(_)
         ));
 
@@ -579,6 +614,7 @@ mod tests {
             "dirk",
             "",
             1,
+            false,
             t0,
         );
         assert_eq!(
@@ -590,6 +626,7 @@ mod tests {
                 "dirk",
                 "",
                 1,
+                false,
                 t0
             ),
             Decision::Skip(Skip::RateLimited)
@@ -608,10 +645,33 @@ mod tests {
                 "dirk",
                 "",
                 2,
+                false,
                 Instant::now()
             ),
             Decision::Skip(Skip::MultiPane)
         );
+    }
+
+    #[test]
+    fn a_blocked_agent_is_not_named_after_the_question_it_is_asking() {
+        let mut st = NameState::default();
+        let now = Instant::now();
+        assert_eq!(
+            decide(
+                &cfg(),
+                &mut st,
+                "w1",
+                Some("Do you want to proceed?"),
+                "dirk",
+                "",
+                1,
+                true,
+                now
+            ),
+            Decision::Skip(Skip::Blocked)
+        );
+        // And the name it had is untouched by the block.
+        assert!(st.applied.is_none());
     }
 
     #[test]

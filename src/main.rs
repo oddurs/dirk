@@ -49,6 +49,7 @@ mod hit;
 mod keys;
 mod mux;
 mod name;
+mod notify;
 mod theme;
 mod ui;
 
@@ -287,7 +288,8 @@ impl App {
             // busy pane produces an event, and working out every agent's state
             // locks each agent pane's terminal and reads its screen. Doing that
             // per chunk contends with the reader threads holding the same lock.
-            self.session.update_states(Instant::now());
+            let changes = self.session.update_states(Instant::now());
+            self.announce(changes);
             if self.quit || self.session.is_empty() {
                 return Ok(());
             }
@@ -333,6 +335,36 @@ impl App {
                     self.quit_armed = None;
                 }
             }
+        }
+    }
+
+    /// Interrupt, but only for the transitions worth interrupting for.
+    ///
+    /// Blocked and finished-unseen, and neither for the workspace you are
+    /// looking at — you can already see that one.
+    fn announce(&mut self, changes: Vec<mux::session::Change>) {
+        if !self.cfg.notify.enabled {
+            return;
+        }
+        let floor = Duration::from_millis(self.cfg.notify.min_interval_ms);
+        let now = Instant::now();
+        for change in changes {
+            if change.focused {
+                continue;
+            }
+            let what = match change.to {
+                agent::State::Blocked => "is waiting for you",
+                agent::State::Done => "has finished",
+                // Starting work and settling down are not interruptions.
+                _ => continue,
+            };
+            if !self.session.may_notify(change.at, now, floor) {
+                continue;
+            }
+            notify::send(
+                format!("{} {what}", change.label),
+                self.cfg.brand.name.clone(),
+            );
         }
     }
 
@@ -409,6 +441,7 @@ impl App {
                 let title = ws.active_pane().and_then(|x| x.title());
                 let panes = ws.panes.len();
                 let current = ws.label.clone();
+                let blocked = ws.state == agent::State::Blocked;
 
                 let ws = &mut self.session.projects[p].workspaces[w];
                 if let name::Decision::Rename(label) = name::decide(
@@ -419,6 +452,7 @@ impl App {
                     &repo,
                     &branch,
                     panes,
+                    blocked,
                     now,
                 ) {
                     ws.label = label;
@@ -627,6 +661,14 @@ impl App {
             }
             Target::SortAgents => {
                 self.nav.cycle_sort();
+                return;
+            }
+            Target::Attention(state) => {
+                // The oldest first: what has been waiting longest is what to
+                // look at first.
+                if let Some(at) = self.session.oldest_in(state) {
+                    self.session.focus = at;
+                }
                 return;
             }
             Target::Quit => {
