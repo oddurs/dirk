@@ -130,7 +130,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v1.0 — Production
 
-`··········` 0% · 0 of 8 done · due 2027-04-01
+`··········` 0% · 0 of 12 done · due 2027-04-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -138,10 +138,17 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 - [ ] `0013` Damage-tracked rendering <sup>chore · p2 · perf</sup>
 - [ ] `0017` Reference manual and man page <sup>docs · p2 · docs</sup>
-- [ ] `0018` Release workflow and packaging <sup>chore · p2 · packaging</sup>
 - [ ] `0045` Escape sequences from a pane must not reach the outer terminal <sup>bug · p0 · pty</sup>
 - [ ] `0046` Startup and redraw budget <sup>chore · p1 · perf</sup>
 - [ ] `0047` Theme configuration <sup>feature · p2 · config</sup>
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
+
+### in progress
+
+- [ ] `0018` Release workflow and packaging <sup>chore · p1 · packaging · deferred-homebrew</sup>
+- [ ] `0082` A worktree per branch, and one verb-set that drives it <sup>chore · p1 · git</sup>
+- [ ] `0083` The agent harness belongs in the repository <sup>chore · p1 · docs</sup>
+- [ ] `0084` The GNU furniture the project still lacks <sup>docs · p2 · docs</sup>
+- [ ] `0085` Repository settings a public project should have <sup>chore · p2 · packaging</sup>
 
