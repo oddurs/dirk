@@ -60,5 +60,8 @@ pub enum Ev {
     /// A git read finished. Answered by path rather than by index, because a
     /// project can be closed while its answer is still in flight.
     Git(crate::git::Answer),
+    /// A round of board status commands finished. Answered by name rather than
+    /// by index, because the list can be reloaded while one is in flight.
+    Badges(Vec<(String, Option<String>)>),
     Tick,
 }

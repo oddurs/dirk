@@ -621,6 +621,25 @@ impl Session {
         }
     }
 
+    /// Shut a board's panes down, so a board that does not keep them does not.
+    ///
+    /// Everything a board is made of is a running program, and one you opened
+    /// for ten seconds should not sit there afterwards holding a lock. Only for
+    /// boards that asked: the default is still that an open board keeps what is
+    /// running in it.
+    pub fn close_layout(&mut self, i: usize) {
+        let Some(layout) = self.layouts.get_mut(i) else {
+            return;
+        };
+        let Some(ws) = layout.ws.take() else {
+            return;
+        };
+        for mut pane in ws.panes {
+            pane.close();
+        }
+        self.refocus();
+    }
+
     /// Start the focused pane's program again, in place.
     ///
     /// Only for a pane that has stopped. The tree keeps its shape, so the panel

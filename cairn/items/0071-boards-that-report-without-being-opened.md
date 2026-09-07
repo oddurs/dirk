@@ -2,7 +2,7 @@
 id: 71
 title: Boards that report without being opened
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07
