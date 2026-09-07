@@ -42,6 +42,7 @@
 //! frame rather than one frame per write, and an idle dirk costs nothing at
 //! all. There is no polling anywhere in this file.
 
+mod action;
 mod agent;
 mod api;
 mod client;
@@ -57,6 +58,7 @@ mod llm;
 mod mux;
 mod name;
 mod notify;
+mod palette;
 mod server;
 mod skill;
 mod sound;
@@ -119,6 +121,7 @@ Options:
       --remote TARGET    attach to a session on TARGET, over ssh
       --no-session       one process, no session, ends with this terminal
       --skill            print what an agent needs to drive a session
+      --keys             list every action and the key it answers to
   -h, --help             display this help and exit
   -V, --version          output version information and exit
 
@@ -192,6 +195,24 @@ fn main() -> io::Result<()> {
             }
             "-V" | "--version" => {
                 say(VERSION);
+                return Ok(());
+            }
+            "--keys" => {
+                let cfg = Config::load();
+                let keys = cfg.keys();
+                let mut out = String::from("The prefix is Ctrl-Space, then:\n\n");
+                for a in crate::action::Action::ALL {
+                    out.push_str(&format!(
+                        "  {:<4} {:<22} {}\n",
+                        keys.key(*a).unwrap_or("--"),
+                        a.name(),
+                        a.title()
+                    ));
+                }
+                out.push_str(
+                    "\nRebind one in config.toml:\n\n  [keys]\n  \"session.quit\" = \"Q\"\n",
+                );
+                say(&out);
                 return Ok(());
             }
             "--skill" => {
@@ -673,6 +694,8 @@ struct App {
     /// once for the rail -- on a session where a pane is producing output is a
     /// few thousand allocations a second for a table that never moves.
     glyphs: glyph::Glyphs,
+    /// Which key runs what, after the configuration has had its say.
+    keys: action::Keys,
     /// What each board last reported, by name.
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
@@ -683,6 +706,8 @@ struct App {
     find: Option<find::Find>,
     /// A question that wants one line of text back.
     asking: Option<Ask>,
+    /// Everything dirk can do, when somebody has asked.
+    palette: Option<palette::Palette>,
     /// Which board was focused at the end of the last turn, by name, so one
     /// that does not keep its panes can be shut when you leave it.
     ///
@@ -715,6 +740,7 @@ impl App {
     fn new(cfg: Config, session: Session, size: ratatui::layout::Size, tx: Sender<Ev>) -> Self {
         let kinds = std::sync::Arc::new(cfg.kinds());
         let glyphs = cfg.nav.glyphs();
+        let keys = cfg.keys();
         let width = size.width;
         let height = size.height;
         let sidebar_w = cfg.sidebar_width;
@@ -735,11 +761,13 @@ impl App {
             written: None,
             kinds,
             glyphs,
+            keys,
             badges: std::collections::HashMap::new(),
             badging: false,
             copy: None,
             find: None,
             asking: None,
+            palette: None,
             was: None,
             readonly: false,
             complained: false,
@@ -1895,6 +1923,9 @@ impl App {
         if let Some(a) = &self.asking {
             ui::ask::render(buf, content, &self.glyphs, a.what, &a.text);
         }
+        if let Some(p) = &self.palette {
+            ui::palette::render(buf, content, &self.glyphs, p, &mut self.hits);
+        }
         if let Some(p) = &self.picker {
             ui::picker::render(
                 buf,
@@ -2002,6 +2033,15 @@ impl App {
                 self.open_picker();
                 return;
             }
+            Target::PaletteRow(i) => {
+                if let Some(p) = self.palette.as_mut()
+                    && let Some(at) = p.matches().iter().position(|(j, _)| *j == i)
+                {
+                    p.selected = at;
+                }
+                self.palette_key(KeyEvent::from(KeyCode::Enter));
+                return;
+            }
             Target::FoundRow(i) => {
                 if let Some(f) = self.find.as_mut() {
                     f.at = i;
@@ -2056,6 +2096,9 @@ impl App {
         if self.picker.is_some() {
             return self.picker_key(k);
         }
+        if self.palette.is_some() && !self.prefix {
+            return self.palette_key(k);
+        }
         if self.asking.is_some() && !self.prefix {
             return self.ask_key(k);
         }
@@ -2084,6 +2127,59 @@ impl App {
             return;
         }
         self.send_key(k);
+    }
+
+    fn open_palette(&mut self) {
+        self.palette = Some(palette::Palette::new(&self.session, &self.keys));
+    }
+
+    /// Keys while the palette is open.
+    fn palette_key(&mut self, k: KeyEvent) {
+        let Some(p) = self.palette.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Down | KeyCode::Tab => p.move_by(1),
+            KeyCode::Up | KeyCode::BackTab => p.move_by(-1),
+            KeyCode::Backspace => {
+                p.query.pop();
+                p.reset();
+            }
+            KeyCode::Char(c) => {
+                p.query.push(c);
+                p.reset();
+            }
+            KeyCode::Enter => {
+                let chosen = p
+                    .matches()
+                    .get(p.selected)
+                    .map(|(i, _)| *i)
+                    .and_then(|i| p.entry(i).map(|e| (e.what, e.why_not.clone())));
+                let Some((what, why_not)) = chosen else {
+                    return;
+                };
+                // Refused rather than done quietly wrong. The reason was on the
+                // row; pressing anyway should say the same thing.
+                if let Some(why) = why_not {
+                    return self.note(&why);
+                }
+                self.palette = None;
+                match what {
+                    palette::What::Do(a) => self.perform(a),
+                    palette::What::Go(focus) => {
+                        // Through the same door a click uses, so a workspace
+                        // that closed while the palette was open cannot leave
+                        // focus pointing at nothing.
+                        match focus {
+                            Focus::Layout(i) => self.act(Target::Layout(i)),
+                            Focus::Ws { p, w } => self.act(Target::Workspace { p, w }),
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Ask which branch, then make a worktree for it.
@@ -2437,67 +2533,37 @@ impl App {
     }
 
     fn command(&mut self, k: KeyEvent) {
+        // Pressing the prefix twice sends a literal one through.
+        if k.code == KeyCode::Char(' ') && k.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(p) = self.session.active_pane_mut() {
+                p.write(&[0]);
+            }
+            return;
+        }
+
+        // The named actions first, so a rebind reaches everything. What is left
+        // after them is the things that are not actions: a layout's own key,
+        // and the two spellings of split that are shapes rather than words.
+        let pressed = match k.code {
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Tab => "tab".into(),
+            KeyCode::BackTab => "shift-tab".into(),
+            KeyCode::Down => "down".into(),
+            KeyCode::Up => "up".into(),
+            _ => String::new(),
+        };
+        if let Some(action) = self.keys.action(&pressed) {
+            return self.perform(action);
+        }
+
         let (rows, cols) = (self.content.height, self.content.width);
         match k.code {
-            // Pressing the prefix twice sends a literal one through.
-            KeyCode::Char(' ') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(p) = self.session.active_pane_mut() {
-                    p.write(&[0]);
-                }
-            }
-            KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('d') => self.detach(),
-            KeyCode::Char('n') => {
-                if let Focus::Ws { p, .. } = self.session.focus {
-                    self.session.new_workspace(p, rows, cols);
-                } else {
-                    self.note("no project focused");
-                }
-            }
-            KeyCode::Char('o') => self.open_picker(),
-            KeyCode::Char('a') => self.new_agent(),
-            KeyCode::Char('[') => self.start_copy(),
-            KeyCode::Char('/') => self.start_find(),
-            KeyCode::Char('x') => self.session.close_focused(),
-            KeyCode::Char('u') => {
-                if self.session.release_hold() {
-                    self.note("naming released");
-                } else {
-                    self.note("not held");
-                }
-            }
-            KeyCode::Char('r') => {
-                if !self.session.restart_focused(self.content) {
-                    self.note("nothing to restart");
-                }
-            }
-            KeyCode::Char('|') | KeyCode::Char('v') => self.session.split(Dir::Cols, rows, cols),
-            KeyCode::Char('-') | KeyCode::Char('s') => self.session.split(Dir::Rows, rows, cols),
-            KeyCode::Char('b') => self.sidebar = !self.sidebar,
-            KeyCode::Char('w') => {
-                self.nav.active = !self.nav.active;
-                if self.nav.active {
-                    // Giving the keyboard to something that is not on screen
-                    // looks exactly like a freeze, and the prefix cannot be
-                    // reached from inside nav mode to undo it.
-                    self.sidebar = true;
-                    // Start where the eye already is.
-                    self.nav.sync(&self.nav_rows, self.session.focus);
-                }
-            }
-            KeyCode::Char(';') => self.session.cycle_pane(),
-            KeyCode::Char('z') => {
-                if let Some(ws) = self.session.focused_workspace_mut()
-                    && !ws.zoom()
-                {
-                    self.note("nothing to zoom past");
-                }
-            }
-            KeyCode::Char('W') => self.ask_for_worktree(),
-            KeyCode::Char('{') => self.move_pane(-1),
-            KeyCode::Char('}') => self.move_pane(1),
-            KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.session.step_workspace(1),
-            KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => self.session.step_workspace(-1),
+            // `|` and `-` draw the split they make, which is worth keeping
+            // beside the letters even though nothing would break without them.
+            KeyCode::Char('|') => self.session.split(Dir::Cols, rows, cols),
+            KeyCode::Char('-') => self.session.split(Dir::Rows, rows, cols),
+            KeyCode::Tab | KeyCode::Down => self.session.step_workspace(1),
+            KeyCode::BackTab | KeyCode::Up => self.session.step_workspace(-1),
             KeyCode::Char(c) => {
                 if let Some(i) = self
                     .session
@@ -2509,6 +2575,68 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Do one of the named things.
+    ///
+    /// The palette and the keyboard both come through here, so a thing that
+    /// works one way cannot fail to work the other -- which is the failure the
+    /// hit map already avoids for the pointer.
+    fn perform(&mut self, action: action::Action) {
+        use action::Action as A;
+        if let Some(why) = action.why_not(&self.session) {
+            return self.note(why);
+        }
+        let (rows, cols) = (self.content.height, self.content.width);
+        match action {
+            A::Detach => self.detach(),
+            A::Quit => self.quit = true,
+            A::NewWorkspace => {
+                if let Focus::Ws { p, .. } = self.session.focus {
+                    self.session.new_workspace(p, rows, cols);
+                }
+            }
+            A::OpenProject => self.open_picker(),
+            A::NewAgent => self.new_agent(),
+            A::NewWorktree => self.ask_for_worktree(),
+            A::SplitCols => self.session.split(Dir::Cols, rows, cols),
+            A::SplitRows => self.session.split(Dir::Rows, rows, cols),
+            A::ClosePane => self.session.close_focused(),
+            A::CyclePane => self.session.cycle_pane(),
+            A::Zoom => {
+                if let Some(ws) = self.session.focused_workspace_mut() {
+                    ws.zoom();
+                }
+            }
+            A::MovePaneBack => self.move_pane(-1),
+            A::MovePaneOn => self.move_pane(1),
+            A::Restart => {
+                if !self.session.restart_focused(self.content) {
+                    self.note("nothing to restart");
+                }
+            }
+            A::Read => self.start_copy(),
+            A::Find => self.start_find(),
+            A::NextSpace => self.session.step_workspace(1),
+            A::PrevSpace => self.session.step_workspace(-1),
+            A::Sidebar => self.sidebar = !self.sidebar,
+            A::Nav => {
+                self.nav.active = !self.nav.active;
+                if self.nav.active {
+                    // Giving the keyboard to something that is not on screen
+                    // looks exactly like a freeze, and the prefix cannot be
+                    // reached from inside nav mode to undo it.
+                    self.sidebar = true;
+                    // Start where the eye already is.
+                    self.nav.sync(&self.nav_rows, self.session.focus);
+                }
+            }
+            A::Palette => self.open_palette(),
+            A::Release => match self.session.release_hold() {
+                true => self.note("naming released"),
+                false => self.note("not held"),
+            },
         }
     }
 

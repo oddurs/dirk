@@ -56,6 +56,9 @@ pub enum Target {
     PickerRow(usize),
     /// One result of a search, by position in the list.
     FoundRow(usize),
+    /// One row of the palette, by position in the whole list rather than in
+    /// what is currently showing.
+    PaletteRow(usize),
     /// The two ways out, at the right of the rail. One parks the work and one
     /// ends it, which is why they are two buttons and not one.
     Detach,
