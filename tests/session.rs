@@ -1553,11 +1553,24 @@ fn the_nav_draws_the_tabs_a_space_actually_has() {
     assert!(ok, "tab rename failed");
 
     // Expand the space, which is what the disclosure mark on its row does.
+    // Found by its number rather than by the project's name: the name is the
+    // directory this checkout happens to be in, which is not the same in a
+    // worktree as it is in the repository.
     let rows = client.rows();
+    // Below the spaces heading: the boards above it are numbered too, and
+    // clicking one of those opens a board instead.
+    let from = rows
+        .iter()
+        .position(|line| line.trim_start().starts_with("spaces"))
+        .expect("the spaces heading");
     let (row, col) = rows
         .iter()
         .enumerate()
-        .find_map(|(r, line)| line.find("1 dirk").map(|c| (r, c)))
+        .skip(from)
+        .find_map(|(r, line)| {
+            let at = line.find("1 ")?;
+            line[..at].trim().is_empty().then_some((r, at))
+        })
         .expect("the workspace row");
     // Once: the row is already focused, so the click is the disclosure.
     let mut client = client;
