@@ -1314,7 +1314,14 @@ impl App {
                 if kind.command.is_empty() {
                     return Reply::err(format!("{} has no command to start it with", kind.name));
                 }
-                let Some(pane) = api::target_pane(&self.session, &arg(1)) else {
+                // No pane means the one you are in, the same way no workspace
+                // means the one you are looking at. A target that was given and
+                // did not resolve is still an error.
+                let target = match arg(1).is_empty() {
+                    true => self.session.focused_workspace().map(|ws| ws.focus),
+                    false => api::target_pane(&self.session, &arg(1)),
+                };
+                let Some(pane) = target else {
                     return Reply::err("no such pane");
                 };
                 match self.start_agent(pane, &kind, false) {

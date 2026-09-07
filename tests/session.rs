@@ -1110,6 +1110,24 @@ fn starting_an_agent_refuses_a_pane_that_is_busy() {
 }
 
 #[test]
+fn starting_an_agent_with_no_pane_means_the_one_you_are_in() {
+    // The same rule as `agent state`: nothing said means here. A hook or a
+    // shell command inside a pane should not have to look its own id up first.
+    let session = unique("here");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    // A shell at a prompt, which is what a free pane is.
+    std::thread::sleep(Duration::from_secs(2));
+
+    let (ok, out) = ask(&session, &["agent", "start", "claude"]);
+    assert!(ok, "it could not find the pane it was standing in: {out}");
+    assert!(out.contains("claude"), "said the wrong thing: {out}");
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
 fn an_agent_nobody_configured_is_refused_by_name() {
     let session = unique("nokind");
     let client = Client::attach(&session);
