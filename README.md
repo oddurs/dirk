@@ -94,6 +94,8 @@ literal one through.
 | `\|` `v` | split into columns |
 | `-` `s` | split into rows |
 | `;` | next pane in this workspace |
+| `z` | zoom: one pane fills the space, and back |
+| `{` `}` | move this pane past its neighbour |
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
 | `1` `2` `3` | jump to a page |
 | `b` | hide the nav |
@@ -146,6 +148,14 @@ A folded project carries the worst state inside it and a count, so twenty repos
 fit on a screen and the one that is blocked still says so. `rows = "short"`
 drops the branch line, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
+
+**Zoom is a view, not a change.** The tree is untouched, so leaving puts every
+pane back exactly where it was and nothing running notices anything beyond a
+resize — the alternative, closing the others and reopening them, is a different
+operation and the programs would not survive it. A zoomed space is marked in the
+nav, since one pane looks like one pane.
+
+Moving is the same idea: two panes exchange places and neither is restarted.
 
 ## Reading what has gone past
 

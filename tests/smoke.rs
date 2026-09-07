@@ -1415,3 +1415,76 @@ fn leaving_a_search_puts_you_back_where_you_were() {
         h.drawn()
     );
 }
+
+// ── One pane, and putting them back ─────────────────────────────────────
+
+#[test]
+fn zoom_gives_one_pane_the_whole_space_and_gives_it_back() {
+    // A view rather than a change: leaving has to put every pane back exactly
+    // where it was, with what is running in it untouched.
+    let mut h = Harness::start_with_config("[nav]\nglyphs = \"ascii\"\n");
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.prefix(b"b"); // the nav out of the way, so the panes are wide
+    h.prefix(b"|");
+    h.send(b"printf 'zzRIGHT'\r");
+    h.prefix(b";");
+    h.send(b"printf 'zzLEFT'\r");
+    assert!(
+        h.wait_for("zzRIGHT", Duration::from_secs(10)),
+        "no right pane"
+    );
+    assert!(
+        h.wait_for("zzLEFT", Duration::from_secs(10)),
+        "no left pane"
+    );
+
+    h.prefix(b"z");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzRIGHT").is_none()),
+        "zoom did not hide the other pane\n{}",
+        h.drawn()
+    );
+
+    h.prefix(b"z");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzRIGHT").is_some()),
+        "leaving zoom did not put the other pane back\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("zzLEFT").is_some(),
+        "the zoomed pane lost what was in it\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_pane_can_be_moved_past_its_neighbour() {
+    // Neither program is restarted, so both markers survive the move -- they
+    // are just on the other side of the screen.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+    h.prefix(b"b");
+    h.prefix(b"|");
+    h.send(b"printf 'zzB'\r");
+    h.prefix(b";");
+    h.send(b"printf 'zzA'\r");
+    assert!(h.wait_for("zzB", Duration::from_secs(10)), "no second pane");
+    assert!(h.wait_for("zzA", Duration::from_secs(10)), "no first pane");
+
+    let before = h.find("zzA").expect("on screen").1;
+    h.prefix(b"}");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .find("zzA")
+            .is_some_and(|(_, col)| col != before)),
+        "the pane did not move\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("zzB").is_some(),
+        "the pane it moved past lost what was in it\n{}",
+        h.drawn()
+    );
+}
