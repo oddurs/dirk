@@ -163,7 +163,7 @@ pub fn render(buf: &mut Buffer, area: Rect, picker: &Picker, hits: &mut HitMap) 
             buf,
             x,
             y,
-            &elide(&entry.0, inner_w as usize),
+            &elide(&entry.0, inner_w as usize, "…"),
             style,
             inner_w,
         );

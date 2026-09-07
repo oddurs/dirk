@@ -2,7 +2,7 @@
 id: 66
 title: One glyph table, with cell widths
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07

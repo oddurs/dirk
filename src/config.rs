@@ -109,8 +109,10 @@ pub struct Brand {
     pub name: String,
 }
 
+/// Empty means the glyph set's mark, so a terminal that cannot draw `▾` is not
+/// handed a `◆` either. Naming one here makes it content, and content is yours.
 fn default_mark() -> String {
-    "◆".into()
+    String::new()
 }
 fn default_name() -> String {
     "dirk".into()
@@ -141,6 +143,74 @@ pub struct Config {
     pub scrollback: usize,
     pub naming: Naming,
     pub notify: Notify,
+    pub nav: Nav,
+}
+
+/// How the column down the left is drawn.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Nav {
+    /// Which shipped set of marks to draw with: `unicode` or `ascii`.
+    pub glyphs: String,
+    /// Marks to replace, for a font dirk cannot check the presence of.
+    #[serde(rename = "glyph")]
+    pub glyphs_override: Vec<GlyphDef>,
+    /// Whether the attention zone holds its place: `when-needed`, `always` or
+    /// `never`.
+    pub attention: String,
+    /// `tall` gives a workspace a second line for its branch; `short` gives it
+    /// one line, which is what forty of them need.
+    pub rows: String,
+}
+
+impl Default for Nav {
+    fn default() -> Self {
+        Nav {
+            glyphs: "unicode".into(),
+            glyphs_override: Vec::new(),
+            attention: "when-needed".into(),
+            rows: "tall".into(),
+        }
+    }
+}
+
+/// One mark, replaced.
+///
+/// `cells` is not optional and has no sensible default: it is how many columns
+/// the terminal gives this text, which dirk cannot measure and must not guess.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlyphDef {
+    pub name: String,
+    pub text: String,
+    pub cells: u16,
+}
+
+impl Nav {
+    /// The marks to draw with, after the overrides.
+    pub fn glyphs(&self) -> crate::glyph::Glyphs {
+        let mut set = crate::glyph::Glyphs::set(&self.glyphs);
+        for def in &self.glyphs_override {
+            if let Some(g) = crate::glyph::G::named(&def.name) {
+                set.set_one(g, &def.text, def.cells);
+            }
+        }
+        set
+    }
+
+    /// Whether the attention zone is drawn when it is empty, or at all.
+    pub fn attention_always(&self) -> bool {
+        self.attention == "always"
+    }
+
+    pub fn attention_never(&self) -> bool {
+        self.attention == "never"
+    }
+
+    /// Whether a workspace gets a second line for its branch.
+    pub fn tall(&self) -> bool {
+        self.rows != "short"
+    }
 }
 
 /// When dirk is allowed to interrupt you.
@@ -355,6 +425,7 @@ impl Default for Config {
             scrollback: 5000,
             naming: Naming::default(),
             notify: Notify::default(),
+            nav: Nav::default(),
         }
     }
 }
@@ -455,6 +526,37 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
             out.push(format!(
                 "layout {}: defined twice; only the first is reachable",
                 l.name
+            ));
+        }
+    }
+    // A set that does not exist is drawn as the default one, and a mark that
+    // does not exist is not drawn at all -- both silently, and both looking
+    // exactly like a setting that did not take.
+    const SETS: &[&str] = &["unicode", "ascii"];
+    if !SETS.contains(&cfg.nav.glyphs.as_str()) {
+        out.push(format!(
+            "nav: no glyph set {:?}; using unicode. One of {}",
+            cfg.nav.glyphs,
+            SETS.join(", ")
+        ));
+    }
+    for def in &cfg.nav.glyphs_override {
+        if crate::glyph::G::named(&def.name).is_none() {
+            out.push(format!("nav: no glyph called {:?}", def.name));
+        }
+    }
+    for (field, value, allowed) in [
+        (
+            "attention",
+            &cfg.nav.attention,
+            &["when-needed", "always", "never"][..],
+        ),
+        ("rows", &cfg.nav.rows, &["tall", "short"][..]),
+    ] {
+        if !allowed.contains(&value.as_str()) {
+            out.push(format!(
+                "nav: {field} = {value:?} is not one of {}",
+                allowed.join(", ")
             ));
         }
     }

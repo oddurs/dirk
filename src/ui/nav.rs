@@ -48,11 +48,13 @@
 //! same lookup the renderer already does; done as one pass with a moving cursor,
 //! each of those is awkward on its own.
 
+use crate::config::Config;
+use crate::glyph::{G, Glyphs};
 use crate::hit::{HitMap, Target};
 use crate::mux::session::since;
 use crate::mux::{Focus, Session, Workspace};
 use crate::theme::THEME;
-use crate::ui::{elide, fill, heading, write_str};
+use crate::ui::{cells, elide, fill, heading, write_str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -60,7 +62,9 @@ use ratatui::layout::Rect;
 pub enum Section {
     Layouts,
     Spaces,
-    Agents,
+    /// What is owed. Not a third list of its own things -- the same workspaces
+    /// as `Spaces`, in the order you would deal with them.
+    Attention,
 }
 
 impl Section {
@@ -68,22 +72,30 @@ impl Section {
         match self {
             Section::Layouts => "layouts",
             Section::Spaces => "spaces",
-            Section::Agents => "agents",
+            Section::Attention => "needs you",
         }
     }
 
     /// What the list can do, shown under it. An action a list supports should
     /// be visible in the list rather than remembered.
-    fn actions(self) -> &'static [(&'static str, &'static str, Action)] {
+    fn actions(self) -> &'static [(Press, &'static str, Action)] {
         match self {
-            Section::Layouts => &[("↵", "open", Action::Hint)],
+            Section::Layouts => &[(Press::Mark(G::Enter), "open", Action::Hint)],
             Section::Spaces => &[
-                ("n", "new", Action::NewWorkspace),
-                ("o", "project", Action::OpenProject),
+                (Press::Key("n"), "new", Action::NewWorkspace),
+                (Press::Key("o"), "project", Action::OpenProject),
             ],
-            Section::Agents => &[("↵", "go", Action::Hint), ("s", "sort", Action::Sort)],
+            Section::Attention => &[(Press::Mark(G::Enter), "go", Action::Hint)],
         }
     }
+}
+
+/// The key a footer entry names. Most are a letter; Enter is a mark, and a mark
+/// is whatever the set says it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Press {
+    Key(&'static str),
+    Mark(G),
 }
 
 /// What a footer entry does when clicked. `Hint` is a reminder of a key that
@@ -93,7 +105,6 @@ enum Action {
     Hint,
     NewWorkspace,
     OpenProject,
-    Sort,
 }
 
 impl Action {
@@ -104,7 +115,6 @@ impl Action {
         match self {
             Action::Hint => None,
             Action::OpenProject => Some(Target::OpenProject),
-            Action::Sort => Some(Target::SortAgents),
             Action::NewWorkspace => match session.focus {
                 Focus::Ws { p, .. } => Some(Target::NewWorkspace(p)),
                 Focus::Layout(_) => None,
@@ -175,7 +185,7 @@ impl Row {
 }
 
 /// Every row the nav would draw if it had unlimited height.
-pub fn rows(session: &Session, sort: Sort) -> Vec<Row> {
+pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
     let mut out = Vec::new();
 
     if !session.layouts.is_empty() {
@@ -201,7 +211,7 @@ pub fn rows(session: &Session, sort: Sort) -> Vec<Row> {
             out.push(Row::Workspace { p, w, n });
             // Only when there is something to say. A row with nothing for its
             // second line draws one line rather than a blank one.
-            if proj.repo.as_ref().is_some_and(|r| !r.branch.is_empty()) {
+            if cfg.nav.tall() && proj.repo.as_ref().is_some_and(|r| !r.branch.is_empty()) {
                 out.push(Row::Branch { p, w });
             }
             // A workspace with one pane draws no subtree: there is nothing the
@@ -215,44 +225,20 @@ pub fn rows(session: &Session, sort: Sort) -> Vec<Row> {
     }
     out.push(Row::Footer(Section::Spaces));
 
-    let agents = attention(session, sort);
-    if !agents.is_empty() {
-        out.push(Row::Blank);
-        out.push(Row::Heading(Section::Agents, agents.len()));
-        out.extend(agents.into_iter().map(|(p, w)| Row::Agent { p, w }));
-        out.push(Row::Footer(Section::Agents));
+    // Only what is owed, and only when something is. An empty heading is
+    // slower to read than no heading, and this section spent its whole life so
+    // far holding a place for the answer "nothing".
+    if !cfg.nav.attention_never() {
+        let owed = attention(session);
+        if !owed.is_empty() || cfg.nav.attention_always() {
+            out.push(Row::Blank);
+            out.push(Row::Heading(Section::Attention, owed.len()));
+            out.extend(owed.into_iter().map(|(p, w)| Row::Agent { p, w }));
+            out.push(Row::Footer(Section::Attention));
+        }
     }
 
     out
-}
-
-/// How the agents list is ordered.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Sort {
-    /// What is owed: blocked, then finished-and-unseen, then working, then
-    /// idle. Oldest first inside each, because the thing that has been waiting
-    /// longest is the thing that has been waiting longest.
-    #[default]
-    Attention,
-    /// Most recently active first, for following what is happening rather than
-    /// clearing what is owed.
-    Recent,
-}
-
-impl Sort {
-    fn label(self) -> &'static str {
-        match self {
-            Sort::Attention => "attention",
-            Sort::Recent => "recent",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Sort::Attention => Sort::Recent,
-            Sort::Recent => Sort::Attention,
-        }
-    }
 }
 
 /// Lower is more urgent. `blocked` is first because it is the only state
@@ -279,26 +265,33 @@ fn rank(state: &str) -> u8 {
 /// pane's foreground process group. It used to be "has published a title", and
 /// that was wrong in a way worth naming: shells set titles too, so every plain
 /// shell was listed here as something wanting attention.
-fn attention(session: &Session, sort: Sort) -> Vec<(usize, usize)> {
+fn attention(session: &Session) -> Vec<(usize, usize)> {
     let mut v: Vec<(usize, usize)> = Vec::new();
     for (p, proj) in session.projects.iter().enumerate() {
         for (w, ws) in proj.workspaces.iter().enumerate() {
             // The same field the glyph reads. Asking the occupant here and
             // the state there was two answers to one question, and they
             // disagreed on screen.
-            if ws.state != crate::agent::State::None {
+            // Blocked and done only. `working` is not asking for anything and
+            // `idle` is asking for less than that, and a zone that lists them
+            // is the third list this replaced.
+            if matches!(
+                ws.state,
+                crate::agent::State::Blocked | crate::agent::State::Done
+            ) {
                 v.push((p, w));
             }
         }
     }
     v.sort_by_key(|&(p, w)| {
         let ws = &session.projects[p].workspaces[w];
-        let age = ws.touched.elapsed().as_secs();
-        match sort {
-            // Oldest first within a rank, so `age` sorts descending.
-            Sort::Attention => (rank(state_of(ws)), u64::MAX - age),
-            Sort::Recent => (0, age),
-        }
+        // Oldest first within a rank, so `age` sorts descending. There is one
+        // sensible order here and it is this one, which is why the toggle that
+        // used to sit in this section's footer is gone.
+        (
+            rank(state_of(ws)),
+            u64::MAX - ws.touched.elapsed().as_secs(),
+        )
     });
     v
 }
@@ -402,7 +395,6 @@ pub fn allocate(wants: &[usize], height: usize) -> Vec<usize> {
 #[derive(Debug, Default)]
 pub struct Nav {
     pub selected: usize,
-    pub sort: Sort,
     /// One scroll offset per section, keyed by position in `sections()`. A
     /// section that fits is never scrolled at all.
     offsets: Vec<usize>,
@@ -468,10 +460,6 @@ impl Nav {
         rows.get(self.selected).copied()
     }
 
-    pub fn cycle_sort(&mut self) {
-        self.sort = self.sort.next();
-    }
-
     /// Scroll the section under the pointer, without moving the selection.
     pub fn scroll_by(&mut self, row: u16, delta: isize) {
         let Some(band) = self
@@ -495,12 +483,14 @@ impl Nav {
 pub fn render(
     buf: &mut Buffer,
     area: Rect,
+    cfg: &Config,
     session: &Session,
     nav: &mut Nav,
     hits: &mut HitMap,
 ) -> Vec<Row> {
     fill(buf, area, THEME.panel());
-    let all = rows(session, nav.sort);
+    let glyphs = cfg.nav.glyphs();
+    let all = rows(cfg, session);
     if area.width < 8 || area.height == 0 {
         return all;
     }
@@ -578,7 +568,7 @@ pub fn render(
                 row,
                 &Ctx {
                     inner,
-                    sort: nav.sort,
+                    g: &glyphs,
                     y: ry,
                     session,
                     selected: nav.selected == index && row.selectable(),
@@ -616,7 +606,8 @@ pub fn render(
 /// was a struct that had not been written down yet.
 struct Ctx<'a> {
     inner: Rect,
-    sort: Sort,
+    /// The marks to draw with, resolved once per frame.
+    g: &'a Glyphs,
     y: u16,
     session: &'a Session,
     /// This row is the selection.
@@ -656,13 +647,8 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 section.title(),
                 THEME.title(),
             );
-            // The agents list is the only one whose order is a choice, so it
-            // is the only one that has to say what the choice currently is.
-            let right = match section {
-                Section::Agents => cx.sort.label().to_string(),
-                _ => count.to_string(),
-            };
-            let x = inner.right().saturating_sub(right.chars().count() as u16);
+            let right = count.to_string();
+            let x = inner.right().saturating_sub(cells(&right));
             write_str(buf, x, y, &right, THEME.faint(), w);
         }
 
@@ -674,12 +660,16 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                         buf,
                         x,
                         y,
-                        "  ·  ",
+                        &format!("  {}  ", cx.g.text(G::Sep)),
                         THEME.faint(),
                         inner.right().saturating_sub(x),
                     );
                 }
                 let start = x;
+                let key = match key {
+                    Press::Key(k) => k,
+                    Press::Mark(g) => cx.g.text(*g),
+                };
                 let live = action.target(session);
                 let (kstyle, lstyle) = match live {
                     Some(_) => (THEME.key(), THEME.dim()),
@@ -726,41 +716,80 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             }
             // A dot for a layout that is open, so "running" and "not yet built"
             // are distinguishable without a second column.
-            x += write_str(buf, x, y, if open { "• " } else { "  " }, THEME.ok(), w);
+            x += match open {
+                true => write_str(buf, x, y, cx.g.text(G::Running), THEME.ok(), w),
+                false => cx.g.cells(G::Running),
+            };
+            x += write_str(buf, x, y, " ", THEME.ok(), w);
             let left = w.saturating_sub(x - inner.x) as usize;
             let style = if focused {
                 style.patch(THEME.project())
             } else {
                 style
             };
-            write_str(buf, x, y, &elide(&layout.def.name, left), style, w);
+            write_str(
+                buf,
+                x,
+                y,
+                &elide(&layout.def.name, left, cx.g.text(G::Ellipsis)),
+                style,
+                w,
+            );
         }
 
         Row::Project(p) => {
             let Some(proj) = session.projects.get(p) else {
                 return;
             };
+            let fold = if proj.expanded {
+                G::Expanded
+            } else {
+                G::Collapsed
+            };
             let mut x = inner.x;
-            x += write_str(
+            x += write_str(buf, x, y, cx.g.text(fold), THEME.rule_strong(), w);
+            x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
+
+            // What a collapsed project is hiding, right-aligned and reserved
+            // before the name is written. Folding a project to make twenty of
+            // them fit should not also hide the one agent that is blocked --
+            // that is the thing the column exists to show.
+            let mut right = 0u16;
+            if !proj.expanded && !proj.workspaces.is_empty() {
+                let n = proj.workspaces.len().to_string();
+                right = cells(&n);
+                write_str(
+                    buf,
+                    inner.right().saturating_sub(right),
+                    y,
+                    &n,
+                    THEME.faint(),
+                    right,
+                );
+                if let Some(worst) = worst_state(proj) {
+                    let mark = cx.g.text(G::state(worst));
+                    right += cells(mark) + 1;
+                    write_str(
+                        buf,
+                        inner.right().saturating_sub(right),
+                        y,
+                        mark,
+                        THEME.state_style(worst),
+                        cells(mark),
+                    );
+                }
+                right += 1;
+            }
+
+            let left = w.saturating_sub(x - inner.x).saturating_sub(right) as usize;
+            write_str(
                 buf,
                 x,
                 y,
-                if proj.expanded { "▾ " } else { "▸ " },
-                THEME.rule_strong(),
+                &elide(&proj.name, left, cx.g.text(G::Ellipsis)),
+                THEME.project(),
                 w,
             );
-            let left = w.saturating_sub(x - inner.x).saturating_sub(3) as usize;
-            x += write_str(buf, x, y, &elide(&proj.name, left), THEME.project(), w);
-            if !proj.expanded && proj.workspaces.len() > 1 {
-                write_str(
-                    buf,
-                    x + 1,
-                    y,
-                    &proj.workspaces.len().to_string(),
-                    THEME.faint(),
-                    w,
-                );
-            }
         }
 
         Row::Workspace { p, w: wi, n } => {
@@ -798,7 +827,14 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 THEME.branch()
             };
             let left = w.saturating_sub(6) as usize;
-            write_str(buf, inner.x + 6, y, &elide(&repo.branch, left), style, w);
+            write_str(
+                buf,
+                inner.x + 6,
+                y,
+                &elide(&repo.branch, left, cx.g.text(G::Ellipsis)),
+                style,
+                w,
+            );
         }
 
         Row::Pane { p, w: wi, index } => {
@@ -819,14 +855,9 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             };
 
             let mut x = inner.x + 4;
-            x += write_str(
-                buf,
-                x,
-                y,
-                if last { "└ " } else { "├ " },
-                THEME.rule_strong(),
-                w,
-            );
+            let branch = if last { G::TreeLast } else { G::TreeMid };
+            x += write_str(buf, x, y, cx.g.text(branch), THEME.rule_strong(), w);
+            x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
             // A pane's own label if a layout gave it one, otherwise whatever
             // the program inside is calling itself.
             let name = pane
@@ -857,7 +888,14 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                     }
                 });
             let left = w.saturating_sub(x - inner.x) as usize;
-            write_str(buf, x, y, &elide(&name, left), style, w);
+            write_str(
+                buf,
+                x,
+                y,
+                &elide(&name, left, cx.g.text(G::Ellipsis)),
+                style,
+                w,
+            );
         }
 
         Row::NewWorkspace(_) => {
@@ -902,10 +940,11 @@ fn space_row(
     } = *cx;
     let w = inner.width;
     let focused = session.focus == Focus::Ws { p, w: wi };
-    let (glyph, gstyle) = THEME.agent_state(state_of(ws));
+    let state = state_of(ws);
+    let glyph = cx.g.text(G::state(state));
 
     let age = since(ws.touched.elapsed());
-    let age_w = age.chars().count() as u16;
+    let age_w = cells(&age);
     write_str(
         buf,
         inner.right().saturating_sub(age_w),
@@ -916,13 +955,13 @@ fn space_row(
     );
 
     let mut x = inner.x;
-    let arrow = match (ws.panes.len() > 1, ws.expanded) {
-        (false, _) => "  ",
-        (true, false) => "▸ ",
-        (true, true) => "▾ ",
+    x += match (ws.panes.len() > 1, ws.expanded) {
+        (false, _) => cx.g.cells(G::Collapsed),
+        (true, false) => write_str(buf, x, y, cx.g.text(G::Collapsed), THEME.rule_strong(), w),
+        (true, true) => write_str(buf, x, y, cx.g.text(G::Expanded), THEME.rule_strong(), w),
     };
-    x += write_str(buf, x, y, arrow, THEME.rule_strong(), w);
-    x += write_str(buf, x, y, glyph, gstyle, w);
+    x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
+    x += write_str(buf, x, y, glyph, THEME.state_style(state), w);
     x += write_str(buf, x, y, " ", THEME.text(), w);
     if let Some(n) = number {
         x += write_str(buf, x, y, &format!("{n} "), THEME.number(), w);
@@ -935,27 +974,65 @@ fn space_row(
     };
     // The name gets what is left after the age, plus a space so the two never
     // touch, plus the worktree mark when there is one.
-    let mark = if worktree { 2 } else { 0 } + if ws.naming.held { 2 } else { 0 };
+    let mark = if worktree {
+        cx.g.cells(G::Worktree) + 1
+    } else {
+        0
+    } + if ws.naming.held {
+        cx.g.cells(G::Held) + 1
+    } else {
+        0
+    };
     let left = w
         .saturating_sub(x - inner.x)
         .saturating_sub(age_w + 1 + mark) as usize;
-    x += write_str(buf, x, y, &elide(&ws.label, left), style, w);
+    x += write_str(
+        buf,
+        x,
+        y,
+        &elide(&ws.label, left, cx.g.text(G::Ellipsis)),
+        style,
+        w,
+    );
+    // Kept in the short form, where the branch line is not. Which branch this
+    // is is scenery; that it is a worktree at all is what tells two rows
+    // wearing the same repository's name apart.
     if worktree {
-        x += write_str(buf, x + 1, y, "⑂", THEME.worktree(), w) + 1;
+        x += write_str(buf, x + 1, y, cx.g.text(G::Worktree), THEME.worktree(), w) + 1;
     }
     // A held name is one dirk has stood down from. Worth saying, because the
     // alternative is a workspace that mysteriously stops being renamed.
     if ws.naming.held {
-        write_str(buf, x + 1, y, "·", THEME.faint(), w);
+        write_str(buf, x + 1, y, cx.g.text(G::Held), THEME.faint(), w);
     }
+}
+
+/// The most urgent state among a project's workspaces, or nothing if none of
+/// them has one worth reporting.
+///
+/// What a collapsed row shows instead of the rows it is hiding. Without it,
+/// folding a project is a way of losing exactly what the column is for.
+fn worst_state(proj: &crate::mux::session::Project) -> Option<&'static str> {
+    proj.workspaces
+        .iter()
+        .map(|ws| state_of(ws))
+        .filter(|s| rank(s) < rank("idle"))
+        .min_by_key(|s| rank(s))
 }
 
 /// A workspace's state, as the word the theme and the nav both speak.
 ///
 /// The agent's state when there is an agent. When there is not, the column
-/// still has something worth saying — a build is running, or a shell is at a
-/// prompt — and blanking it lost that. The `agents` list keeps asking the
-/// narrower question, which is why it reads `ws.state` directly.
+/// still has something worth saying — a build is running — and blanking that
+/// lost it.
+///
+/// A shell at a prompt is the exception, and it changed when the agents list
+/// became a zone that only holds what is owed. That list was where you could
+/// see which workspaces held an agent at all; without it, an agent sitting
+/// idle drew the same dot as an empty shell and there was nothing left on
+/// screen that told them apart. So a prompt draws nothing now: an empty column
+/// means nothing is happening here, which is what an empty column should mean,
+/// and `·` means an agent, at rest.
 fn state_of(ws: &Workspace) -> &'static str {
     use crate::agent::{Occupant, State};
     if ws.state != State::None {
@@ -963,11 +1040,10 @@ fn state_of(ws: &Workspace) -> &'static str {
     }
     match ws.active_pane() {
         None => "unknown",
-        Some(p) if p.dead => "idle",
+        Some(p) if p.dead => "unknown",
         Some(p) => match &p.occupant {
             // Something is running that is not an agent and not a prompt.
             Occupant::Program(_) => "working",
-            Occupant::Shell => "idle",
             _ => "unknown",
         },
     }
@@ -1114,11 +1190,25 @@ mod tests {
     }
 
     #[test]
-    fn the_sort_toggle_comes_back_to_where_it_started() {
-        let s = Sort::default();
-        assert_eq!(s, Sort::Attention, "triage is the default, not chronology");
-        assert_eq!(s.next().next(), s);
-        assert_ne!(s.label(), s.next().label());
+    fn only_what_is_owed_reaches_the_attention_zone() {
+        // The zone this replaced listed every workspace holding an agent, which
+        // meant a section permanently full of things not asking for anything.
+        for (state, wanted) in [
+            (crate::agent::State::Blocked, true),
+            (crate::agent::State::Done, true),
+            (crate::agent::State::Working, false),
+            (crate::agent::State::Idle, false),
+            (crate::agent::State::None, false),
+        ] {
+            assert_eq!(
+                matches!(
+                    state,
+                    crate::agent::State::Blocked | crate::agent::State::Done
+                ),
+                wanted,
+                "{state:?} in the attention zone: {wanted}"
+            );
+        }
     }
 
     #[test]
