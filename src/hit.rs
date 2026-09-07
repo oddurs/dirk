@@ -50,8 +50,6 @@ pub enum Target {
     NewWorkspace(usize),
     OpenProject,
     PickerRow(usize),
-    /// The agents list is the only one whose order is a choice.
-    SortAgents,
     /// The two ways out, at the right of the rail. One parks the work and one
     /// ends it, which is why they are two buttons and not one.
     Detach,

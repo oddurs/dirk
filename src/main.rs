@@ -47,6 +47,7 @@ mod api;
 mod client;
 mod config;
 mod git;
+mod glyph;
 mod hit;
 mod keys;
 mod llm;
@@ -1298,8 +1299,14 @@ impl App {
         self.side = side;
         let buf = f.buffer_mut();
         if side.width > 0 {
-            self.nav_rows =
-                ui::nav::render(buf, side, &self.session, &mut self.nav, &mut self.hits);
+            self.nav_rows = ui::nav::render(
+                buf,
+                side,
+                &self.cfg,
+                &self.session,
+                &mut self.nav,
+                &mut self.hits,
+            );
         }
         draw_content(buf, content, &self.session, &mut self.hits);
 
@@ -1428,10 +1435,6 @@ impl App {
                     self.open(&path);
                 }
             }
-            Target::SortAgents => {
-                self.nav.cycle_sort();
-                return;
-            }
             Target::Attention(state) => {
                 // The oldest first: what has been waiting longest is what to
                 // look at first. No early return -- this moves you, so it falls
@@ -1505,7 +1508,6 @@ impl App {
                 }
             }
             KeyCode::Char('o') => self.act(Target::OpenProject),
-            KeyCode::Char('s') => self.act(Target::SortAgents),
             _ => {}
         }
     }
@@ -1835,7 +1837,14 @@ fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>, focused: 
         (true, true) => THEME.text(),
         (true, false) => THEME.dim(),
     };
-    x += ui::write_str(buf, x, area.y, &ui::elide(label, left), style, area.width);
+    x += ui::write_str(
+        buf,
+        x,
+        area.y,
+        &ui::elide(label, left, "…"),
+        style,
+        area.width,
+    );
     x += ui::write_str(buf, x, area.y, " ", THEME.rule_strong(), area.width);
 
     for c in x..area.right().saturating_sub(tail_w) {
@@ -1846,7 +1855,7 @@ fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>, focused: 
     if let Some(t) = tail
         && tail_w > 0
     {
-        let text = ui::elide(&t, tail_w as usize);
+        let text = ui::elide(&t, tail_w as usize, "…");
         ui::write_str(
             buf,
             area.right() - tail_w,

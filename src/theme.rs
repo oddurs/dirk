@@ -139,13 +139,19 @@ impl Theme {
     /// second case is the common one — a column of question marks down a tree
     /// of ordinary shells is noise claiming to be information. The space keeps
     /// the column aligned, which is the only thing the glyph was doing there.
-    pub fn agent_state(self, state: &str) -> (&'static str, Style) {
+    /// The colour a state is drawn in.
+    ///
+    /// The mark it is drawn with lives in `glyph.rs`, because it is one of a
+    /// set and this is not the only place that draws it -- the rail wrote its
+    /// own `+` and `!` for the attention counts, and nothing would have noticed
+    /// if these had changed and those had not.
+    pub fn state_style(self, state: &str) -> Style {
         match state {
-            "blocked" => ("!", self.critical().add_modifier(Modifier::BOLD)),
-            "working" => ("*", self.working()),
-            "done" => ("+", self.ok()),
-            "idle" => ("·", self.idle()),
-            _ => (" ", self.faint()),
+            "blocked" => self.critical().add_modifier(Modifier::BOLD),
+            "working" => self.working(),
+            "done" => self.ok(),
+            "idle" | "starting" => self.idle(),
+            _ => self.faint(),
         }
     }
 

@@ -2,7 +2,7 @@
 id: 72
 title: A tree that still reads at twenty projects
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 depends_on:
 - 66

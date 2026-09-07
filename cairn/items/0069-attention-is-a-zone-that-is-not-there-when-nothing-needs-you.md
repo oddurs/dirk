@@ -2,7 +2,7 @@
 id: 69
 title: Attention is a zone that is not there when nothing needs you
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07

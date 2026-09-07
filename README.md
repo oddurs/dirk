@@ -111,6 +111,57 @@ from the nav, and does nothing else.
 
 Everything else goes straight through to the program in the pane.
 
+## What the column says
+
+Three zones down the left, in the order you ask the questions: **layouts** are
+places you go, **needs you** is what is interrupting, and **spaces** is where
+the work lives.
+
+The middle one is only there when something is in it. A heading with nothing
+under it is slower to read than no heading, and an empty middle is the fastest
+possible way to say that nothing is waiting — the same reason the bar declines
+to draw a pair of zeroes. Set `attention = "always"` if you would rather it held
+its place, or `"never"` if you would rather read the tree.
+
+| | |
+| --- | --- |
+| `!` | blocked — waiting on you, and the only state that is owed something |
+| `+` | done — finished, and not looked at since |
+| `*` | working — producing output |
+| `·` | idle — an agent, at rest |
+| | nothing is happening here |
+
+A workspace holding a shell at a prompt draws nothing in that column, because
+nothing is happening in it. That is also what tells an agent sitting idle apart
+from an empty shell, now that they are not listed separately.
+
+A folded project carries the worst state inside it and a count, so twenty repos
+fit on a screen and the one that is blocked still says so. `rows = "short"`
+drops the branch line, which is scenery — the worktree mark stays, because that
+is what tells two rows wearing one repository's name apart.
+
+### Marks and the font
+
+dirk cannot choose your font; your terminal does. What it can do is not assume
+one. `glyphs = "ascii"` draws the whole interface in ASCII, for a terminal or a
+font that cannot manage `▾ ⑂ ▊ ✕`.
+
+There is deliberately no Nerd Font set. Those glyphs live in the Private Use
+Area, where Unicode assigns no width and terminals disagree — and the nav's
+column arithmetic is exact, so disagreeing about width does not look slightly
+wrong, it shifts every column after it. `!` and `+` are also simply better than
+an icon at one cell: they are legible to someone who has not been taught them.
+
+If you have the font and want them anyway, say so per mark, with the width you
+know your terminal gives it:
+
+```toml
+[[nav.glyph]]
+name  = "blocked"
+text  = "\uf071"
+cells = 1
+```
+
 ## Configuration
 
 dirk runs with no config file. `~/.config/dirk/config.toml` overrides what it
@@ -123,8 +174,13 @@ scrollback    = 5000
 shell         = ""           # empty means $SHELL
 
 [brand]
-mark = "◆"
+mark = ""                    # empty takes the glyph set's; naming one makes it yours
 name = "dirk"
+
+[nav]
+glyphs    = "unicode"        # unicode | ascii
+attention = "when-needed"    # when-needed | always | never
+rows      = "tall"           # tall gives a workspace its branch on a second line
 
 # A layout whose programs are not all on PATH is dropped at startup: an entry
 # that could only ever show `command not found` is worse than no entry.

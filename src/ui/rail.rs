@@ -29,10 +29,11 @@
 //! (the button at the far right).
 
 use crate::config::Config;
+use crate::glyph::G;
 use crate::hit::{HitMap, Target};
 use crate::mux::{Focus, Session};
 use crate::theme::THEME;
-use crate::ui::{elide, fill, write_str};
+use crate::ui::{cells, elide, fill, write_str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -58,6 +59,7 @@ pub fn render(
         note: status,
         quit_armed: armed,
     } = *now;
+    let g = cfg.nav.glyphs();
     fill(buf, area, THEME.rail());
     if area.width < 20 {
         return;
@@ -66,8 +68,12 @@ pub fn render(
     // ── Brand ───────────────────────────────────────────────────────────
     let mut x = area.x + 1;
     let b = &cfg.brand;
-    if !b.mark.is_empty() {
-        x += write_str(buf, x, area.y, &b.mark, THEME.working(), area.width);
+    let mark = match b.mark.is_empty() {
+        true => g.text(G::Brand),
+        false => b.mark.as_str(),
+    };
+    if !mark.trim().is_empty() {
+        x += write_str(buf, x, area.y, mark, THEME.working(), area.width);
         x += write_str(buf, x, area.y, " ", THEME.rail(), area.width);
     }
     x += write_str(
@@ -87,15 +93,19 @@ pub fn render(
     // Quit takes two clicks. It sits at the edge of the screen where a stray
     // click is most likely, and a button that ends a day's work on one click is
     // a trap.
-    let quit = if armed { " quit? " } else { " ✕ quit " };
-    let quit_w = quit.chars().count() as u16;
+    let quit = if armed {
+        " quit? ".to_string()
+    } else {
+        format!(" {} quit ", g.text(G::Close))
+    };
+    let quit_w = cells(&quit);
     let quit_x = area.right().saturating_sub(quit_w);
     let quit_style = if armed {
         THEME.critical()
     } else {
         THEME.faint().patch(THEME.rail())
     };
-    write_str(buf, quit_x, area.y, quit, quit_style, quit_w);
+    write_str(buf, quit_x, area.y, &quit, quit_style, quit_w);
     hits.push(
         Rect {
             x: quit_x,
@@ -110,7 +120,7 @@ pub fn render(
     // thing you do several times a day, and it should not look like the
     // dangerous one's quieter sibling.
     let detach = " detach ";
-    let detach_w = detach.chars().count() as u16;
+    let detach_w = cells(detach);
     let detach_x = quit_x.saturating_sub(detach_w);
     write_str(
         buf,
@@ -143,9 +153,9 @@ pub fn render(
             .sum::<usize>();
         parts.push(format!("{n} {}", if n == 1 { "space" } else { "spaces" }));
         parts.push(clock.to_string());
-        parts.join("  ·  ")
+        parts.join(&format!("  {}  ", g.text(G::Sep)))
     };
-    let right_w = right.chars().count() as u16;
+    let right_w = cells(&right);
     let mut right_x = detach_x.saturating_sub(right_w + 1);
     write_str(
         buf,
@@ -159,16 +169,24 @@ pub fn render(
     // ── What is owed ────────────────────────────────────────────────────
     // Only when it is not zero. An empty middle is the fastest possible way to
     // say that nothing needs you, and a pair of zeroes is not information.
+    // The marks come from the same table the nav draws from. They were written
+    // out here as literals, so the two could have disagreed about what "done"
+    // looks like and nothing would have caught it.
     let (blocked, done) = session.counts();
     for (n, glyph, style, state) in [
-        (done, "+", THEME.ok(), crate::agent::State::Done),
-        (blocked, "!", THEME.critical(), crate::agent::State::Blocked),
+        (done, g.text(G::Done), THEME.ok(), crate::agent::State::Done),
+        (
+            blocked,
+            g.text(G::Blocked),
+            THEME.critical(),
+            crate::agent::State::Blocked,
+        ),
     ] {
         if n == 0 {
             continue;
         }
         let text = format!("{glyph} {n}");
-        let w = text.chars().count() as u16;
+        let w = cells(&text);
         // Saturating at zero would stack them on each other and on the brand,
         // and the later hit rect would win, making the first one unclickable.
         if right_x < w + 3 {
@@ -198,9 +216,9 @@ pub fn render(
         };
         let focused = session.focus == Focus::Ws { p, w };
 
-        let label = elide(&ws.label, 14);
+        let label = elide(&ws.label, 14, g.text(G::Ellipsis));
         let text = format!("{} {}", n + 1, label);
-        let width = text.chars().count() as u16 + 2;
+        let width = cells(&text) + 2;
         if x + width > limit {
             break;
         }
@@ -208,9 +226,9 @@ pub fn render(
         // A filled bar for the focused chip, a thin one otherwise: the same
         // distinction the sidebar makes with its selection row, in one column.
         let (bar, style) = if focused {
-            ("▊", THEME.text().patch(THEME.rail()))
+            (g.text(G::BarFocused), THEME.text().patch(THEME.rail()))
         } else {
-            ("▏", THEME.dim().patch(THEME.rail()))
+            (g.text(G::BarPlain), THEME.dim().patch(THEME.rail()))
         };
         let mut cx = x;
         cx += write_str(

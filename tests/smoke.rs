@@ -717,11 +717,11 @@ fn a_shell_that_sets_a_title_is_not_mistaken_for_an_agent() {
     );
 
     // The name is adopted -- that part is right, the title is all dirk has to
-    // go on. What must not happen is the shell appearing under `agents`.
+    // go on. What must not happen is the shell being marked as an agent.
     std::thread::sleep(Duration::from_secs(2));
     assert!(
-        !h.rows().iter().any(|r| r.contains("agents")),
-        "a shell was listed as an agent\n{}",
+        !agent_at_rest(&h),
+        "a shell was marked as an agent\n{}",
         h.drawn()
     );
 }
@@ -754,12 +754,20 @@ fn a_pane_running_an_agent_is_detected_as_one() {
     assert!(h.wait_for(READY, START), "never started");
 
     assert!(
-        h.wait_until(Duration::from_secs(15), |h| {
-            h.rows().iter().any(|r| r.contains("agents"))
-        }),
+        h.wait_until(Duration::from_secs(15), agent_at_rest),
         "a pane running `claude` was not recognised as holding an agent\n{}",
         h.drawn()
     );
+}
+
+/// Whether the nav says a workspace holds an agent that is doing nothing.
+///
+/// An idle agent draws a dot in the state column and a shell at a prompt draws
+/// nothing, which since the agents list became a zone for what is owed is the
+/// only thing on screen that tells the two apart. Matched on the workspace's
+/// own row -- the dot is also the held-name mark and the footer's separator.
+fn agent_at_rest(h: &Harness) -> bool {
+    h.rows().iter().any(|r| r.trim_start().starts_with("· 1 "))
 }
 
 #[test]
@@ -774,10 +782,7 @@ fn an_agent_sitting_on_an_approval_prompt_reads_as_blocked() {
 
     // Recognised as an agent, and not blocked while it has said nothing.
     assert!(
-        h.wait_until(Duration::from_secs(15), |h| h
-            .rows()
-            .iter()
-            .any(|r| r.contains("agents"))),
+        h.wait_until(Duration::from_secs(15), agent_at_rest),
         "not detected as an agent\n{}",
         h.drawn()
     );
@@ -825,10 +830,7 @@ fn work_that_finishes_while_you_are_elsewhere_reads_as_done() {
         Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
     assert!(h.wait_for(READY, START), "never started");
     assert!(
-        h.wait_until(Duration::from_secs(15), |h| h
-            .rows()
-            .iter()
-            .any(|r| r.contains("agents"))),
+        h.wait_until(Duration::from_secs(15), agent_at_rest),
         "not detected as an agent\n{}",
         h.drawn()
     );
@@ -861,10 +863,7 @@ fn the_rail_counts_what_is_owed_and_nothing_else() {
 
     // Nothing owed, nothing said. A pair of zeroes is not information.
     assert!(
-        h.wait_until(Duration::from_secs(15), |h| h
-            .rows()
-            .iter()
-            .any(|r| r.contains("agents"))),
+        h.wait_until(Duration::from_secs(15), agent_at_rest),
         "not detected as an agent\n{}",
         h.drawn()
     );
@@ -1063,6 +1062,121 @@ fn the_nav_hides_and_comes_back() {
     assert!(
         h.wait_for("spaces", Duration::from_secs(5)),
         "the nav did not come back\n{}",
+        h.drawn()
+    );
+}
+
+// ── The marks, and the column they have to fit in ───────────────────────
+
+#[test]
+fn the_ascii_set_draws_a_nav_with_nothing_outside_ascii_in_it() {
+    // The set exists for terminals and fonts that cannot draw the default one.
+    // A set that reaches for `▾` in one forgotten place is a set that does not
+    // solve the problem it was added for.
+    let mut h = Harness::start_with_config("[nav]\nglyphs = \"ascii\"\n");
+    assert!(h.wait_for(READY, START), "never started");
+
+    for row in h.rows() {
+        assert!(
+            row.is_ascii(),
+            "the ascii set drew something that is not ascii:\n{}\n{}",
+            row,
+            h.drawn()
+        );
+    }
+}
+
+#[test]
+fn a_name_two_columns_wide_does_not_push_the_age_off_the_row() {
+    // The nav reserves the age before it writes the name. Counting characters
+    // where the terminal counts columns is how a title an agent wrote in
+    // Japanese -- or with one emoji in it -- moves every column after it.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    // "\u{8aad}\u{307f}\u{8fbc}\u{307f}\u{4e2d}\u{3067}\u{3059}" -- fourteen columns of seven characters.
+    h.send(
+        "printf '\x1b]2;\u{8aad}\u{307f}\u{8fbc}\u{307f}\u{4e2d}\u{3067}\u{3059}\x07'\r".as_bytes(),
+    );
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains('読'))),
+        "the wide name never arrived\n{}",
+        h.drawn()
+    );
+
+    // The nav is the left column and the pane starts after it. A row that
+    // overran would have written into the pane's first column.
+    let row = h
+        .rows()
+        .into_iter()
+        .find(|r| r.contains('読'))
+        .expect("the row is there");
+    assert!(
+        row.contains("now") || row.contains('s') || row.contains('m'),
+        "the age was pushed off the row by a wide name:\n{row}"
+    );
+}
+
+#[test]
+fn a_folded_project_still_says_something_is_waiting_inside_it() {
+    // Folding a project to make twenty of them fit must not also hide the one
+    // agent that is blocked. That is the thing the column exists to show.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+    assert!(
+        h.wait_until(Duration::from_secs(15), agent_at_rest),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+
+    h.send(b"printf 'Do you want to proceed?\\n> 1. Yes\\n  2. No\\n'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.trim_start().starts_with("! "))),
+        "never read as blocked\n{}",
+        h.drawn()
+    );
+
+    // Fold it. The project row is the one with the disclosure mark on it.
+    let (row, col) = h.find("▾").expect("a project to fold");
+    h.click(col as u16, row as u16);
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            h.rows()
+                .iter()
+                .any(|r| r.trim_start().starts_with("▸ ") && r.contains('!'))
+        }),
+        "a folded project said nothing about the agent waiting inside it\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn short_rows_drop_the_branch_and_keep_the_workspace() {
+    // Two lines a workspace is right at five and wrong at forty. What goes is
+    // the branch, which the row above already implies.
+    let mut h = Harness::start_with_config("[nav]\nrows = \"short\"\n");
+    assert!(h.wait_for(READY, START), "never started");
+    std::thread::sleep(Duration::from_secs(2));
+
+    let rows = h.rows();
+    assert!(
+        rows.iter().any(|r| r.contains("dirk")),
+        "the workspace went with the branch\n{}",
+        h.drawn()
+    );
+    // The nav's branch line is indented under the name and holds nothing else.
+    assert!(
+        !rows.iter().any(|r| r.trim() == "main"),
+        "the branch line survived the short form\n{}",
         h.drawn()
     );
 }

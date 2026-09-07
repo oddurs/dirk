@@ -482,8 +482,9 @@ mod tests {
             (State::Idle, "idle"),
         ] {
             assert_eq!(state.glyph_name(), word);
+            let marks = crate::glyph::Glyphs::default();
             assert_ne!(
-                crate::theme::THEME.agent_state(word).0,
+                marks.text(crate::glyph::G::state(word)),
                 " ",
                 "{word} draws nothing"
             );
