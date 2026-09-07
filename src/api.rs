@@ -94,9 +94,15 @@ fn workspace_json(session: &Session, p: usize, w: usize) -> Value {
 }
 
 fn pane_json(ws_id: u64, pane: &crate::mux::Pane, focused: bool) -> Value {
+    // How big it is, which a caller writing into one has to know: a command
+    // that wraps at the wrong column reads as a different command, and there
+    // was no way to ask. Also how the smallest-client rule is checked.
+    let (rows, cols) = pane.term.lock().ok().map_or((0, 0), |t| t.screen().size());
     json!({
         "id": pane_id(ws_id, pane.id),
         "workspace": workspace_id(ws_id),
+        "rows": rows,
+        "cols": cols,
         "cwd": pane.cwd,
         "program": pane.argv.first(),
         "agent": pane.occupant.agent().map(|k| k.name.clone()),

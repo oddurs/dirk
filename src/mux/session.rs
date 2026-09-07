@@ -1366,22 +1366,25 @@ impl Session {
     /// Run on the tick and on output, which is often enough that a state change
     /// is visible within a frame of happening and cheap because only panes
     /// holding an agent are read at all.
-    pub fn update_states(&mut self, now: Instant) -> Vec<Change> {
+    pub fn update_states(&mut self, now: Instant, watched: &[Focus]) -> Vec<Change> {
         let mut changes = Vec::new();
-        let focus = self.focus;
+        // Everywhere anybody is looking, not one place. Two clients exist in
+        // order to look at different parts of a session, and `done` means
+        // "nobody has seen this" -- so one viewer seeing it is enough.
+        let seen_at = |at: Focus| watched.contains(&at);
         for p in 0..self.projects.len() {
             for w in 0..self.projects[p].workspaces.len() {
                 let here = Focus::Ws { p, w };
                 let observed = observe(&self.projects[p].workspaces[w], now);
                 let ws = &mut self.projects[p].workspaces[w];
                 let was = ws.state;
-                apply(ws, observed, focus == here);
+                apply(ws, observed, seen_at(here));
                 if ws.state != was {
                     changes.push(Change {
                         at: here,
                         label: ws.label.clone(),
                         to: ws.state,
-                        focused: focus == here,
+                        focused: seen_at(here),
                     });
                 }
             }
@@ -1395,7 +1398,7 @@ impl Session {
             let Some(ws) = self.layouts[i].ws.as_mut() else {
                 continue;
             };
-            apply(ws, observed, focus == here);
+            apply(ws, observed, seen_at(here));
         }
         changes
     }

@@ -342,8 +342,11 @@ fn reattaching_shows_what_happened_while_nobody_was_watching() {
 }
 
 #[test]
-fn a_second_client_takes_over_and_the_first_is_told_why() {
-    let session = unique("takeover");
+fn two_clients_watch_the_same_session_at_once() {
+    // The case two clients exist for: a laptop and a monitor showing different
+    // parts of one session. A second one used to take the session over and tell
+    // the first why, which is honest and is not what anybody wanted.
+    let session = unique("both");
 
     let first = Client::attach(&session);
     assert!(
@@ -359,86 +362,104 @@ fn a_second_client_takes_over_and_the_first_is_told_why() {
         second.drawn()
     );
 
-    // The first is told, rather than simply going quiet.
+    // The first is still there, and still being drawn for.
     assert!(
-        first.wait_for("taken over", Duration::from_secs(10)),
-        "the first client was dropped without a word\n{}",
+        !first.drawn().contains("taken over"),
+        "the first was thrown off\n{}",
         first.drawn()
     );
-    drop(second);
-}
-
-#[test]
-fn a_server_nobody_can_reach_does_not_keep_running() {
-    // A socket can go without the server going with it. What is left holds
-    // every shell in the session and nothing can ever attach to it again, so
-    // it should end rather than become something only `ps` can find.
-    let session = unique("unreachable");
-    let client = Client::attach(&session);
+    let (ok, _) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let id = first_id(&list);
+    let (ok, _) = ask(&session, &["workspace", "rename", &id, "zzBOTH"]);
+    assert!(ok, "rename failed");
     assert!(
-        client.wait_for(READY, START),
-        "never started\n{}",
-        client.drawn()
-    );
-
-    let socket = std::env::temp_dir()
-        .join(format!("dirk-{}", unsafe { libc::getuid() }))
-        .join(format!("{session}.sock"));
-    assert!(socket.exists(), "no socket to remove");
-    std::fs::remove_file(&socket).expect("remove the socket");
-
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while Instant::now() < deadline {
-        let still_there = std::process::Command::new("ps")
-            .args(["-A", "-o", "args="])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&*session))
-            .unwrap_or(false);
-        if !still_there {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    panic!("the server outlived every way of reaching it");
-}
-
-#[test]
-fn a_client_that_took_over_is_the_one_being_drawn_for() {
-    // Taking over is only half of it. The client that was replaced closes its
-    // socket on the way out, and an unnamed detach would clear the view of the
-    // one that replaced it -- leaving the new client attached to a session that
-    // had quietly stopped drawing for it.
-    let session = unique("still-drawing");
-
-    let first = Client::attach(&session);
-    assert!(
-        first.wait_for(READY, START),
-        "never started\n{}",
+        first.wait_for("zzBOTH", START),
+        "the first client stopped being drawn for\n{}",
         first.drawn()
     );
-
-    let mut second = Client::attach(&session);
     assert!(
-        second.wait_for(READY, START),
-        "the second never drew\n{}",
+        second.wait_for("zzBOTH", START),
+        "the second client stopped being drawn for\n{}",
         second.drawn()
     );
-    assert!(
-        first.wait_for("taken over", Duration::from_secs(10)),
-        "the first was not told\n{}",
-        first.drawn()
-    );
-    drop(first);
-    std::thread::sleep(Duration::from_millis(500));
 
-    // The point: the survivor still works.
+    // And the session says how many are watching.
+    let (ok, info) = ask(&session, &["session", "info"]);
+    assert!(ok, "session info failed");
+    assert!(info.contains("\"clients\": 2"), "it counted wrong: {info}");
+
+    drop(second);
+    drop(first);
+}
+
+#[test]
+fn one_client_leaving_does_not_disturb_another() {
+    // A detach used to be the end of the only view there was. With two of them
+    // it has to be the end of exactly one.
+    let session = unique("survivor");
+
+    let first = Client::attach(&session);
+    assert!(first.wait_for(READY, START), "never started");
+    let mut second = Client::attach(&session);
+    assert!(second.wait_for(READY, START), "the second never drew");
+
+    drop(first);
+    std::thread::sleep(Duration::from_millis(800));
+
+    // The survivor still works, and is still the one being drawn for.
     second.send(b"printf 'zz%s' AFTER\r");
     assert!(
         second.wait_for("zzAFTER", Duration::from_secs(10)),
-        "the client that took over was frozen\n{}",
+        "the client that stayed was frozen\n{}",
         second.drawn()
     );
+    let (ok, info) = ask(&session, &["session", "info"]);
+    assert!(ok, "session info failed");
+    assert!(info.contains("\"clients\": 1"), "it counted wrong: {info}");
     drop(second);
+}
+
+#[test]
+fn each_client_looks_where_it_is_looking() {
+    // Focus stopped being a property of the session the moment there could be
+    // two of them, which is the whole reason this was not a transport change.
+    let session = unique("apart");
+
+    let first = Client::attach(&session);
+    assert!(first.wait_for(READY, START), "never started");
+    // Three, so a step in one client cannot land on the same one the other is
+    // already looking at and pass by accident.
+    for _ in 0..2 {
+        let (ok, _) = ask(&session, &["workspace", "create"]);
+        assert!(ok, "workspace create failed");
+    }
+
+    let mut second = Client::attach(&session);
+    assert!(second.wait_for(READY, START), "the second never drew");
+    assert!(second.wait_for("3 spaces", START), "not three spaces yet");
+
+    // One of them moves, with a key rather than over the socket -- the socket
+    // has no screen of its own and moves them all, which is a different thing.
+    second.send(&[0]);
+    second.send(b"j");
+    std::thread::sleep(Duration::from_millis(800));
+
+    // The rail marks the chip you are in, so the two screens disagree about
+    // which one that is -- which is the point.
+    let bar = |c: &Client| c.rows().last().cloned().unwrap_or_default();
+    assert_ne!(
+        bar(&first),
+        bar(&second),
+        "both clients are looking at the same thing:\n{}\n{}",
+        bar(&first),
+        bar(&second)
+    );
+
+    drop(second);
+    drop(first);
 }
 
 #[test]
@@ -1549,4 +1570,56 @@ fn the_nav_draws_the_tabs_a_space_actually_has() {
     );
 
     drop(client);
+}
+
+#[test]
+fn a_pane_is_as_wide_as_the_narrowest_screen_showing_it() {
+    // What tmux does, and the only answer that is not a lie to somebody: drawn
+    // wider than the smallest client can show, it would be cut off there.
+    let session = unique("narrow");
+
+    let wide = Client::attach_sized(&session, 120, 30);
+    assert!(wide.wait_for(READY, START), "never started");
+
+    // Wide to start with, which is what the narrow client has to change.
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed: {list}");
+    let cols = |json: &str| {
+        let at = json.find("\"cols\"").expect("a width in the answer");
+        json[at + 7..]
+            .trim_start_matches([':', ' '])
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap_or("0")
+            .parse::<u16>()
+            .unwrap_or(0)
+    };
+    let was = cols(&list);
+    assert!(was > 60, "the wide client's pane is only {was} columns");
+
+    // A narrow one arrives, and the pane is now as wide as it can manage.
+    let narrow = Client::attach_sized(&session, 60, 20);
+    assert!(
+        narrow.wait_for(READY, START),
+        "the narrow client never drew"
+    );
+
+    let narrowed = |_: &()| {
+        let (ok, panes) = ask(&session, &["pane", "list"]);
+        ok && cols(&panes) < was
+    };
+    let deadline = Instant::now() + START;
+    while Instant::now() < deadline && !narrowed(&()) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let now = cols(&panes);
+    assert!(
+        now < was,
+        "the pane stayed {was} wide with a {now}-column client watching: {panes}"
+    );
+
+    drop(narrow);
+    drop(wide);
 }

@@ -562,7 +562,7 @@ fn restore() {
 fn spawn_input(tx: Sender<Ev>) {
     std::thread::spawn(move || {
         while let Ok(ev) = crossterm::event::read() {
-            if tx.send(Ev::Term(ev)).is_err() {
+            if tx.send(Ev::Term(None, ev)).is_err() {
                 return;
             }
         }
@@ -697,6 +697,12 @@ struct App {
     glyphs: glyph::Glyphs,
     /// Which key runs what, after the configuration has had its say.
     keys: action::Keys,
+    /// Which client dirk is currently acting for, if any. Set around handling
+    /// that client's input, so anything that has to answer "who asked" can.
+    acting: Option<u64>,
+    /// The content rectangle every pane is sized to: the smallest among the
+    /// clients watching. `None` when nobody is, or when there is no server.
+    shared: Option<Rect>,
     /// What each board last reported, by name.
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
@@ -726,9 +732,13 @@ struct App {
     socket: Option<std::path::PathBuf>,
     /// Which socket, by inode. A path can be reused by somebody else.
     socket_inode: Option<u64>,
-    /// The client being drawn for, if one is attached. A session with nobody
-    /// looking at it keeps running; that is the point of the whole milestone.
-    view: Option<server::View>,
+    /// The clients being drawn for. A session with nobody looking at it keeps
+    /// running; that is the point of the milestone this came from.
+    ///
+    /// Several of them, because the case two clients exist for is a laptop and
+    /// a monitor showing different parts of the same session -- which means
+    /// each carries its own focus, its own nav and its own size.
+    views: Vec<server::View>,
     /// True while a process-table sample is in flight.
     sampling: bool,
     /// True while the pointer is dragging the divider. Held as state because a
@@ -763,6 +773,8 @@ impl App {
             kinds,
             glyphs,
             keys,
+            acting: None,
+            shared: None,
             badges: std::collections::HashMap::new(),
             badging: false,
             copy: None,
@@ -774,7 +786,7 @@ impl App {
             complained: false,
             socket: None,
             socket_inode: None,
-            view: None,
+            views: Vec::new(),
             sampling: false,
             quit_armed: None,
             dragging: false,
@@ -954,25 +966,102 @@ impl App {
         }
         self.was = now;
 
-        let changes = self.session.update_states(Instant::now());
+        // Everywhere anybody is looking. With nobody attached that is where
+        // the session itself is pointed, which is what it was before there
+        // could be more than one client.
+        let watched: Vec<Focus> = match self.views.is_empty() {
+            true => vec![self.session.focus],
+            false => self.views.iter().map(|v| v.focus).collect(),
+        };
+        let changes = self.session.update_states(Instant::now(), &watched);
         self.announce(changes);
         !(self.quit || self.session.is_empty())
+    }
+
+    /// Do something as one viewer, with their focus and their nav.
+    ///
+    /// Focus stopped being a property of the session the moment there could be
+    /// two clients, and `session.focus` is read in fifty places that have no
+    /// business knowing that. So it is a register: loaded from the viewer who
+    /// is acting, and stored back when they are done.
+    ///
+    /// The alternative is threading a viewer through every one of those places,
+    /// which is fifty chances to thread the wrong one.
+    fn as_viewer(&mut self, from: Option<u64>, act: impl FnOnce(&mut Self)) {
+        let at = from.and_then(|id| self.views.iter().position(|v| v.id == id));
+        if let Some(i) = at {
+            self.session.focus = self.views[i].focus;
+            self.nav = std::mem::take(&mut self.views[i].nav);
+            self.nav_rows = std::mem::take(&mut self.views[i].rows);
+        }
+        self.acting = from;
+        act(self);
+        self.acting = None;
+        if let Some(i) = at.filter(|i| *i < self.views.len()) {
+            self.views[i].focus = self.session.focus;
+            self.views[i].nav = std::mem::take(&mut self.nav);
+            self.views[i].rows = std::mem::take(&mut self.nav_rows);
+        }
+    }
+
+    fn viewer_mut(&mut self, from: Option<u64>) -> Option<&mut server::View> {
+        match from {
+            Some(id) => self.views.iter_mut().find(|v| v.id == id),
+            None => self.views.first_mut(),
+        }
+    }
+
+    /// Size every pane to the narrowest screen showing it.
+    ///
+    /// What tmux does, and the only answer that is not a lie to somebody: a
+    /// pane drawn wider than the smallest client can show would be cut off
+    /// there, and one drawn to the largest would waste the rest.
+    fn resize_panes(&mut self) {
+        let Some(area) = self
+            .views
+            .iter()
+            .map(|v| v.size())
+            .reduce(|a, b| Rect::new(0, 0, a.width.min(b.width), a.height.min(b.height)))
+            .filter(|a| a.width > 0 && a.height > 0)
+        else {
+            // Nobody is watching. The panes keep the size they had rather than
+            // being resized to nothing, so what is in them survives until
+            // somebody comes back.
+            return;
+        };
+        let (_, content, _) = self.areas(area);
+        self.shared = Some(content);
+        self.session.resize_visible(content);
     }
 
     /// Serve whichever client is attached, for as long as the session lasts.
     fn serve(&mut self, rx: Receiver<Ev>) -> io::Result<()> {
         while self.turn(&rx) {
+            // Each in turn, each with its own focus and its own nav, because
+            // two people looking at one session are looking at two things.
             // Taken out so the render can borrow the rest of `self`.
-            let Some(mut view) = self.view.take() else {
-                continue;
-            };
-            let _ = view.term.draw(|f| self.render(f));
-            if view.flush().is_ok() {
-                self.view = Some(view);
+            let mut views = std::mem::take(&mut self.views);
+            views.retain_mut(|view| {
+                self.session.focus = view.focus;
+                self.nav = std::mem::take(&mut view.nav);
+                let _ = view.term.draw(|f| self.render(f));
+                view.nav = std::mem::take(&mut self.nav);
+                view.rows = std::mem::take(&mut self.nav_rows);
+                // A client that has stopped taking frames is gone; keeping it
+                // would block the loop the next time round.
+                view.flush().is_ok()
+            });
+            let before = self.views.len() + views.len();
+            self.views = views;
+            // A client that stopped taking frames has gone, and the panes are
+            // sized to the smallest one still watching.
+            if self.views.len() != before {
+                self.resize_panes();
             }
         }
-        if let Some(mut view) = self.view.take() {
-            let _ = wire::send_json(&mut view.out, wire::Kind::Bye, &"the session ended");
+        for view in std::mem::take(&mut self.views) {
+            let mut out = view.out;
+            let _ = wire::send_json(&mut out, wire::Kind::Bye, &"the session ended");
         }
         Ok(())
     }
@@ -991,7 +1080,14 @@ impl App {
             // busy pane produces an event, and working out every agent's state
             // locks each agent pane's terminal and reads its screen. Doing that
             // per chunk contends with the reader threads holding the same lock.
-            let changes = self.session.update_states(Instant::now());
+            // Everywhere anybody is looking. With nobody attached that is where
+            // the session itself is pointed, which is what it was before there
+            // could be more than one client.
+            let watched: Vec<Focus> = match self.views.is_empty() {
+                true => vec![self.session.focus],
+                false => self.views.iter().map(|v| v.focus).collect(),
+            };
+            let changes = self.session.update_states(Instant::now(), &watched);
             self.announce(changes);
             if self.quit || self.session.is_empty() {
                 return Ok(());
@@ -1003,45 +1099,55 @@ impl App {
 
     fn handle(&mut self, ev: Ev) {
         match ev {
-            Ev::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
-            Ev::Term(Event::Mouse(m)) => self.on_mouse(m),
-            Ev::Term(Event::Resize(cols, rows)) => {
-                if let Some(view) = &mut self.view {
-                    let area = Rect::new(0, 0, cols.max(1), rows.max(1));
-                    let _ = view.term.resize(area);
-                    // The old contents are wrong at the new size, and ratatui
-                    // would otherwise only send what changed against them.
-                    let _ = view.repaint();
-                }
+            Ev::Term(from, Event::Key(k)) if k.kind != KeyEventKind::Release => {
+                self.as_viewer(from, |app| app.on_key(k));
             }
-            Ev::Term(_) => {}
-            Ev::Attach(view) => {
-                if let Some(old) = self.view.take() {
-                    // Told why, rather than simply going quiet.
-                    let mut out = old.out;
-                    let _ =
-                        wire::send_json(&mut out, wire::Kind::Bye, &"taken over by another client");
+            Ev::Term(from, Event::Mouse(m)) => {
+                self.as_viewer(from, |app| app.on_mouse(m));
+            }
+            Ev::Term(from, Event::Resize(cols, rows)) => {
+                if let Some(view) = self.viewer_mut(from) {
+                    view.resized(cols, rows);
                 }
+                // A pane is as wide as the narrowest screen showing it, which
+                // is what tmux does and the only answer that is not a lie to
+                // somebody.
+                self.resize_panes();
+            }
+            Ev::Term(..) => {}
+            Ev::Attach(view) => {
                 let mut view = *view;
+                // Somewhere real to look. A client arriving at `Layout(0)`
+                // would open on a board nobody asked for.
+                view.focus = self
+                    .session
+                    .first_workspace()
+                    .unwrap_or(crate::mux::Focus::Layout(0));
                 // The client's terminal holds whatever was on it before, and
                 // ratatui only sends what changed since its own last draw.
                 let _ = view.repaint();
-                self.view = Some(view);
+                self.views.push(view);
+                self.resize_panes();
             }
             Ev::Command(req, reply) => {
+                let before = self.session.focus;
                 let answer = self.ask(&req);
+                // A caller outside the session has no screen of its own, so
+                // "focus this" means every screen. Moving one client's and not
+                // the other's would make which one an accident of ordering.
+                if self.session.focus != before {
+                    let now = self.session.focus;
+                    for view in &mut self.views {
+                        view.focus = now;
+                    }
+                }
                 let _ = reply.send(answer);
             }
             Ev::Detach(id) => {
-                // Only if it is the client currently being drawn for. A client
-                // that has been taken over closes its socket on the way out,
-                // and an unnamed detach would clear the view of the one that
-                // replaced it -- leaving the new client attached to a session
-                // that had stopped drawing for it.
-                if self.view.as_ref().is_some_and(|v| v.id == id) {
-                    // The session does not end because nobody is watching it.
-                    self.view = None;
-                }
+                // By id, so one client leaving cannot take another's view with
+                // it. The session does not end because nobody is watching.
+                self.views.retain(|v| v.id != id);
+                self.resize_panes();
             }
             Ev::Output(id) => {
                 self.session.touch(id);
@@ -1172,7 +1278,10 @@ impl App {
             agent::State::Done => sound::Alert::Done,
             _ => return,
         };
-        if let Some(view) = self.view.as_mut() {
+        // Every client watching, because every one of them is a person who
+        // asked to be told. The floor and the seen rule already decided that
+        // this is worth saying; who is looking is not that decision.
+        if !self.views.is_empty() {
             let msg = wire::Alert {
                 state: match quiet {
                     // Said rather than dropped: the notification is still owed,
@@ -1182,7 +1291,9 @@ impl App {
                 },
                 label,
             };
-            let _ = wire::send_json(&mut view.out, wire::Kind::Alert, &msg);
+            for view in &mut self.views {
+                let _ = wire::send_json(&mut view.out, wire::Kind::Alert, &msg);
+            }
             return;
         }
         notify::send(title, self.cfg.brand.name.clone());
@@ -1230,7 +1341,8 @@ impl App {
             "session.info" => Reply::ok(serde_json::json!({
                 "workspaces": self.session.flat().len(),
                 "layouts": self.session.layouts.len(),
-                "attached": self.view.is_some(),
+                "attached": !self.views.is_empty(),
+                "clients": self.views.len(),
                 "version": env!("CARGO_PKG_VERSION"),
             })),
 
@@ -1934,7 +2046,10 @@ impl App {
         let full = f.area();
         let (side, content, rail) = self.areas(full);
         self.content = content;
-        self.session.resize_visible(content);
+        // The panes are as wide as the narrowest screen showing them, which is
+        // not necessarily this one. Only when nobody else is looking does this
+        // view's own size decide.
+        self.session.resize_visible(self.shared.unwrap_or(content));
 
         self.side = side;
         let buf = f.buffer_mut();
@@ -2557,11 +2672,14 @@ impl App {
     /// server would put a remote session's selection on the build box, where
     /// nothing can paste it.
     fn clip(&mut self, text: String) {
-        match self.view.as_mut() {
-            Some(view) => {
-                let _ = wire::send_json(&mut view.out, wire::Kind::Clip, &text);
-            }
-            None => clipboard::put(&self.cfg.clipboard, &text),
+        if self.views.is_empty() {
+            return clipboard::put(&self.cfg.clipboard, &text);
+        }
+        // Every client: the selection was made on one of them, but which one is
+        // not something this knows, and a clipboard that is sometimes empty is
+        // worse than one that is sometimes shared.
+        for view in &mut self.views {
+            let _ = wire::send_json(&mut view.out, wire::Kind::Clip, &text);
         }
     }
 
@@ -2620,9 +2738,14 @@ impl App {
             self.note("no session to detach from");
             return;
         }
-        match self.view.take() {
-            Some(mut view) => {
+        // The one that asked, and only that one. Detaching a laptop should not
+        // take the monitor with it.
+        let me = self.acting;
+        match me.and_then(|id| self.views.iter().position(|v| v.id == id)) {
+            Some(i) => {
+                let mut view = self.views.remove(i);
                 let _ = wire::send_json(&mut view.out, wire::Kind::Bye, &"detached");
+                self.resize_panes();
             }
             None => self.note("nothing attached"),
         }
