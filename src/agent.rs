@@ -43,25 +43,38 @@ use std::process::Command;
 pub struct Kind {
     pub name: &'static str,
     names: &'static [&'static str],
+    /// Text that appears when this agent is waiting for an answer.
+    ///
+    /// The part of this file most likely to be wrong: these are strings another
+    /// program prints, and it can change them without telling anyone. A marker
+    /// that stops matching degrades to "never blocked", which is the state
+    /// dirk had before any of this — bad, but not misleading.
+    blocked: &'static [&'static str],
 }
 
-/// The table. Adding one is a line.
+/// The table. Adding an agent is an entry.
 pub const KINDS: &[Kind] = &[
     Kind {
         name: "claude",
         names: &["claude"],
+        // Every approval prompt is a question of this shape, above a numbered
+        // list of answers.
+        blocked: &["Do you want", "Would you like"],
     },
     Kind {
         name: "codex",
         names: &["codex"],
+        blocked: &["Allow command?", "Approve?"],
     },
     Kind {
         name: "aider",
         names: &["aider"],
+        blocked: &["(Y)es/(N)o", "Add to chat?"],
     },
     Kind {
         name: "goose",
         names: &["goose"],
+        blocked: &["Do you approve"],
     },
 ];
 
@@ -176,6 +189,57 @@ pub fn parse(text: &str) -> HashMap<i32, String> {
     out
 }
 
+/// What an agent is doing.
+///
+/// `Done` and `Idle` are the same underlying state — the agent is waiting for
+/// you — and what separates them is whether you have looked since it stopped.
+/// That distinction is the whole reason `Done` exists: finished work nobody has
+/// noticed is the thing worth showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum State {
+    /// Waiting on a human. The only state that is owed something.
+    Blocked,
+    /// Finished, and not looked at since.
+    Done,
+    /// Producing output.
+    Working,
+    /// Waiting, and seen.
+    Idle,
+    /// No agent here at all.
+    #[default]
+    None,
+}
+
+impl State {
+    /// The word `THEME::agent_state` and the nav both speak.
+    pub fn glyph_name(self) -> &'static str {
+        match self {
+            State::Blocked => "blocked",
+            State::Done => "done",
+            State::Working => "working",
+            State::Idle => "idle",
+            State::None => "unknown",
+        }
+    }
+}
+
+/// Is this agent waiting for an answer?
+///
+/// Only the region around the cursor is read, not the whole screen: an agent
+/// that merely wrote the words "do you want" in a paragraph further up is not
+/// waiting for anything.
+pub fn is_blocked(kind: Kind, tail: &str) -> bool {
+    kind.blocked.iter().any(|m| tail.contains(m))
+}
+
+/// How many rows above the cursor count as "the prompt".
+///
+/// Anchored to the cursor rather than to the bottom of the screen. A waiting
+/// agent has its cursor in or just under the question it is asking, wherever
+/// that has ended up — which on a screen that is not yet full is nowhere near
+/// the bottom.
+pub const PROMPT_ROWS: u16 = 12;
+
 /// A finished sample, on its way back to the event loop.
 ///
 /// `None` means the sample had nothing to say about that pane — its process
@@ -278,6 +342,52 @@ mod tests {
             parse(PS).get(&512).map(String::as_str),
             Some("Google Chrome Helper")
         );
+    }
+
+    #[test]
+    fn an_approval_prompt_reads_as_blocked() {
+        let claude = KINDS.iter().find(|k| k.name == "claude").unwrap();
+        assert!(is_blocked(
+            *claude,
+            "Do you want to proceed?\n  1. Yes\n  2. No"
+        ));
+        assert!(!is_blocked(*claude, "Reading src/agent.rs\nWriting tests"));
+        // A marker belongs to one agent, not to all of them.
+        let codex = KINDS.iter().find(|k| k.name == "codex").unwrap();
+        assert!(!is_blocked(*codex, "Do you want to proceed?"));
+    }
+
+    #[test]
+    fn every_kind_says_how_to_tell_it_is_waiting() {
+        // A kind with no markers can never be blocked, which is the state dirk
+        // had before any of this and not worth shipping again by omission.
+        for kind in KINDS {
+            assert!(
+                !kind.blocked.is_empty(),
+                "{} has no blocked markers",
+                kind.name
+            );
+            assert!(!kind.names.is_empty(), "{} matches nothing", kind.name);
+        }
+    }
+
+    #[test]
+    fn the_state_words_are_the_ones_the_theme_knows() {
+        // `THEME::agent_state` matches on these strings; a mismatch is a silent
+        // fallback to a blank glyph.
+        for (state, word) in [
+            (State::Blocked, "blocked"),
+            (State::Done, "done"),
+            (State::Working, "working"),
+            (State::Idle, "idle"),
+        ] {
+            assert_eq!(state.glyph_name(), word);
+            assert_ne!(
+                crate::theme::THEME.agent_state(word).0,
+                " ",
+                "{word} draws nothing"
+            );
+        }
     }
 
     #[test]

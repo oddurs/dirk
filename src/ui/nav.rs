@@ -940,31 +940,13 @@ fn space_row(
     }
 }
 
-/// A workspace's state is its active pane's, since a workspace with one pane is
-/// the common case and one with two has no single answer anyway.
+/// A workspace's state, as the word the theme and the nav both speak.
 ///
-/// Read from what is actually running in the pane. The previous version guessed
-/// from whether a title had ever been published, which marked every shell as
-/// working — shells set titles, usually to the working directory.
+/// Worked out in `session::update_states`, which is where it belongs: it
+/// depends on whether *you* have looked at the workspace, and drawing should
+/// not be the thing deciding that.
 fn state_of(ws: &Workspace) -> &'static str {
-    use crate::agent::Occupant;
-    let Some(pane) = ws.active_pane() else {
-        return "unknown";
-    };
-    if pane.dead {
-        return "idle";
-    }
-    match &pane.occupant {
-        // Telling working from blocked needs to read what the agent has drawn,
-        // which is 0031. Until then an agent that has said what it is doing is
-        // doing something.
-        Occupant::Agent(_) if pane.title().is_some() => "working",
-        Occupant::Agent(_) => "idle",
-        // Something is running, and it is not an agent and not a prompt.
-        Occupant::Program(_) => "working",
-        Occupant::Shell => "idle",
-        Occupant::Unknown => "unknown",
-    }
+    ws.state.glyph_name()
 }
 
 #[cfg(test)]

@@ -756,3 +756,45 @@ fn a_pane_running_an_agent_is_detected_as_one() {
         h.drawn()
     );
 }
+
+#[test]
+fn an_agent_sitting_on_an_approval_prompt_reads_as_blocked() {
+    // A shell named `claude` is detected as one, so printing what Claude Code
+    // prints when it wants an answer drives the whole path: detection, the tail
+    // of the screen, the marker table, the state machine, the glyph.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+
+    // Recognised as an agent, and not blocked while it has said nothing.
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("agents"))),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+    let blocked = |h: &Harness| h.rows().iter().any(|r| r.trim_start().starts_with("! "));
+    assert!(
+        !blocked(&h),
+        "blocked before anything was asked\n{}",
+        h.drawn()
+    );
+
+    h.send(b"printf 'Do you want to proceed?\\n'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), blocked),
+        "an approval prompt did not read as blocked\n{}",
+        h.drawn()
+    );
+
+    // And it stops being blocked once the prompt is off the screen.
+    h.send(b"clear\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| !blocked(h)),
+        "still blocked after the prompt was cleared\n{}",
+        h.drawn()
+    );
+}

@@ -55,6 +55,14 @@ pub struct NameState {
 
 pub struct Workspace {
     pub label: String,
+    /// What the agent in here is doing, as of the last update.
+    pub state: crate::agent::State,
+    /// Whether you have looked at this workspace since it last started work.
+    ///
+    /// The only thing separating `Done` from `Idle`, and the reason `Done`
+    /// exists at all: finished work nobody has noticed is what is worth
+    /// showing.
+    pub seen: bool,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -219,6 +227,8 @@ impl Session {
         let root = pane.id;
         proj.workspaces.push(Workspace {
             label: name,
+            state: crate::agent::State::None,
+            seen: true,
             touched: Instant::now(),
             expanded: false,
             panes: vec![pane],
@@ -385,6 +395,8 @@ impl Session {
             };
             self.layouts[i].ws = Some(Workspace {
                 label: def.name.clone(),
+                state: crate::agent::State::None,
+                seen: true,
                 touched: Instant::now(),
                 expanded: false,
                 panes,
@@ -622,6 +634,58 @@ impl Session {
     }
 }
 
+/// An agent that has been quiet for this long has stopped.
+///
+/// One that is thinking redraws its spinner continuously, so silence is the
+/// signal rather than the absence of one. Long enough that a pause between two
+/// lines of output does not read as finished, short enough that finishing is
+/// noticed while you are still looking.
+const WORKING_FOR: Duration = Duration::from_millis(1500);
+
+/// What can be seen from outside, before the seen flag is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Observed {
+    NoAgent,
+    Blocked,
+    Working,
+    /// Stopped. Whether that is `Done` or `Idle` depends on you, not on it.
+    Waiting,
+}
+
+fn observe(ws: &Workspace, now: Instant) -> Observed {
+    let Some(pane) = ws.active_pane() else {
+        return Observed::NoAgent;
+    };
+    if pane.dead {
+        return Observed::NoAgent;
+    }
+    let Some(kind) = pane.occupant.agent() else {
+        return Observed::NoAgent;
+    };
+
+    // Only panes holding an agent are read, which is what keeps this off the
+    // cost of every tick.
+    if let Ok(term) = pane.term.lock() {
+        let screen = term.screen();
+        let (rows, cols) = screen.size();
+        // Anchored to the cursor, which is where a question is being asked.
+        // Anchoring to the bottom of the screen only works once the screen is
+        // full, and a program that has just started has all its output at the
+        // top.
+        let (cursor, _) = screen.cursor_position();
+        let from = cursor.saturating_sub(crate::agent::PROMPT_ROWS);
+        let prompt = screen.contents_between(from, 0, rows, cols);
+        if crate::agent::is_blocked(kind, &prompt) {
+            return Observed::Blocked;
+        }
+    }
+
+    if now.duration_since(ws.touched) < WORKING_FOR {
+        return Observed::Working;
+    }
+    Observed::Waiting
+}
+
 /// The part of a pane's rectangle that carries terminal content.
 ///
 /// A labelled pane gives its top row to the label, so this is the one place
@@ -686,6 +750,59 @@ impl Session {
             proj.repo = answer.repo;
         }
     }
+}
+
+impl Session {
+    /// Work out what every agent is doing.
+    ///
+    /// Run on the tick and on output, which is often enough that a state change
+    /// is visible within a frame of happening and cheap because only panes
+    /// holding an agent are read at all.
+    pub fn update_states(&mut self, now: Instant) {
+        let focus = self.focus;
+        for p in 0..self.projects.len() {
+            for w in 0..self.projects[p].workspaces.len() {
+                let here = Focus::Ws { p, w };
+                let observed = observe(&self.projects[p].workspaces[w], now);
+                let ws = &mut self.projects[p].workspaces[w];
+                apply(ws, observed, focus == here);
+            }
+        }
+        for i in 0..self.layouts.len() {
+            let here = Focus::Layout(i);
+            let Some(ws) = self.layouts[i].ws.as_ref() else {
+                continue;
+            };
+            let observed = observe(ws, now);
+            let Some(ws) = self.layouts[i].ws.as_mut() else {
+                continue;
+            };
+            apply(ws, observed, focus == here);
+        }
+    }
+}
+
+fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
+    use crate::agent::State;
+
+    // Looking at it is what "seen" means. Nothing else marks it, and reads over
+    // the API must not -- otherwise a status line would clear your own
+    // notifications by asking about them.
+    if focused {
+        ws.seen = true;
+    } else if observed == Observed::Working && ws.state != State::Working {
+        // Work has started that you have not watched. Whatever it produces is
+        // unseen when it stops.
+        ws.seen = false;
+    }
+
+    ws.state = match observed {
+        Observed::NoAgent => State::None,
+        Observed::Blocked => State::Blocked,
+        Observed::Working => State::Working,
+        Observed::Waiting if ws.seen => State::Idle,
+        Observed::Waiting => State::Done,
+    };
 }
 
 /// How long ago, coarsely.
@@ -768,6 +885,82 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::State;
+
+    /// A workspace with only the fields the state machine reads.
+    fn ws(state: State, seen: bool) -> Workspace {
+        Workspace {
+            label: String::new(),
+            state,
+            seen,
+            touched: Instant::now(),
+            panes: Vec::new(),
+            tree: Node::Leaf(0),
+            expanded: false,
+            focus: 0,
+            naming: NameState::default(),
+        }
+    }
+
+    #[test]
+    fn work_you_did_not_watch_finishes_as_done() {
+        let mut w = ws(State::Working, false);
+        apply(&mut w, Observed::Waiting, false);
+        assert_eq!(w.state, State::Done);
+    }
+
+    #[test]
+    fn work_you_watched_finishes_as_idle() {
+        // Focused throughout, so there is nothing to be told about.
+        let mut w = ws(State::Working, true);
+        apply(&mut w, Observed::Waiting, true);
+        assert_eq!(w.state, State::Idle);
+    }
+
+    #[test]
+    fn looking_at_finished_work_settles_it() {
+        let mut w = ws(State::Done, false);
+        apply(&mut w, Observed::Waiting, true);
+        assert_eq!(w.state, State::Idle, "focusing it is what marks it seen");
+        // And it stays settled once looked at.
+        apply(&mut w, Observed::Waiting, false);
+        assert_eq!(w.state, State::Idle);
+    }
+
+    #[test]
+    fn starting_work_out_of_sight_makes_the_next_stop_worth_reporting() {
+        let mut w = ws(State::Idle, true);
+        apply(&mut w, Observed::Working, false);
+        assert_eq!(w.state, State::Working);
+        assert!(!w.seen, "work started that you have not watched");
+        apply(&mut w, Observed::Waiting, false);
+        assert_eq!(w.state, State::Done);
+    }
+
+    #[test]
+    fn starting_work_you_are_watching_does_not() {
+        let mut w = ws(State::Idle, true);
+        apply(&mut w, Observed::Working, true);
+        assert!(w.seen);
+        apply(&mut w, Observed::Waiting, true);
+        assert_eq!(w.state, State::Idle);
+    }
+
+    #[test]
+    fn blocked_outranks_everything_including_being_looked_at() {
+        // It is the only state waiting on a human, so being watched does not
+        // make it less true.
+        let mut w = ws(State::Working, true);
+        apply(&mut w, Observed::Blocked, true);
+        assert_eq!(w.state, State::Blocked);
+    }
+
+    #[test]
+    fn a_pane_with_no_agent_has_no_state() {
+        let mut w = ws(State::Working, false);
+        apply(&mut w, Observed::NoAgent, false);
+        assert_eq!(w.state, State::None);
+    }
 
     #[test]
     fn ages_are_bucketed_not_counted() {

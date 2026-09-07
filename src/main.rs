@@ -298,6 +298,7 @@ impl App {
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
             Ev::Output(id) => {
                 self.session.touch(id);
+                self.session.update_states(Instant::now());
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
@@ -312,6 +313,7 @@ impl App {
             Ev::Tick => {
                 self.read_agents();
                 self.read_repos();
+                self.session.update_states(Instant::now());
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)
