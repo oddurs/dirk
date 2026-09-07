@@ -415,6 +415,15 @@ fn notice(text: &str) {
     let _ = out.flush();
 }
 
+/// This machine's configuration, read once.
+///
+/// A remote attach uses the near side's: the sound file lives on the machine
+/// with the speakers, and which one it is was never the far side's business.
+fn config() -> &'static crate::config::Config {
+    static ONCE: std::sync::OnceLock<crate::config::Config> = std::sync::OnceLock::new();
+    ONCE.get_or_init(crate::config::Config::load)
+}
+
 /// Why a link stopped.
 enum End {
     /// The session said so, and meant it.
@@ -437,6 +446,36 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
                 if !painted {
                     painted = true;
                     arrived();
+                }
+            }
+            // Performed here rather than in the session, because this is the
+            // machine with the screen and the speakers. Attach over ssh and the
+            // session is on the build box while the human is at a laptop, and
+            // an interruption delivered where nobody is sitting is one nobody
+            // gets.
+            //
+            // The session decided *whether*: it holds the state machine, the
+            // seen rule and the floor. This end decides *how*, from its own
+            // configuration -- which is also what keeps the wire from being a
+            // way to ask the other end to run a command of the sender's
+            // choosing.
+            Kind::Alert => {
+                let Ok(alert) = serde_json::from_slice::<wire::Alert>(&body) else {
+                    continue;
+                };
+                let quiet = alert.state.ends_with("-quiet");
+                let name = alert.state.trim_end_matches("-quiet");
+                let Some(which) = crate::sound::Alert::named(name) else {
+                    continue;
+                };
+                let what = match which {
+                    crate::sound::Alert::Blocked => "is waiting for you",
+                    crate::sound::Alert::Done => "has finished",
+                };
+                let cfg = config();
+                crate::notify::send(format!("{} {what}", alert.label), cfg.brand.name.clone());
+                if !quiet {
+                    crate::sound::play(&cfg.sound, which);
                 }
             }
             Kind::Bye => {

@@ -56,6 +56,15 @@ pub enum Kind {
     Command = 5,
     /// The answer to one command.
     Reply = 6,
+    /// Something to tell the human about, performed by whichever end has one.
+    ///
+    /// The server decides *whether* -- it holds the state machine, the seen
+    /// rule and the floor -- and the client decides *how*, from its own
+    /// configuration. That split is what makes a remote attach make its noise
+    /// on the laptop somebody is sitting at rather than on the build box, and
+    /// it keeps the wire from becoming a way to ask the other end to run a
+    /// command of the sender's choosing.
+    Alert = 7,
 }
 
 impl Kind {
@@ -67,6 +76,7 @@ impl Kind {
             4 => Kind::Bye,
             5 => Kind::Command,
             6 => Kind::Reply,
+            7 => Kind::Alert,
             _ => return None,
         })
     }
@@ -113,6 +123,15 @@ impl Reply {
             result: serde_json::Value::Null,
         }
     }
+}
+
+/// One thing worth interrupting somebody about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Alert {
+    /// `blocked` or `done`. Nothing else is an event.
+    pub state: String,
+    /// The workspace it happened in, as it is named on screen.
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

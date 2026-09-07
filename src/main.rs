@@ -56,6 +56,7 @@ mod name;
 mod notify;
 mod server;
 mod skill;
+mod sound;
 mod state;
 mod theme;
 mod tokens;
@@ -909,10 +910,58 @@ impl App {
             if !self.session.may_notify(change.at, change.to, now, floor) {
                 continue;
             }
-            notify::send(
+            // A muted project still reaches the column, the counts and the
+            // notification; what it does not do is make a noise.
+            let quiet = self.project_of(change.at).is_some_and(|p| !p.sound);
+            self.alert(
+                change.to,
                 format!("{} {what}", change.label),
-                self.cfg.brand.name.clone(),
+                change.label.clone(),
+                quiet,
             );
+        }
+    }
+
+    /// Whether this workspace's project asked to be left alone.
+    fn project_of(&self, at: Focus) -> Option<&config::ProjectDef> {
+        let Focus::Ws { p, .. } = at else { return None };
+        let path = self.session.projects.get(p)?.path.clone();
+        self.cfg
+            .projects
+            .iter()
+            .find(|d| config::expand(&d.path.to_string_lossy()) == path)
+    }
+
+    /// Interrupt somebody, wherever they are.
+    ///
+    /// Sent to the client when there is one, because that is the machine with
+    /// the screen and the speakers -- attach over ssh and the session is on the
+    /// build box while the human is at a laptop, and a notification delivered
+    /// where nobody is sitting is one nobody gets. Performed here when there is
+    /// no client, because a session you detached from is exactly the one you
+    /// wanted to be told about.
+    fn alert(&mut self, state: agent::State, title: String, label: String, quiet: bool) {
+        let which = match state {
+            agent::State::Blocked => sound::Alert::Blocked,
+            agent::State::Done => sound::Alert::Done,
+            _ => return,
+        };
+        if let Some(view) = self.view.as_mut() {
+            let msg = wire::Alert {
+                state: match quiet {
+                    // Said rather than dropped: the notification is still owed,
+                    // and only the noise was refused.
+                    true => format!("{}-quiet", which.name()),
+                    false => which.name().to_string(),
+                },
+                label,
+            };
+            let _ = wire::send_json(&mut view.out, wire::Kind::Alert, &msg);
+            return;
+        }
+        notify::send(title, self.cfg.brand.name.clone());
+        if !quiet {
+            sound::play(&self.cfg.sound, which);
         }
     }
 
