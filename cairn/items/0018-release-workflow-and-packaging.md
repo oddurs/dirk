@@ -2,7 +2,7 @@
 id: 18
 title: Release workflow and packaging
 type: chore
-status: doing
+status: review
 milestone: v1.0
 assignee: oddurs
 labels:
@@ -51,3 +51,10 @@ name than the binary, which is worse than not publishing; `cargo install
 the release workflow at another repository needs a token with write access to
 it, and that is a decision to make deliberately rather than as a side effect of
 this. Deferred, on purpose.
+
+## 2026-09-07
+
+The workflow is written and lints clean; what it has not done yet is run,
+because the v0.4.0 tag predates it. That is the one criterion still open, and
+v0.5.0 settles it. The v0.4.0 release was published by hand from the same NEWS
+section `scripts/news` cuts, and says so.

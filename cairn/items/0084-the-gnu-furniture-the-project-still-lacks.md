@@ -2,7 +2,7 @@
 id: 84
 title: The GNU furniture the project still lacks
 type: docs
-status: doing
+status: done
 milestone: v1.0
 assignee: oddurs
 created: 2026-09-07
@@ -46,8 +46,8 @@ furniture around it.
 
 ## Acceptance criteria
 
-- [ ] INSTALL, HACKING and THANKS exist and are true of this build
-- [ ] `make ChangeLog` produces GNU-form entries from the history
-- [ ] `make install` installs the binary and the manual page; `make uninstall`
+- [x] INSTALL, HACKING and THANKS exist and are true of this build
+- [x] `make ChangeLog` produces GNU-form entries from the history
+- [x] `make install` installs the binary and the manual page; `make uninstall`
       removes both
-- [ ] `make dist` produces a tarball a stranger could build from
+- [x] `make dist` produces a tarball a stranger could build from

@@ -2,7 +2,7 @@
 id: 85
 title: Repository settings a public project should have
 type: chore
-status: doing
+status: done
 milestone: v1.0
 assignee: oddurs
 created: 2026-09-07
@@ -29,6 +29,15 @@ pressing a button.
 
 ## Acceptance criteria
 
-- [ ] main cannot be pushed to directly
-- [ ] A pull request merges itself once style, linux, macos and msrv are green
-- [ ] Branches are deleted when they merge
+- [x] main cannot be pushed to directly
+- [x] A pull request merges itself once style, linux, macos and msrv are green
+- [x] Branches are deleted when they merge
+
+## 2026-09-07
+
+The ruleset is active on main: a pull request, and style, linux, macos, msrv
+and docs green before it can merge. Squash only, delete on merge, auto-merge
+on. The admin keeps a bypass so nothing can wedge.
+
+The second criterion is proven by the pull request carrying this item, which
+merges itself when its own checks pass.

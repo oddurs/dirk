@@ -12,6 +12,7 @@
 #   git work check                    the gate
 #   git work ship [--land]            check, push, pull request, merge on green
 #   git work land [branch]            close the item, remove the worktree
+#   git work drop [branch]            abandon it, and hand the item back
 #   git work list                     what is in flight
 #   git work clean                    reap whatever has already merged
 #   git work release <VERSION>        the version bump, as an ordinary branch
@@ -43,23 +44,27 @@ trunk=${DIRK_TRUNK:-main}
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
+# A branch name from a title: short enough to type and to fit in a column, cut
+# on a word boundary rather than mid-word.
 slug() {
     printf '%s' "$1" \
         | tr '[:upper:]' '[:lower:]' \
         | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//' \
-        | cut -c1-40 \
-        | sed 's/-[^-]*$//;s/-$//'
+        | awk '{ n = split($0, w, "-"); s = w[1]
+                 for (i = 2; i <= n; i++) {
+                     if (length(s) + 1 + length(w[i]) > 28) break
+                     s = s "-" w[i]
+                 }
+                 print s }'
 }
 
-branch_of() { git -C "${1:-.}" symbolic-ref --quiet --short HEAD 2>/dev/null || true; }
+branch_of() { git symbolic-ref --quiet --short HEAD 2>/dev/null || true; }
 
 # The item a branch was started for. Per-branch config is what git keeps for
 # exactly this, and it lives in the common config, so every worktree sees it.
 item_of()     { git config --get "branch.$1.cairn-item" 2>/dev/null || true; }
 item_set()    { git config "branch.$1.cairn-item" "$2"; }
 item_forget() { git config --unset "branch.$1.cairn-item" 2>/dev/null || true; }
-
-cairn_json() { have cairn && cairn show "$1" --json 2>/dev/null || true; }
 
 cairn_field() {
     have cairn || return 0
@@ -68,7 +73,13 @@ cairn_field() {
         2>/dev/null || true
 }
 
-cairn_try() { have cairn && cairn "$@" >/dev/null 2>&1 || true; }
+# cairn is optional: the workflow degrades to branches and pull requests
+# without it rather than refusing to run.
+cairn_try() {
+    if have cairn; then
+        cairn "$@" >/dev/null 2>&1 || true
+    fi
+}
 
 require_gh() {
     have gh || die "gh is not installed; see https://cli.github.com"
@@ -272,9 +283,16 @@ cmd_land() {
     local state
     state=$(gh pr view "$branch" --json state --jq .state 2>/dev/null || echo NONE)
     if [ "$state" != MERGED ]; then
-        # A branch whose remote is gone and whose commits are in the trunk was
-        # merged by something other than this script, which still counts.
+        # A branch whose commits are already in the trunk was merged by
+        # something other than this script, which still counts. A branch with
+        # no commits at all was never anything, and closing its item because
+        # nothing was done to it is how a backlog quietly loses work.
         git fetch --prune --quiet "$remote"
+        if [ "$(git rev-list --count "$remote/$trunk..$branch" 2>/dev/null || echo 0)" -eq 0 ] \
+           && [ "$state" = NONE ]; then
+            die "$branch has no commits and no pull request; nothing was done on it.
+     git work drop $branch  abandons it and hands the item back"
+        fi
         git merge-base --is-ancestor "$branch" "$remote/$trunk" 2>/dev/null \
             || die "$branch has not merged (pull request: $state)"
     fi
@@ -299,11 +317,46 @@ cmd_land() {
     return 0
 }
 
+# ─── drop ────────────────────────────────────────────────────────────────────
+
+# Abandoning is not landing. The item goes back on the board rather than being
+# closed, because nothing was finished.
+cmd_drop() {
+    local branch=${1:-}
+    [ -z "$branch" ] && branch=$(branch_of)
+    [ -n "$branch" ] || die "usage: git work drop [branch]"
+    [ "$branch" = "$trunk" ] && die "$trunk is not dropped"
+
+    local ahead
+    ahead=$(git rev-list --count "$remote/$trunk..$branch" 2>/dev/null || echo 0)
+    if [ "$ahead" -gt 0 ]; then
+        say "$branch has $ahead commit(s) that are not on $trunk; they go with it."
+        printf 'drop it anyway? [y/N] ' >&2
+        read -r reply < /dev/tty || reply=n
+        case $reply in y|Y|yes) ;; *) die "stopped" ;; esac
+    fi
+
+    local id; id=$(item_of "$branch")
+    if [ -n "$id" ]; then
+        cairn_try release "$id"
+        cairn_try set "$id" status=backlog
+        say "handed $(cairn_field "$id" ref) back"
+    fi
+
+    local dir; dir=$(worktree_dir_for "$branch")
+    [ -d "$dir" ] && git -C "$root" worktree remove --force "$dir"
+    git -C "$root" branch -q -D "$branch" 2>/dev/null || true
+    item_forget "$branch"
+    git -C "$root" worktree prune
+    say "dropped $branch"
+    return 0
+}
+
 # ─── list ────────────────────────────────────────────────────────────────────
 
 cmd_list() {
-    local dir branch id title state
-    printf '%-24s %-8s %-10s %s\n' BRANCH ITEM PR WORKTREE
+    local dir branch id state home
+    printf '%-30s %-6s %-8s %s\n' BRANCH ITEM PR WORKTREE
     git worktree list --porcelain | awk '/^worktree /{d=$2} /^branch /{print d"\t"$2}' \
     | while IFS=$'\t' read -r dir ref; do
         branch=${ref#refs/heads/}
@@ -313,8 +366,10 @@ cmd_list() {
         if have gh; then
             state=$(gh pr view "$branch" --json state --jq .state 2>/dev/null || true)
         fi
-        printf '%-24s %-8s %-10s %s\n' \
-            "$branch" "${id:+$(cairn_field "$id" ref)}" "${state:--}" "${dir/#$HOME/\~}"
+        home=$dir
+        case $dir in "$HOME"/*) home="~${dir#"$HOME"}" ;; esac
+        printf '%-30s %-6s %-8s %s\n' \
+            "$branch" "${id:+$(cairn_field "$id" ref)}" "${state:--}" "$home"
     done
 }
 
@@ -332,6 +387,11 @@ cmd_clean() {
 
     for branch in $branches; do
         [ "$branch" = "$trunk" ] && continue
+        # A branch with no commits of its own has not merged, it has not
+        # started. Reaping is for finished work; leave it alone.
+        [ "$(git rev-list --count "$remote/$trunk..$branch" 2>/dev/null || echo 0)" -eq 0 ] \
+            && [ "$(gh pr view "$branch" --json state --jq .state 2>/dev/null || echo NONE)" = NONE ] \
+            && continue
         if git merge-base --is-ancestor "$branch" "$remote/$trunk" 2>/dev/null; then
             cmd_land "$branch" && landed=$((landed + 1))
         fi
@@ -446,7 +506,7 @@ cmd_setup() {
 
 # ─── ─────────────────────────────────────────────────────────────────────────
 
-usage() { sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case ${1:-} in
     start)   shift; cmd_start   "$@" ;;
@@ -454,6 +514,7 @@ case ${1:-} in
     check)   shift; cmd_check   "$@" ;;
     ship)    shift; cmd_ship    "$@" ;;
     land)    shift; cmd_land    "$@" ;;
+    drop)    shift; cmd_drop    "$@" ;;
     list|ls) shift; cmd_list    "$@" ;;
     clean)   shift; cmd_clean   "$@" ;;
     release) shift; cmd_release "$@" ;;

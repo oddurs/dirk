@@ -2,7 +2,7 @@
 id: 83
 title: The agent harness belongs in the repository
 type: chore
-status: doing
+status: done
 milestone: v1.0
 assignee: oddurs
 created: 2026-09-07
@@ -42,7 +42,7 @@ Everything an agent needs, checked in beside the code:
 
 ## Acceptance criteria
 
-- [ ] AGENTS.md tells an agent enough to work without being told anything else
-- [ ] Subagents exist for the backlog, tests, chrome, NEWS, review and docs
-- [ ] No commit can carry a tool's name as an author or a trailer
-- [ ] `make setup` installs the hook that enforces it
+- [x] AGENTS.md tells an agent enough to work without being told anything else
+- [x] Subagents exist for the backlog, tests, chrome, NEWS, review and docs
+- [x] No commit can carry a tool's name as an author or a trailer
+- [x] `make setup` installs the hook that enforces it

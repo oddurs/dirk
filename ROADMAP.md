@@ -130,7 +130,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v1.0 — Production
 
-`··········` 0% · 0 of 12 done · due 2027-04-01
+`####······` 33% · 4 of 12 done · due 2027-04-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -144,11 +144,14 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
 
-### in progress
+### in review
 
 - [ ] `0018` Release workflow and packaging <sup>chore · p1 · packaging · deferred-homebrew</sup>
-- [ ] `0082` A worktree per branch, and one verb-set that drives it <sup>chore · p1 · git</sup>
-- [ ] `0083` The agent harness belongs in the repository <sup>chore · p1 · docs</sup>
-- [ ] `0084` The GNU furniture the project still lacks <sup>docs · p2 · docs</sup>
-- [ ] `0085` Repository settings a public project should have <sup>chore · p2 · packaging</sup>
+
+### done
+
+- [x] `0082` A worktree per branch, and one verb-set that drives it <sup>chore · p1 · git</sup>
+- [x] `0083` The agent harness belongs in the repository <sup>chore · p1 · docs</sup>
+- [x] `0084` The GNU furniture the project still lacks <sup>docs · p2 · docs</sup>
+- [x] `0085` Repository settings a public project should have <sup>chore · p2 · packaging</sup>
 

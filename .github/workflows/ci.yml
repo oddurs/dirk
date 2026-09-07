@@ -87,7 +87,10 @@ jobs:
       - name: the manual page parses
         run: mandoc -T lint doc/dirk.1
       - name: the scripts and hooks are clean
-        run: shellcheck scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
+        # Warnings and up. The info level is where shellcheck versions
+        # disagree with each other, and a CI job that fails when the runner
+        # image bumps a linter is a job nobody trusts.
+        run: shellcheck -S warning scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
       - name: no tool attribution in the history this branch adds
         run: |
           base=$(git merge-base origin/${{ github.base_ref || 'main' }} HEAD 2>/dev/null || echo HEAD~1)

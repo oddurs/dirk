@@ -58,12 +58,19 @@ squashes it and deletes the branch. `git work ship --land` waits for that to
 happen and then does the last step for you.
 
     $ git work land           # close the item, remove the worktree
+    $ git work drop           # change your mind: hand the item back instead
     $ git work list           # what is still in flight
     $ git work clean          # reap everything that has already merged
 
 `land` is safe to forget. `clean`, run from the main checkout, finds every
 worktree whose branch is now an ancestor of `origin/main`, closes its item, and
 removes it.
+
+Abandoning is not landing, and the difference matters: `drop` hands the item
+back to the backlog rather than closing it, because nothing was finished.
+`land` refuses a branch with no commits and no pull request for the same
+reason — closing an item because nothing was done to it is how a backlog
+quietly loses work.
 
 Worktrees live in a sibling directory — `../.dirk-worktrees` by default,
 `$DIRK_WORKTREES` if you want them elsewhere — so nothing nests inside a

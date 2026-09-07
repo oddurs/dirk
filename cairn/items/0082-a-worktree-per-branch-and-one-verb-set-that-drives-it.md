@@ -2,7 +2,7 @@
 id: 82
 title: A worktree per branch, and one verb-set that drives it
 type: chore
-status: doing
+status: done
 milestone: v1.0
 assignee: oddurs
 created: 2026-09-07
@@ -52,8 +52,26 @@ zdiff3 conflicts, autosetupremote, prune on fetch, and the histogram diff.
 
 ## Acceptance criteria
 
-- [ ] `git work start` produces an isolated worktree with the item claimed
-- [ ] `git work ship` opens a pull request that merges itself when CI is green
-- [ ] `git work land` closes the item and leaves no worktree behind
-- [ ] `make setup` is the only thing a new checkout needs
-- [ ] The whole loop is documented in HACKING
+- [x] `git work start` produces an isolated worktree with the item claimed
+- [x] `git work ship` opens a pull request that merges itself when CI is green
+- [x] `git work land` closes the item and leaves no worktree behind
+- [x] `make setup` is the only thing a new checkout needs
+- [x] The whole loop is documented in HACKING
+
+## 2026-09-07
+
+Verified by using it: this branch was shipped with `git work ship`, which
+opened the pull request, filled its body from this item, and turned auto-merge
+on. `start`, `land`, `drop`, `list` and `clean` were exercised against item
+0064 and the item put back afterwards.
+
+Two things that only showed up by using it, and both are in:
+
+**`land` refused nothing.** A branch with no commits and no pull request is an
+ancestor of the trunk, so the reaper happily closed a backlog item because
+nothing had been done to it. That is how a backlog quietly loses work. `land`
+now refuses that case and `clean` skips it.
+
+**Abandoning is not landing.** `git work drop` hands the item back to the
+backlog rather than closing it, which is what changing your mind actually
+means.
