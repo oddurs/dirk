@@ -10,7 +10,7 @@
 
 # On-disk format version. cairn refuses to open a project written in a format it
 # does not know, rather than misreading it. See "Compatibility" in the manual.
-format = 1
+format = 2
 
 [project]
 name = "dirk"
@@ -81,6 +81,10 @@ template = """
 name = "docs"
 icon = "*"
 color = "blue"
+
+[[type]]
+name = "milestone"
+description = "a release, or whatever this project ships"
 
 # ─── Statuses ────────────────────────────────────────────────────────────────
 # Order matters: it is the column order on the board and the sort order in
@@ -166,78 +170,19 @@ values = [
 column = true
 description = "Subsystem this touches"
 
-# ─── Milestones ──────────────────────────────────────────────────────────────
-# Sections of the rendered roadmap, in due-date order.
+[[field]]
+name = "due"
+kind = "date"
+description = "when a milestone is meant to land"
 
-# The order is a dependency order, not a wish list. Each milestone is the thing
-# that has to be true before the next one is worth starting.
-
-[[milestone]]
-name = "v0.1"
-title = "It runs"
-due = "2026-09-06"
-description = """
-Panes on a pty, a clickable sidebar, a rail, and naming. Single process:
-closing the terminal ends the session. Shipped."""
-
-[[milestone]]
-name = "v0.2"
-title = "The nav"
-due = "2026-10-15"
-description = """
-The sidebar becomes the product. Three sections — layouts, spaces, agents — with
-two-line rows carrying project, worktree, branch and intent. Static layouts, and
-the split tree they need underneath. This is the milestone dirk is for."""
-
-[[milestone]]
-name = "v0.3"
-title = "It knows what the agents are doing"
-due = "2026-11-15"
-description = """
-Real agent detection and real lifecycle states, so `blocked` — the only state
-waiting on a human — is shown rather than guessed. Attention routing and
-notifications on top of it."""
-
-[[milestone]]
-name = "v0.3.1"
-title = "Naming, in full"
-due = "2026-12-01"
-description = """
-The rest of namesync, natively. The port took the policy — when a name should
-change — and left everything around it: the tokens a name is made of, the
-templates that arrange them, the locks that protect a hand-written one, and the
-second source that is consulted when a title says nothing."""
-
-[[milestone]]
-name = "v0.4"
-title = "Sessions that outlive their terminal"
-due = "2027-01-15"
-description = """
-A daemon, detach and reattach, persistence across restarts, and a socket API
-with a CLI so an agent inside a pane can drive dirk. The milestone that lets
-dirk replace herdr rather than sit beside it."""
-
-[[milestone]]
-name = "v0.5"
-title = "A multiplexer you would not miss tmux from"
-due = "2027-02-15"
-description = """
-Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
-and configurable keys. The unglamorous half, and the half that decides whether
-this is usable all day."""
-
-[[milestone]]
-name = "v1.0"
-title = "Production"
-due = "2027-04-01"
-description = """
-Documented, packaged, hardened and fast. Safe for someone who is not the author
-to depend on."""
-
-[[milestone]]
-name = "later"
-title = "Someday"
-description = "Good ideas without a date yet."
+[[field]]
+name = "milestone"
+kind = "ref"
+target = "milestone"
+by = "key"
+rollup = true
+inverse = "scheduled"
+description = "what this ships in"
 
 # ─── Saved views ─────────────────────────────────────────────────────────────
 # `cairn list --view next`, `cairn board --view triage`

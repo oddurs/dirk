@@ -231,6 +231,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("session.info", ""),
     ("session.commands", ""),
     ("session.reload", ""),
+    ("session.quit", ""),
 ];
 
 /// Look a pane up wherever it is, with the workspace that holds it.
