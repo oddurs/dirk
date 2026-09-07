@@ -39,18 +39,11 @@ use std::process::Command;
 /// Matched on the basename of the process's `comm`. Deliberately not on its
 /// command line: a title is how an agent says what it is *doing*, `comm` is what
 /// it *is*, and reading someone else's argv to identify them is guessing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kind {
-    pub name: &'static str,
-    names: &'static [&'static str],
-    /// Whether a marker only counts alongside a menu of numbered answers.
-    ///
-    /// "Do you want" and "Would you like" are phrases an agent writes in
-    /// ordinary prose -- "Would you like me to run the tests?" is how a finished
-    /// turn ends -- with its cursor a few rows below, well inside the window.
-    /// Without this, every such turn read as blocked, which masks `done` and
-    /// inverts the attention order.
-    choices: bool,
+    pub name: String,
+    /// Process names this agent runs under. Empty means its own name.
+    pub names: Vec<String>,
     /// Fragments of a command line that identify this agent when it is run
     /// under an interpreter, and only then.
     ///
@@ -59,48 +52,94 @@ pub struct Kind {
     /// Consulted for nothing else: dirk does not read someone's argv to work
     /// out what they are, it reads it to disambiguate an interpreter that has
     /// told it nothing.
-    argv: &'static [&'static str],
+    pub argv: Vec<String>,
+    /// How to start one, for `agent start`. Empty means dirk cannot.
+    pub command: Vec<String>,
     /// Text that appears when this agent is waiting for an answer.
     ///
-    /// The part of this file most likely to be wrong: these are strings another
+    /// The part of the table most likely to be wrong: these are strings another
     /// program prints, and it can change them without telling anyone. A marker
     /// that stops matching degrades to "never blocked", which is the state
     /// dirk had before any of this — bad, but not misleading.
-    blocked: &'static [&'static str],
+    ///
+    /// Substrings rather than patterns, deliberately. This runs against the
+    /// prompt window on every tick for every agent pane, and a regular
+    /// expression out of a configuration file is a way to make a redraw depend
+    /// on somebody else's backtracking.
+    pub blocked: Vec<String>,
+    /// Whether a marker only counts alongside a menu of numbered answers.
+    ///
+    /// "Do you want" and "Would you like" are phrases an agent writes in
+    /// ordinary prose -- "Would you like me to run the tests?" is how a finished
+    /// turn ends -- with its cursor a few rows below, well inside the window.
+    /// Without this, every such turn read as blocked, which masks `done` and
+    /// inverts the attention order.
+    pub choices: bool,
 }
 
-/// The table. Adding an agent is an entry.
-pub const KINDS: &[Kind] = &[
-    Kind {
-        name: "claude",
-        names: &["claude"],
-        argv: &["claude-code", "claude/cli.js", ".claude/local"],
-        blocked: &["Do you want", "Would you like"],
-        choices: true,
-    },
-    Kind {
-        name: "codex",
-        names: &["codex"],
-        argv: &["codex/cli", "openai/codex"],
-        blocked: &["Allow command?", "Approve?"],
-        choices: true,
-    },
-    Kind {
-        name: "aider",
-        names: &["aider"],
-        argv: &["aider/main", "aider.main"],
-        blocked: &["(Y)es/(N)o", "Add to chat?"],
-        // Its marker is already the answer set, so there is no menu to find.
-        choices: false,
-    },
-    Kind {
-        name: "goose",
-        names: &["goose"],
-        argv: &["goose/cli"],
-        blocked: &["Do you approve"],
-        choices: true,
-    },
-];
+/// The harnesses dirk knows about without being told.
+///
+/// A catalogue, not a policy. What claude *looks like* changes every month;
+/// what counts as blocked -- the rule that a marker only means blocked
+/// alongside a menu -- was hard to get right and changes almost never. The
+/// first belongs in a file, which is why this is only the default contents of
+/// one and every field here is expressible in an `[[agent]]` block.
+pub fn defaults() -> Vec<Kind> {
+    let k = |name: &str, argv: &[&str], blocked: &[&str], choices: bool| Kind {
+        name: name.to_string(),
+        names: vec![name.to_string()],
+        argv: argv.iter().map(|s| s.to_string()).collect(),
+        command: vec![name.to_string()],
+        blocked: blocked.iter().map(|s| s.to_string()).collect(),
+        choices,
+    };
+    vec![
+        k(
+            "claude",
+            &["claude-code", "claude/cli.js", ".claude/local"],
+            &["Do you want", "Would you like"],
+            true,
+        ),
+        k(
+            "codex",
+            &["codex/cli", "openai/codex"],
+            &["Allow command?", "Approve?"],
+            true,
+        ),
+        k(
+            "opencode",
+            &["opencode/cli", "opencode/bin"],
+            &["Allow", "Approve"],
+            true,
+        ),
+        k(
+            "aider",
+            &["aider/main", "aider.main"],
+            // Its marker is already the answer set, so there is no menu to find.
+            &["(Y)es/(N)o", "Add to chat?"],
+            false,
+        ),
+        k("goose", &["goose/cli"], &["Do you approve"], true),
+        k(
+            "amp",
+            &["amp/cli", "sourcegraph/amp"],
+            &["Allow", "Approve"],
+            true,
+        ),
+        k(
+            "cursor-agent",
+            &["cursor-agent"],
+            &["Allow", "Approve"],
+            true,
+        ),
+        k(
+            "gemini",
+            &["gemini/cli", "google-gemini"],
+            &["Allow", "Apply this change"],
+            true,
+        ),
+    ]
+}
 
 /// Programs that are somebody else's identity.
 ///
@@ -132,9 +171,9 @@ pub enum Occupant {
 }
 
 impl Occupant {
-    pub fn agent(&self) -> Option<Kind> {
+    pub fn agent(&self) -> Option<&Kind> {
         match self {
-            Occupant::Agent(k) => Some(*k),
+            Occupant::Agent(k) => Some(k),
             _ => None,
         }
     }
@@ -155,30 +194,30 @@ pub struct Proc {
 }
 
 /// Classify a process.
-pub fn identify(proc: &Proc) -> Occupant {
+pub fn identify(proc: &Proc, kinds: &[Kind]) -> Occupant {
     let base = basename(&proc.program);
     if base.is_empty() {
         return Occupant::Unknown;
     }
 
-    if let Some(kind) = KINDS.iter().find(|k| k.names.contains(&base)) {
-        return Occupant::Agent(*kind);
+    if let Some(kind) = kinds.iter().find(|k| k.names.iter().any(|n| n == base)) {
+        return Occupant::Agent(kind.clone());
     }
     // Linux truncates `comm` to fifteen characters; a program invoked by path
     // is not truncated, but this is cheap insurance for the ones that are.
-    if let Some(kind) = KINDS
+    if let Some(kind) = kinds
         .iter()
         .find(|k| k.names.iter().any(|n| n.starts_with(base)))
     {
-        return Occupant::Agent(*kind);
+        return Occupant::Agent(kind.clone());
     }
 
     if INTERPRETERS.contains(&base)
-        && let Some(kind) = KINDS
+        && let Some(kind) = kinds
             .iter()
-            .find(|k| k.argv.iter().any(|m| proc.args.contains(m)))
+            .find(|k| k.argv.iter().any(|m| proc.args.contains(m.as_str())))
     {
-        return Occupant::Agent(*kind);
+        return Occupant::Agent(kind.clone());
     }
 
     if SHELLS.contains(&base) {
@@ -269,6 +308,10 @@ pub fn parse(text: &str) -> HashMap<i32, Proc> {
 pub enum State {
     /// Waiting on a human. The only state that is owed something.
     Blocked,
+    /// Launched, and has not said anything yet. Distinct from `Idle`, which
+    /// looks identical and wants the opposite response: a harness that hangs on
+    /// startup is not one sitting quietly.
+    Starting,
     /// Finished, and not looked at since.
     Done,
     /// Producing output.
@@ -285,6 +328,7 @@ impl State {
     pub fn glyph_name(self) -> &'static str {
         match self {
             State::Blocked => "blocked",
+            State::Starting => "starting",
             State::Done => "done",
             State::Working => "working",
             State::Idle => "idle",
@@ -293,13 +337,115 @@ impl State {
     }
 }
 
+impl State {
+    /// Whether this is a claim that nothing is happening.
+    ///
+    /// Output contradicts one of these and nothing else. A pane producing text
+    /// is not finished, whatever it said a minute ago -- and without that rule
+    /// a harness whose hook fires on stop but not on start sticks on `done`
+    /// while it grinds, which is worse than the guess it replaced.
+    pub fn quiescent(self) -> bool {
+        matches!(self, State::Done | State::Idle | State::Starting)
+    }
+
+    pub fn named(name: &str) -> Option<State> {
+        Some(match name {
+            "blocked" => State::Blocked,
+            "starting" => State::Starting,
+            "done" => State::Done,
+            "working" => State::Working,
+            "idle" => State::Idle,
+            _ => return None,
+        })
+    }
+}
+
+/// What decided a state, best first.
+///
+/// Recorded rather than inferred because a badge you cannot explain is a badge
+/// you stop believing. `agent list` reports it, so when one is wrong you can
+/// see which signal was wrong.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Source {
+    /// The agent said so, through a hook.
+    Reported,
+    /// The screen looks like it: a menu of numbered answers.
+    Screen,
+    /// It has produced nothing for a while, having produced something.
+    Silence,
+    #[default]
+    None,
+}
+
+impl Source {
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::Reported => "reported",
+            Source::Screen => "screen",
+            Source::Silence => "silence",
+            Source::None => "none",
+        }
+    }
+}
+
+/// What to install so a harness reports its own state.
+///
+/// The whole ladder below this is inference: argv, a window title, prose on a
+/// screen, silence. Every one of them is dirk guessing at something the agent
+/// already knows, and the guessing has already needed one save -- every
+/// finished turn ends in a question, so a menu of numbered answers had to
+/// become a requirement before a block was believed.
+///
+/// Guarded on `DIRK_PANE_ID`, which only exists inside a managed pane, so the
+/// hook is inert everywhere else and safe to leave in a settings file for good.
+pub fn hooks(kind: &str) -> String {
+    // `case` rather than `[ -n "$X" ]` because this ends up inside a JSON
+    // string, and a snippet somebody has to repair before pasting is a snippet
+    // they will not paste. No double quotes, and no expansion outside a pane.
+    let say = |state: &str| {
+        format!("case $DIRK_PANE_ID in ?*) dirk agent state {state} --current;; esac")
+    };
+    let (done, blocked) = (say("done"), say("blocked"));
+    match kind {
+        "claude" => format!(
+            "Add to ~/.claude/settings.json:\n\
+             \n\
+             {{\n\
+             \x20 \"hooks\": {{\n\
+             \x20   \"Stop\": [\n\
+             \x20     {{ \"hooks\": [{{ \"type\": \"command\", \"command\": \"{done}\" }}] }}\n\
+             \x20   ],\n\
+             \x20   \"Notification\": [\n\
+             \x20     {{ \"hooks\": [{{ \"type\": \"command\", \"command\": \"{blocked}\" }}] }}\n\
+             \x20   ]\n\
+             \x20 }}\n\
+             }}\n"
+        ),
+        _ => format!(
+            "There is no snippet for {kind} here yet, which means nobody has\n\
+             written one rather than that it cannot be done.\n\
+             \n\
+             Anything that can run a command when a turn ends wants:\n\
+             \n\
+             \x20 {done}\n\
+             \n\
+             and when it stops to ask you something:\n\
+             \n\
+             \x20 {blocked}\n\
+             \n\
+             Both are inert outside a dirk pane, so they are safe to leave in\n\
+             a settings file for good.\n"
+        ),
+    }
+}
+
 /// Is this agent waiting for an answer?
 ///
 /// Only the region around the cursor is read, not the whole screen: an agent
 /// that merely wrote the words "do you want" in a paragraph further up is not
 /// waiting for anything.
-pub fn is_blocked(kind: Kind, window: &str) -> bool {
-    if !kind.blocked.iter().any(|m| window.contains(m)) {
+pub fn is_blocked(kind: &Kind, window: &str) -> bool {
+    if !kind.blocked.iter().any(|m| window.contains(m.as_str())) {
         return false;
     }
     !kind.choices || has_menu(window)
@@ -349,23 +495,32 @@ mod tests {
 
     /// Most of these ask about a program name alone, which is the common case.
     fn classify(program: &str) -> Occupant {
-        identify(&Proc {
-            program: program.to_string(),
-            args: String::new(),
-        })
+        identify(
+            &Proc {
+                program: program.to_string(),
+                args: String::new(),
+            },
+            &defaults(),
+        )
     }
 
     #[test]
     fn a_known_agent_is_recognised_by_its_basename() {
-        assert_eq!(classify("claude").agent().map(|k| k.name), Some("claude"));
+        assert_eq!(
+            classify("claude").agent().map(|k| k.name.as_str()),
+            Some("claude")
+        );
         // `comm` is a full path on macos for most processes.
         assert_eq!(
             classify("/Users/x/.local/share/claude/versions/2.1.236/claude")
                 .agent()
-                .map(|k| k.name),
+                .map(|k| k.name.as_str()),
             Some("claude")
         );
-        assert_eq!(classify("codex").agent().map(|k| k.name), Some("codex"));
+        assert_eq!(
+            classify("codex").agent().map(|k| k.name.as_str()),
+            Some("codex")
+        );
     }
 
     #[test]
@@ -446,22 +601,23 @@ mod tests {
 
     #[test]
     fn an_approval_prompt_reads_as_blocked() {
-        let claude = KINDS.iter().find(|k| k.name == "claude").unwrap();
+        let kinds = defaults();
+        let find = |n: &str| kinds.iter().find(|k| k.name == n).unwrap();
+        let claude = find("claude");
         assert!(is_blocked(
-            *claude,
+            claude,
             "Do you want to proceed?\n  1. Yes\n  2. No"
         ));
-        assert!(!is_blocked(*claude, "Reading src/agent.rs\nWriting tests"));
+        assert!(!is_blocked(claude, "Reading src/agent.rs\nWriting tests"));
         // A marker belongs to one agent, not to all of them.
-        let codex = KINDS.iter().find(|k| k.name == "codex").unwrap();
-        assert!(!is_blocked(*codex, "Do you want to proceed?"));
+        assert!(!is_blocked(find("codex"), "Do you want to proceed?"));
     }
 
     #[test]
     fn every_kind_says_how_to_tell_it_is_waiting() {
         // A kind with no markers can never be blocked, which is the state dirk
         // had before any of this and not worth shipping again by omission.
-        for kind in KINDS {
+        for kind in &defaults() {
             assert!(
                 !kind.blocked.is_empty(),
                 "{} has no blocked markers",

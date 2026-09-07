@@ -2,7 +2,7 @@
 id: 73
 title: Start an agent from the nav
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 depends_on:
 - 61

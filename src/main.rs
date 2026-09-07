@@ -105,7 +105,7 @@ JSON; `--current` means the pane you are in.
   workspace list|focus|create|rename|close
   pane      list|focus|split|read|send-keys|close
   layout    list|open
-  agent     list
+  agent     list|start|state|hooks
   session   info|list|reload|commands
 
 Options:
@@ -278,6 +278,15 @@ fn main() -> io::Result<()> {
                 if spaces == 1 { "space" } else { "spaces" }
             ));
         }
+        return Ok(());
+    }
+
+    // Answered without a session, because installing a hook is something you do
+    // before there is one -- and because the answer is a snippet to paste, which
+    // is worse for having been through JSON on the way.
+    if command_args_are(&args, "agent", "hooks") {
+        let kind = words(&args).get(2).copied().unwrap_or("claude").to_string();
+        say(&crate::agent::hooks(&kind));
         return Ok(());
     }
 
@@ -550,6 +559,8 @@ struct App {
     /// Which session this is, and what was last written down for it.
     session_name: Option<String>,
     written: Option<state::Saved>,
+    /// The harnesses to recognise, resolved from the configuration.
+    kinds: std::sync::Arc<Vec<crate::agent::Kind>>,
     /// A saved session is there and unreadable, so this one does not write.
     readonly: bool,
     /// Whether the failure to save has been mentioned. Once is enough.
@@ -573,6 +584,7 @@ struct App {
 
 impl App {
     fn new(cfg: Config, session: Session, size: ratatui::layout::Size, tx: Sender<Ev>) -> Self {
+        let kinds = std::sync::Arc::new(cfg.kinds());
         let width = size.width;
         let height = size.height;
         let sidebar_w = cfg.sidebar_width;
@@ -591,6 +603,7 @@ impl App {
             side: Rect::ZERO,
             session_name: None,
             written: None,
+            kinds,
             readonly: false,
             complained: false,
             socket: None,
@@ -1090,8 +1103,154 @@ impl App {
                 }
             }
 
+            // Rank one: the agent saying what it is doing, which is a fact
+            // where everything else dirk has is a guess.
+            "agent.state" => {
+                let Some(state) = crate::agent::State::named(&arg(0)) else {
+                    return Reply::err("no such state");
+                };
+                // No target means the workspace you are looking at, which is
+                // what a hook running inside a pane resolves to anyway.
+                let here = match self.session.focus {
+                    Focus::Ws { p, w } => Some((p, w)),
+                    Focus::Layout(_) => None,
+                };
+                let Some((p, w)) = api::target_workspace(&self.session, &arg(1)).or(here) else {
+                    return Reply::err("no such workspace");
+                };
+                let Some(ws) = self.session.workspace_mut(p, w) else {
+                    return Reply::err("no such workspace");
+                };
+                ws.reported = Some((state, Instant::now()));
+                Reply::ok(serde_json::json!({
+                    "workspace": api::workspace_id(ws.id),
+                    "state": state.glyph_name(),
+                }))
+            }
+
+            "agent.start" => {
+                let Some(kind) = self.kinds.iter().find(|k| k.name == arg(0)).cloned() else {
+                    return Reply::err(format!("no such agent: {}", arg(0)));
+                };
+                if kind.command.is_empty() {
+                    return Reply::err(format!("{} has no command to start it with", kind.name));
+                }
+                let Some(pane) = api::target_pane(&self.session, &arg(1)) else {
+                    return Reply::err("no such pane");
+                };
+                match self.start_agent(pane, &kind) {
+                    Ok(id) => Reply::ok(serde_json::json!({
+                        "started": kind.name,
+                        "pane": id,
+                    })),
+                    Err(why) => Reply::err(why),
+                }
+            }
+
+            "agent.hooks" => match self.kinds.iter().find(|k| k.name == arg(0)) {
+                Some(kind) => Reply::ok(serde_json::json!({
+                    "kind": kind.name,
+                    "install": crate::agent::hooks(&kind.name),
+                })),
+                None => Reply::err(format!("no such agent: {}", arg(0))),
+            },
+
             other => Reply::err(format!("no such command: {other}")),
         }
+    }
+
+    /// Start an agent where you are looking, making somewhere for it if the
+    /// pane you are in is busy.
+    ///
+    /// A workspace exists in order to hold an agent -- it is why the naming
+    /// policy is built around what the agent says it is doing -- so this is one
+    /// keystroke rather than a new workspace and then a command typed into it.
+    fn new_agent(&mut self) {
+        let Focus::Ws { p, w } = self.session.focus else {
+            return self.note("no project focused");
+        };
+        let path = self.session.projects.get(p).map(|x| x.path.clone());
+        let Some(name) = path.as_deref().and_then(|d| self.cfg.agent_for(d)) else {
+            return self.note("no agent configured: set default_agent");
+        };
+        let Some(kind) = self.kinds.iter().find(|k| k.name == name).cloned() else {
+            return self.note(&format!("no such agent: {name}"));
+        };
+
+        // The focused pane if it is free, and a new workspace if it is not.
+        // Typing into somebody's editor is not recoverable by apologising.
+        let free = self
+            .session
+            .workspace(p, w)
+            .and_then(|ws| ws.active_pane())
+            .is_some_and(|pane| pane.occupant.available());
+        if !free {
+            let (rows, cols) = (self.content.height, self.content.width);
+            if self.session.new_workspace(p, rows, cols).is_none() {
+                return self.note("could not make a workspace");
+            }
+        }
+        let Some(pane) = self
+            .session
+            .workspace(
+                p,
+                match self.session.focus {
+                    Focus::Ws { w, .. } => w,
+                    Focus::Layout(_) => w,
+                },
+            )
+            .map(|ws| ws.focus)
+        else {
+            return self.note("nowhere to start it");
+        };
+        match self.start_agent(pane, &kind) {
+            Ok(_) => self.note(&format!("starting {name}")),
+            Err(why) => self.note(&why),
+        }
+    }
+
+    /// Type an agent's command into a pane that is free.
+    ///
+    /// Refuses one that is not at a prompt rather than typing over what is
+    /// there: the whole reason `available` exists in the API is that writing
+    /// into somebody's editor is not recoverable by apologising.
+    ///
+    /// The pane is marked `starting` straight away, because the gap between
+    /// the command being typed and the process appearing in the table is
+    /// exactly the window where "did that work" is worth an answer.
+    fn start_agent(
+        &mut self,
+        pane: crate::mux::PaneId,
+        kind: &crate::agent::Kind,
+    ) -> Result<String, String> {
+        let Some((p, w)) = api::locate(&self.session, pane) else {
+            return Err("no such pane".into());
+        };
+        let Some(ws) = self.session.workspace(p, w) else {
+            return Err("no such pane".into());
+        };
+        let Some(target) = ws.pane(pane) else {
+            return Err("no such pane".into());
+        };
+        if !target.occupant.available() {
+            return Err(format!(
+                "that pane is busy: {}",
+                match &target.occupant {
+                    crate::agent::Occupant::Agent(k) => k.name.clone(),
+                    crate::agent::Occupant::Program(p) => p.clone(),
+                    _ => "not at a prompt".into(),
+                }
+            ));
+        }
+        let id = api::pane_id(ws.id, pane);
+        let line = format!("{}\r", kind.command.join(" "));
+        if !self.session.write_to(pane, line.as_bytes()) {
+            return Err("no such pane".into());
+        }
+        if let Some(ws) = self.session.workspace_mut(p, w) {
+            ws.reported = Some((crate::agent::State::Starting, Instant::now()));
+        }
+        Ok(id)
     }
 
     /// Ask the second source about panes whose title says nothing.
@@ -1135,6 +1294,10 @@ impl App {
         }
         self.sampling = true;
         let tx = self.tx.clone();
+        // Resolved once and carried into the thread: the table is configuration
+        // now, and reading it here rather than there keeps `session reload`
+        // from changing what a sample in flight is comparing against.
+        let kinds = std::sync::Arc::clone(&self.kinds);
         std::thread::spawn(move || {
             let table = crate::agent::table();
             let panes = panes
@@ -1146,7 +1309,9 @@ impl App {
                         None => Some(crate::agent::Occupant::Unknown),
                         // A group that is not in the table ended between the
                         // pgid being read and `ps` running. That is not news.
-                        Some(pgid) => table.get(&pgid).map(crate::agent::identify),
+                        Some(pgid) => table
+                            .get(&pgid)
+                            .map(|proc| crate::agent::identify(proc, &kinds)),
                     };
                     (id, occupant)
                 })
@@ -1417,6 +1582,10 @@ impl App {
                     ws.focus = id;
                 }
             }
+            Target::NewAgent => {
+                self.new_agent();
+                return;
+            }
             Target::NewWorkspace(p) => {
                 self.session.new_workspace(p, area.height, area.width);
             }
@@ -1568,6 +1737,7 @@ impl App {
                 }
             }
             KeyCode::Char('o') => self.open_picker(),
+            KeyCode::Char('a') => self.new_agent(),
             KeyCode::Char('x') => self.session.close_focused(),
             KeyCode::Char('u') => {
                 if self.session.release_hold() {

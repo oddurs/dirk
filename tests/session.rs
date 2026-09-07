@@ -160,6 +160,17 @@ impl Client {
         self.rows().join("\n")
     }
 
+    fn wait_until(&self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if done(self) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
     fn wait_for(&self, needle: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -420,10 +431,13 @@ fn ask(session: &str, args: &[&str]) -> (bool, String) {
         .env("XDG_CONFIG_HOME", config_home())
         .output()
         .expect("run dirk");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-    )
+    // Both, because a failure says why on stderr and a caller checking only
+    // stdout gets an empty string and no idea what went wrong.
+    let said = match out.status.success() {
+        true => String::from_utf8_lossy(&out.stdout).into_owned(),
+        false => String::from_utf8_lossy(&out.stderr).into_owned(),
+    };
+    (out.status.success(), said)
 }
 
 #[test]
@@ -945,4 +959,130 @@ fn the_bar_offers_both_ways_out_and_says_which_is_which() {
     assert!(drawn.contains("quit"), "no way out that ends it:\n{drawn}");
     drop(client);
     quit(&session);
+}
+
+// ── What an agent says about itself ─────────────────────────────────────
+
+#[test]
+fn a_reported_state_outranks_what_the_screen_looks_like() {
+    // Rank one. Everything else dirk has is inference -- argv, a title, prose
+    // on a screen, silence -- and every one of those is it guessing at
+    // something the agent already knows.
+    let session = unique("said");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["agent", "state", "blocked"]);
+    assert!(ok, "the report was refused: {out}");
+    assert!(
+        client.wait_for("needs you", START),
+        "a reported block did not reach the column\n{}",
+        client.drawn()
+    );
+
+    // And it is a claim about a moment, not a lease: the next one replaces it.
+    let (ok, _) = ask(&session, &["agent", "state", "working"]);
+    assert!(ok, "the second report was refused");
+    assert!(
+        client.wait_until(START, |c| !c.drawn().contains("needs you")),
+        "the first report outlived the second\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn output_contradicts_a_claim_that_nothing_is_happening() {
+    // Without this a harness whose hook fires on stop but not on start sticks
+    // on `done` while it grinds, which is worse than the guess it replaced.
+    let session = unique("grind");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let (ok, _) = ask(&session, &["agent", "state", "done"]);
+    assert!(ok, "the report was refused");
+
+    let (ok, _) = ask(
+        &session,
+        &["pane", "send-keys", &pane, "printf", "'zzWORKING'"],
+    );
+    assert!(ok, "send-keys failed");
+
+    let (ok, after) = ask(&session, &["agent", "list"]);
+    assert!(ok, "agent list failed: {after}");
+    // The pane holds a shell rather than an agent, so it is not in that list at
+    // all -- what matters is that the screen stopped saying the work is done.
+    assert!(
+        client.wait_until(START, |c| !c.drawn().contains("needs you")),
+        "a pane producing output still read as finished\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn a_state_nobody_defined_is_refused() {
+    let session = unique("nostate");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, _) = ask(&session, &["agent", "state", "pondering"]);
+    assert!(!ok, "a state that does not exist was accepted");
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn starting_an_agent_refuses_a_pane_that_is_busy() {
+    // Typing into somebody's editor is not recoverable by apologising, which is
+    // the whole reason `available` is in the API.
+    let session = unique("busy");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+
+    // Something that holds the pane and is not a shell.
+    // With the return, or the shell is still at a prompt and the pane is free.
+    let (ok, _) = ask(&session, &["pane", "send-keys", &pane, "sleep 30\r"]);
+    assert!(ok, "send-keys failed");
+    std::thread::sleep(Duration::from_secs(3));
+
+    let (ok, why) = ask(&session, &["agent", "start", "claude", &pane]);
+    assert!(!ok, "it typed into a busy pane: {why}");
+    assert!(why.contains("busy"), "said the wrong thing: {why}");
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn an_agent_nobody_configured_is_refused_by_name() {
+    let session = unique("nokind");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, why) = ask(&session, &["agent", "start", "not-a-real-agent"]);
+    assert!(!ok, "it tried to start something that does not exist");
+    assert!(why.contains("no such agent"), "said the wrong thing: {why}");
+    drop(client);
+    quit(&session);
+}
+
+/// The first value of a field in a JSON answer, without a parser.
+fn first_field(json: &str, field: &str) -> String {
+    let at = json
+        .find(&format!("\"{field}\""))
+        .unwrap_or_else(|| panic!("no {field} in the answer: {json}"));
+    let rest = &json[at + field.len() + 2..];
+    let open = rest.find('"').expect("a value");
+    let rest = &rest[open + 1..];
+    rest[..rest.find('"').expect("a close")].to_string()
 }

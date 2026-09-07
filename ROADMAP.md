@@ -104,7 +104,7 @@ dirk replace herdr rather than sit beside it.
 
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`###·······` 24% · 5 of 21 done · due 2027-02-15
+`#####·····` 43% · 9 of 21 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 and configurable keys. The unglamorous half, and the half that decides whether
@@ -120,22 +120,22 @@ this is usable all day.
 - [ ] `0043` Pane zoom, move and swap <sup>feature · p2 · mux</sup>
 - [ ] `0044` Create and manage worktrees from the nav <sup>feature · p1 · git</sup>
 - [ ] `0060` A view per client, rather than one client at a time <sup>feature · p2 · server</sup>
-- [ ] `0061` agent start: launch an agent, not just recognise one <sup>feature · p1 · agents</sup>
 - [ ] `0063` Nothing removes a socket its server has left behind <sup>feature · p3 · server</sup>
 - [ ] `0064` Tests leave a session running when they fail <sup>bug · p2 · server</sup>
-- [ ] `0067` Harnesses are configuration, not a table in agent.rs <sup>feature · p1 · agents</sup>
-- [ ] `0068` An agent that reports its own state <sup>feature · p0 · agents</sup>
 - [ ] `0070` A sound when an agent blocks, and one when it is done <sup>feature · p1 · agents</sup>
 - [ ] `0071` Boards that report without being opened <sup>feature · p2 · layout</sup>
-- [ ] `0073` Start an agent from the nav <sup>feature · p1 · agents</sup>
 
 ### done
 
+- [x] `0061` agent start: launch an agent, not just recognise one <sup>feature · p1 · agents</sup>
 - [x] `0062` A CLI answer through a closed pipe should not panic <sup>bug · p1 · server</sup>
 - [x] `0065` Detach, and two exits that say which is which <sup>bug · p0 · nav</sup>
 - [x] `0066` One glyph table, with cell widths <sup>feature · p1 · chrome</sup>
+- [x] `0067` Harnesses are configuration, not a table in agent.rs <sup>feature · p1 · agents</sup>
+- [x] `0068` An agent that reports its own state <sup>feature · p0 · agents</sup>
 - [x] `0069` Attention is a zone that is not there when nothing needs you <sup>feature · p1 · nav</sup>
 - [x] `0072` A tree that still reads at twenty projects <sup>feature · p2 · nav</sup>
+- [x] `0073` Start an agent from the nav <sup>feature · p1 · agents</sup>
 
 ## v1.0 — Production
 

@@ -82,6 +82,8 @@ impl Section {
         match self {
             Section::Layouts => &[(Press::Mark(G::Enter), "open", Action::Hint)],
             Section::Spaces => &[
+                // Agent first: it is what the workspace is for.
+                (Press::Key("a"), "agent", Action::NewAgent),
                 (Press::Key("n"), "new", Action::NewWorkspace),
                 (Press::Key("o"), "project", Action::OpenProject),
             ],
@@ -103,6 +105,7 @@ enum Press {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Hint,
+    NewAgent,
     NewWorkspace,
     OpenProject,
 }
@@ -117,6 +120,10 @@ impl Action {
             Action::OpenProject => Some(Target::OpenProject),
             Action::NewWorkspace => match session.focus {
                 Focus::Ws { p, .. } => Some(Target::NewWorkspace(p)),
+                Focus::Layout(_) => None,
+            },
+            Action::NewAgent => match session.focus {
+                Focus::Ws { .. } => Some(Target::NewAgent),
                 Focus::Layout(_) => None,
             },
         }

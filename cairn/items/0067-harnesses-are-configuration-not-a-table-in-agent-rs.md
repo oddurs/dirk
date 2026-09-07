@@ -2,7 +2,7 @@
 id: 67
 title: Harnesses are configuration, not a table in agent.rs
 type: feature
-status: backlog
+status: done
 milestone: v0.5
 created: 2026-09-07
 updated: 2026-09-07
