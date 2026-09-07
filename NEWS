@@ -6,6 +6,89 @@ See the end of the file for copying conditions.
 Please send bug reports and suggestions through the project's issue tracker.
 
 
+* Noteworthy changes in release 0.4.0 (2026-09-07)
+
+Sessions.  Until now dirk was a program you ran in a terminal, which meant
+closing the terminal closed the work.  It is now a session you attach to.
+
+** A session outlives its terminal
+
+`dirk` attaches, starting the session if it is not running; `dirk --no-session`
+is what dirk used to be.  Close the terminal and everything in it keeps going.
+
+The server renders and the client paints bytes it does not read.  Shipping state
+and letting each client compose it sounds more principled and costs more: two
+renderers drift, the local one gets a fix, the remote one does not, and the
+difference is a rendering bug nobody can reproduce.  One client at a time; a
+second dirk takes the session over and the first is told why.
+
+** Named sessions
+
+`--session NAME` picks one, and `dirk session list` says which exist and whether
+anyone is watching.  It answers by connecting rather than by reading the socket
+directory: a socket outliving its server is the ordinary state after a crash,
+and a list of those is a list of things you cannot attach to.
+
+** A session answers for itself
+
+`dirk pane list`, `pane split`, `pane send-keys`, `workspace rename`, `agent
+list`, and the rest.  Answers are JSON, including the failures, because a caller
+is a program and prose on stderr is not something a program can branch on.  Ids
+are opaque and stable: `w7` is a workspace and `w7:p12` a pane in it, and every
+managed pane is told its own, so `--current` works from inside one without
+looking anything up.
+
+`dirk --skill` prints what an agent needs in order to drive a session, generated
+from the command table so it cannot describe a surface that no longer exists.
+Most of it is traps -- that reading does not mark an agent seen, that a
+workspace holding two panes stops being renamed -- and each is something that
+would otherwise be found out by getting it wrong.
+
+** Reloading
+
+`dirk session reload` re-reads the configuration without restarting.  An open
+layout keeps its panes: rebuilding a running dashboard because a colour changed
+elsewhere in the file is not a reload, it is a restart.  A file that does not
+parse is reported with the running configuration kept, and whatever else was
+wrong with it comes back in the answer rather than going to a stderr nobody is
+reading.
+
+** Sessions come back
+
+What is written down is the arrangement -- projects, workspaces and their names,
+which projects were open -- and deliberately not the screen.  A screenful of text
+with nothing behind it is worse than an empty pane, because it looks like
+something you can type into.
+
+A name you wrote by hand comes back held, so naming leaves it alone.  A project
+whose directory has gone is dropped; one whose volume is merely not mounted is
+kept, because those come back.  Writes are atomic and durable, and a saved
+session this dirk cannot read is left alone rather than replaced -- it may be
+the only record of that arrangement.
+
+** Over ssh
+
+`dirk --remote host` attaches to a session on another machine.  ssh is the whole
+authentication story: dirk runs `ssh -T host dirk relay` and drives the ordinary
+client over the pipes, and the far side is a program that copies bytes between a
+socket and its own stdin and stdout.
+
+A dropped link is not a lost session.  The client keeps the terminal, says so,
+and spends two minutes trying to make another, waiting longer between each.  A
+link that comes back and dies again without ever painting does not reset that
+patience, which is what stops a host that has gone for good from being dialled
+once a second for ever.  Keys pressed while there is nowhere to send them are
+dropped rather than replayed: they belonged to the screen that was there when
+you pressed them.  Ctrl-C leaves while it waits.
+
+** Answers through a pipe
+
+`dirk session list | head -1` used to end in a backtrace.  Every CLI answer went
+through `print!`, which panics on a closed pipe rather than returning the error,
+so piping one into anything that stops reading -- `head`, a pager you quit, a
+`grep -q` -- ended where every other program on the system ends in silence.
+
+
 * Noteworthy changes in release 0.3.1 (2026-09-07)
 
 The rest of namesync, natively.  The port took its policy -- when a name should
