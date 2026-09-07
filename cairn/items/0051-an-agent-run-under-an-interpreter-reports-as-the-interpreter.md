@@ -2,8 +2,9 @@
 id: 51
 title: An agent run under an interpreter reports as the interpreter
 type: bug
-status: backlog
+status: done
 milestone: v0.3
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1
@@ -38,7 +39,7 @@ The rule this preserves: dirk does not read someone else's argv to work out what
 they are. It reads it to disambiguate an interpreter that has told us nothing.
 
 ## Acceptance criteria
-- [ ] An npm-installed agent under `node` is recognised
-- [ ] The interpreter list is closed, and argv is not consulted for anything else
-- [ ] Linux truncates `comm` to 15 characters; the table accounts for it
-- [ ] A test with a script named like an agent, run under an interpreter
+- [x] An npm-installed agent under `node` is recognised
+- [x] The interpreter list is closed, and argv is not consulted for anything else
+- [x] Linux truncates `comm` to 15 characters; the table accounts for it
+- [x] A test with a script named like an agent, run under an interpreter

@@ -141,7 +141,12 @@ pub fn render(
         }
         let text = format!("{glyph} {n}");
         let w = text.chars().count() as u16;
-        right_x = right_x.saturating_sub(w + 3);
+        // Saturating at zero would stack them on each other and on the brand,
+        // and the later hit rect would win, making the first one unclickable.
+        if right_x < w + 3 {
+            break;
+        }
+        right_x -= w + 3;
         write_str(buf, right_x, area.y, &text, style.patch(THEME.rail()), w);
         hits.push(
             Rect {

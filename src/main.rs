@@ -311,6 +311,7 @@ impl App {
             Ev::Agents(reading) => {
                 self.sampling = false;
                 self.session.apply_agents(reading);
+                self.session.name_agents();
             }
             Ev::Exited(id) => {
                 self.session.reap(id);
@@ -358,7 +359,7 @@ impl App {
                 // Starting work and settling down are not interruptions.
                 _ => continue,
             };
-            if !self.session.may_notify(change.at, now, floor) {
+            if !self.session.may_notify(change.at, change.to, now, floor) {
                 continue;
             }
             notify::send(
@@ -399,7 +400,7 @@ impl App {
                         None => Some(crate::agent::Occupant::Unknown),
                         // A group that is not in the table ended between the
                         // pgid being read and `ps` running. That is not news.
-                        Some(pgid) => table.get(&pgid).map(|c| crate::agent::classify(c)),
+                        Some(pgid) => table.get(&pgid).map(crate::agent::identify),
                     };
                     (id, occupant)
                 })
@@ -665,11 +666,12 @@ impl App {
             }
             Target::Attention(state) => {
                 // The oldest first: what has been waiting longest is what to
-                // look at first.
+                // look at first. No early return -- this moves you, so it falls
+                // through to handing the keyboard back like every other target
+                // that does.
                 if let Some(at) = self.session.oldest_in(state) {
                     self.session.focus = at;
                 }
-                return;
             }
             Target::Quit => {
                 match self.quit_armed {

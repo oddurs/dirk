@@ -27,7 +27,7 @@ A terminal multiplexer that knows what its sessions are for.
 │   * Building the mux core  now │                                    │
 │   ↵ go  ·  s sort              │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ◆ dirk  ▊1 mux core  ▏2 reading the grid  ! 1  + 2  2 spaces · 14:22  ✕ │
+│ ◆ dirk  ▊1 mux core  ▏2 reading      ! 1  + 2   2 spaces · 14:22   ✕ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

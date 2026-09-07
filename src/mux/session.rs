@@ -63,8 +63,13 @@ pub struct Workspace {
     /// exists at all: finished work nobody has noticed is what is worth
     /// showing.
     pub seen: bool,
-    /// When dirk last interrupted you about this workspace.
-    pub notified: Option<Instant>,
+    /// What dirk last interrupted you about here, and when.
+    ///
+    /// The state is half of it. One timestamp for the workspace meant that
+    /// being told it was blocked suppressed being told it had finished, and
+    /// `done` is a state that pushes no further change — so the second
+    /// notification was not delayed, it was lost.
+    pub notified: Option<(crate::agent::State, Instant)>,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -831,6 +836,85 @@ impl Session {
         changes
     }
 
+    /// Give every agent a name, and take it back when the agent goes.
+    ///
+    /// Suggested from the intent of the workspace it is in, which is the same
+    /// thing its label comes from, so `dirk agent send-keys mux-core` names
+    /// something you would recognise. Unique among live agents, because that is
+    /// what a name is for.
+    pub fn name_agents(&mut self) {
+        let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Existing names are kept, so a name does not move under an agent that
+        // is still running.
+        for ws in self.every_workspace() {
+            for pane in &ws.panes {
+                if pane.occupant.agent().is_some()
+                    && let Some(n) = &pane.agent_name
+                {
+                    taken.insert(n.clone());
+                }
+            }
+        }
+
+        let mut assign: Vec<(PaneId, Option<String>)> = Vec::new();
+        for ws in self.every_workspace() {
+            for pane in &ws.panes {
+                match (pane.occupant.agent(), &pane.agent_name) {
+                    // Already named, and still an agent.
+                    (Some(_), Some(_)) => {}
+                    (Some(kind), None) => {
+                        let from = crate::name::slugify(&ws.label, crate::name::AGENT_NAME_MAX);
+                        let from = if from.is_empty() {
+                            kind.name.to_string()
+                        } else {
+                            from
+                        };
+                        let name = crate::name::unique(&from, &taken);
+                        if !name.is_empty() {
+                            taken.insert(name.clone());
+                            assign.push((pane.id, Some(name)));
+                        }
+                    }
+                    // Not an agent any more; the name is cleared rather than
+                    // left on a shell for the next agent to collide with.
+                    (None, Some(_)) => assign.push((pane.id, None)),
+                    (None, None) => {}
+                }
+            }
+        }
+
+        for (id, name) in assign {
+            if let Some(pane) = self.pane_anywhere_mut(id) {
+                pane.agent_name = name;
+            }
+        }
+    }
+
+    fn every_workspace(&self) -> impl Iterator<Item = &Workspace> {
+        self.layouts
+            .iter()
+            .filter_map(|l| l.ws.as_ref())
+            .chain(self.projects.iter().flat_map(|p| p.workspaces.iter()))
+    }
+
+    fn pane_anywhere_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        for layout in &mut self.layouts {
+            if let Some(ws) = layout.ws.as_mut()
+                && let Some(p) = ws.panes.iter_mut().find(|p| p.id == id)
+            {
+                return Some(p);
+            }
+        }
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                if let Some(p) = ws.panes.iter_mut().find(|p| p.id == id) {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
     /// The workspace in a given state that has been in it longest.
     ///
     /// Where the counts in the rail jump to: the thing that has been waiting
@@ -870,15 +954,27 @@ impl Session {
     ///
     /// An agent that blocks, unblocks and blocks again inside a minute is one
     /// interruption.
-    pub fn may_notify(&mut self, at: Focus, now: Instant, floor: Duration) -> bool {
+    pub fn may_notify(
+        &mut self,
+        at: Focus,
+        state: crate::agent::State,
+        now: Instant,
+        floor: Duration,
+    ) -> bool {
         let Focus::Ws { p, w } = at else { return false };
         let Some(ws) = self.workspace_mut(p, w) else {
             return false;
         };
-        if ws.notified.is_some_and(|t| now.duration_since(t) < floor) {
+        // The floor is against repeating yourself. Something different to say
+        // is not repeating yourself -- and `done` pushes no further change, so
+        // a suppressed one is not delayed, it is lost.
+        if ws
+            .notified
+            .is_some_and(|(s, t)| s == state && now.duration_since(t) < floor)
+        {
             return false;
         }
-        ws.notified = Some(now);
+        ws.notified = Some((state, now));
         true
     }
 }

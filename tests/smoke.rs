@@ -885,3 +885,43 @@ fn the_rail_counts_what_is_owed_and_nothing_else() {
         h.drawn()
     );
 }
+
+#[test]
+fn an_agent_is_given_a_name_you_could_type() {
+    let claude = fake_agent("claude");
+    let mut h = Harness::start_with_config(&format!(
+        "shell = {:?}\n[notify]\nenabled = false\n",
+        claude.display().to_string()
+    ));
+    assert!(h.wait_for(READY, START), "never started");
+
+    // Name the workspace first: an agent's name comes from the intent of the
+    // workspace it is in, so `dirk agent send-keys reviewing-the-parser` names
+    // something you would recognise.
+    h.send(b"printf '\\033]2;Reviewing the parser\\007'\r");
+    assert!(
+        h.wait_for("Reviewing the parser", Duration::from_secs(15)),
+        "the workspace was never named\n{}",
+        h.drawn()
+    );
+
+    // Two panes, so the workspace has a subtree worth opening.
+    h.prefix(b"|");
+    let row = h
+        .rows()
+        .iter()
+        .position(|r| r.contains("Reviewing the parser"))
+        .expect("the workspace row");
+    h.click(4, row as u16);
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            h.rows().iter().any(|r| r.contains("reviewing-the-parser"))
+        }),
+        "no agent name in the expanded workspace\n{}",
+        h.drawn()
+    );
+    // Uniqueness is a property of the names, not of what the nav happens to
+    // show: a pane that has published a title displays that instead, which is
+    // more useful in that row. `name::unique` is tested directly.
+}
