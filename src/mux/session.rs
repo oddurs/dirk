@@ -144,6 +144,9 @@ pub struct Session {
     pub layouts: Vec<Layout>,
     pub projects: Vec<Project>,
     pub focus: Focus,
+    /// Where focus was before a layout was opened, so closing one returns you
+    /// exactly there rather than to whatever happens to be first.
+    previous: Option<Focus>,
     pub shell: String,
     scrollback: usize,
     next_id: u64,
@@ -161,6 +164,7 @@ impl Session {
                 .collect(),
             projects: Vec::new(),
             focus: Focus::Ws { p: 0, w: 0 },
+            previous: None,
             shell: cfg.shell(),
             scrollback: cfg.scrollback,
             next_id: 1,
@@ -323,7 +327,14 @@ impl Session {
             self.next_id += leaves.len() as u64;
 
             let rects = tree.rects(area);
-            let cwd = crate::config::home();
+            // A panel is about the project you are in. Falling back to the home
+            // directory made `cairn board` report that there is no project
+            // here, which is true of a home directory and useless as a panel.
+            let here = self
+                .focused_workspace()
+                .and_then(|ws| ws.active_pane())
+                .map(|p| p.cwd.clone())
+                .unwrap_or_else(crate::config::home);
             let mut panes: Vec<Pane> = Vec::new();
 
             for (id, pane_def) in leaves {
@@ -333,6 +344,11 @@ impl Session {
                     .map(|(_, r)| *r)
                     .unwrap_or(area);
                 let label = (!pane_def.title.is_empty()).then(|| pane_def.title.clone());
+                let cwd = if pane_def.cwd.is_empty() {
+                    here.clone()
+                } else {
+                    crate::config::expand(&pane_def.cwd)
+                };
                 // The label takes the pane's top row, so the program gets what
                 // is left rather than what the tree allotted.
                 let inner = content_of(label.is_some(), r);
@@ -372,6 +388,9 @@ impl Session {
                 naming: NameState::default(),
             });
         }
+        if !matches!(self.focus, Focus::Layout(_)) {
+            self.previous = Some(self.focus);
+        }
         self.focus = Focus::Layout(i);
     }
 
@@ -385,16 +404,34 @@ impl Session {
                 continue;
             };
             if let Some(k) = ws.panes.iter().position(|p| p.id == id) {
+                // A layout is the arrangement a human named and asked for, so
+                // it survives its contents exiting. The output is usually the
+                // point -- a board that prints and exits is a reasonable panel,
+                // and reaping it made that the panel dirk could least show.
+                //
+                // A pane the human closed is a different thing wearing the same
+                // event, which is what `closing` distinguishes.
+                if !ws.panes[k].closing {
+                    ws.panes[k].finish();
+                    return;
+                }
                 ws.panes.remove(k);
                 let empty = ws.tree.remove(id);
                 ws.refocus();
-                // A layout whose last pane exits goes back to unbuilt rather
-                // than being removed: quitting lazygit should return you to the
-                // tree and leave the entry there to be opened again.
+                // A layout whose last pane is closed goes back to unbuilt
+                // rather than being removed: quitting lazygit should return you
+                // to the tree and leave the entry there to be opened again.
                 if empty || ws.panes.is_empty() {
                     self.layouts[i].ws = None;
                     if self.focus == Focus::Layout(i) {
-                        self.focus = self.first_workspace().unwrap_or(Focus::Layout(i));
+                        // Back exactly where you were, if that is still there.
+                        let back = self.previous.filter(
+                            |f| matches!(f, Focus::Ws { p, w } if self.workspace(*p, *w).is_some()),
+                        );
+                        self.focus = back
+                            .or_else(|| self.first_workspace())
+                            .unwrap_or(Focus::Layout(i));
+                        self.previous = None;
                     }
                 }
                 return;
@@ -452,7 +489,57 @@ impl Session {
     /// exiting on its own take exactly the same path.
     pub fn close_focused(&mut self) {
         if let Some(pane) = self.active_pane_mut() {
-            pane.kill();
+            pane.close();
+        }
+    }
+
+    /// Start the focused pane's program again, in place.
+    ///
+    /// Only for a pane that has stopped. The tree keeps its shape, so the panel
+    /// comes back where it was rather than the layout rearranging around it.
+    pub fn restart_focused(&mut self, area: Rect) -> bool {
+        let Some(ws) = self.focused_workspace() else {
+            return false;
+        };
+        let id = ws.focus;
+        let Some(old) = ws.pane(id) else { return false };
+        if !old.dead {
+            return false;
+        }
+        let (argv, cwd, label) = (old.argv.clone(), old.cwd.clone(), old.label.clone());
+        let rect = ws
+            .rects(area)
+            .into_iter()
+            .find(|(x, _)| *x == id)
+            .map(|(_, r)| content_of(label.is_some(), r))
+            .unwrap_or(area);
+
+        let new_id = self.id();
+        match Pane::spawn(
+            new_id,
+            &argv,
+            &cwd,
+            rect.height,
+            rect.width,
+            self.scrollback,
+            self.tx.clone(),
+        ) {
+            Ok(mut pane) => {
+                pane.label = label;
+                let Some(ws) = self.focused_workspace_mut() else {
+                    return false;
+                };
+                // Replace in place: same slot in the tree, same rectangle.
+                ws.tree.replace(id, new_id);
+                ws.panes.retain(|p| p.id != id);
+                ws.panes.push(pane);
+                ws.focus = new_id;
+                true
+            }
+            Err(e) => {
+                eprintln!("dirk: restart {}: {e}", argv.join(" "));
+                false
+            }
         }
     }
 

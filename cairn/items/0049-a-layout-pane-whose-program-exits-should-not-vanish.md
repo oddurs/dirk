@@ -2,8 +2,9 @@
 id: 49
 title: A layout pane whose program exits should not vanish
 type: bug
-status: backlog
+status: done
 milestone: v0.2
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1
@@ -33,8 +34,8 @@ a perfectly reasonable panel, and it is the panel dirk is least able to show.
 3. The pane is gone within a second, and the others have grown.
 
 ## Acceptance criteria
-- [ ] A layout pane keeps its rectangle when its program exits
-- [ ] Its last output stays on screen, dimmed, with the exit status in the rule
-- [ ] A key restarts it in place
-- [ ] Closing a pane by hand still closes it — this is about exiting, not closing
-- [ ] A layout is only torn down when every pane has gone
+- [x] A layout pane keeps its rectangle when its program exits
+- [x] Its last output stays on screen, dimmed, with the exit status in the rule
+- [x] A key restarts it in place
+- [x] Closing a pane by hand still closes it — this is about exiting, not closing
+- [x] A layout is only torn down when every pane has gone

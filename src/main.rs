@@ -614,6 +614,9 @@ impl App {
         let Some(pane) = self.session.active_pane_mut() else {
             return;
         };
+        if pane.dead {
+            return;
+        }
         let app_cursor = pane
             .term
             .lock()
@@ -643,6 +646,11 @@ impl App {
             }
             KeyCode::Char('o') => self.open_picker(),
             KeyCode::Char('x') => self.session.close_focused(),
+            KeyCode::Char('r') => {
+                if !self.session.restart_focused(self.content) {
+                    self.note("nothing to restart");
+                }
+            }
             KeyCode::Char('|') | KeyCode::Char('v') => self.session.split(Dir::Cols, rows, cols),
             KeyCode::Char('-') | KeyCode::Char('s') => self.session.split(Dir::Rows, rows, cols),
             KeyCode::Char('d') => self.sidebar = !self.sidebar,
@@ -850,10 +858,12 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
         // is how a five-pane dashboard says which panel is which.
         let inner = mux::session::content_of(pane.label.is_some(), r);
         if let Some(label) = &pane.label {
-            rule(buf, Rect { height: 1, ..r }, label);
+            rule(buf, Rect { height: 1, ..r }, label, pane.exit.as_deref());
         }
         if let Ok(t) = pane.term.lock() {
-            ui::pane::blit(t.screen(), inner, buf, id != ws.focus);
+            // A stopped pane keeps its last output, dimmed. The output is
+            // usually why the panel was there.
+            ui::pane::blit(t.screen(), inner, buf, id != ws.focus || pane.dead);
         }
         hits.push(r, Target::Pane { index: i });
     }
@@ -861,22 +871,30 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
 
 /// `─ brief ─────────────`. A rule rather than a border: three sides of a box
 /// only repeat what the neighbouring pane's own edge already says.
-fn rule(buf: &mut Buffer, area: Rect, label: &str) {
+fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>) {
     ui::fill(buf, area, THEME.panel());
     let mut x = area.x;
     x += ui::write_str(buf, x, area.y, "─ ", THEME.rule_strong(), area.width);
     let left = area.width.saturating_sub(x - area.x).saturating_sub(2) as usize;
-    x += ui::write_str(
-        buf,
-        x,
-        area.y,
-        &ui::elide(label, left),
-        THEME.title(),
-        area.width,
-    );
+    let style = if exit.is_some() {
+        THEME.dim()
+    } else {
+        THEME.title()
+    };
+    x += ui::write_str(buf, x, area.y, &ui::elide(label, left), style, area.width);
     x += ui::write_str(buf, x, area.y, " ", THEME.rule_strong(), area.width);
-    for c in x..area.right() {
+
+    // A panel that stopped says so on its own rule, where the name already is,
+    // rather than going quiet and looking like it is merely idle.
+    let tail = exit.map(|e| format!(" {e} · r restarts "));
+    let tail_w = tail.as_ref().map_or(0, |t| t.chars().count() as u16);
+    for c in x..area.right().saturating_sub(tail_w) {
         ui::write_str(buf, c, area.y, "─", THEME.rule_strong(), 1);
+    }
+    if let Some(t) = tail
+        && area.width > tail_w
+    {
+        ui::write_str(buf, area.right() - tail_w, area.y, &t, THEME.warn(), tail_w);
     }
 }
 

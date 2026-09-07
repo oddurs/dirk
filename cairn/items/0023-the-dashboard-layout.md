@@ -2,7 +2,7 @@
 id: 23
 title: The dashboard layout
 type: feature
-status: backlog
+status: done
 milestone: v0.2
 depends_on:
 - 22
@@ -25,7 +25,7 @@ that already has ptop and cairn gets the dashboard without configuring anything.
 Depends on the panel spike (see the spike on where the panels come from).
 
 ## Acceptance criteria
-- [ ] Five panes: brief across the top, ptop and spaces beside each other,
+- [x] Five panes: brief across the top, ptop and spaces beside each other,
       attention and cairn below
-- [ ] Present by default when its programs are on PATH, absent when they are not
-- [ ] Documented in the manual as the worked example of a layout
+- [x] Present by default when its programs are on PATH, absent when they are not
+- [x] Documented in the manual as the worked example of a layout
