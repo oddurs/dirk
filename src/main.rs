@@ -196,6 +196,25 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Before anything is answered, because the answers below are about this
+    // machine. `dirk --remote box pane list` was reaching the local session and
+    // saying so as though it had been asked about the remote one.
+    if remote.is_some()
+        && let Some(noun) = words(&args).first().filter(|w| NOUNS.contains(w))
+    {
+        eprintln!("dirk: --remote attaches; it does not carry a command");
+        eprintln!(
+            "Try: ssh TARGET dirk {}",
+            words(&args)
+                .iter()
+                .skip_while(|w| *w != noun)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        std::process::exit(1);
+    }
+
     if !server::valid_name(&session) {
         eprintln!("dirk: {session:?} is not a session name");
         std::process::exit(1);

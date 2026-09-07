@@ -294,14 +294,22 @@ $ dirk --remote build-box --session api
 ```
 
 ssh is the whole authentication story; dirk has no transport of its own and no
-business inventing one. `DIRK_SSH` names the program that gets you there when
-it is not `ssh`, and `DIRK_REMOTE` the far-side dirk when it is not on `PATH`.
+business inventing one. The first attempt gets the terminal, so a host key to
+confirm or a passphrase to type is asked for where you can see it and answer
+it. `DIRK_SSH` names the program that gets you there when a wrapper does, and
+`DIRK_REMOTE` the far-side dirk when it is not on `PATH`. `--remote` attaches
+and does not carry a command: `ssh host dirk pane list` already works and means
+what it says.
 
 A dropped link is not a lost session. The client keeps the terminal, says so at
-the top of the screen, and spends two minutes trying to make another — a closed
-lid is measured in minutes, and the session was never in the link. Keys pressed
-while there is nowhere to send them are dropped rather than replayed: they
-belonged to the screen that was there when you pressed them.
+the top of the screen, and spends two minutes trying to make another, waiting
+longer between each — a closed lid is measured in minutes, and the session was
+never in the link. A link that comes back and dies again without ever painting
+does not reset that patience, which is what stops a host that has gone for good
+from being dialled once a second for ever. Ctrl-C leaves while it waits.
+
+Keys pressed while there is nowhere to send them are dropped rather than
+replayed: they belonged to the screen that was there when you pressed them.
 
 Local keybindings win, which is what you want when the ssh is running inside a
 pane: the outer dirk sees `Ctrl-Space` first, and pressing it twice sends a
