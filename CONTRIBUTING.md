@@ -1,5 +1,11 @@
 # Contributing to dirk
 
+Everyone is welcome here, on the terms in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+This is the social half: what a good change looks like, and what the code is
+trying to be. [HACKING](HACKING) is the mechanical half — the loop from a fresh
+clone to a merged pull request, and how a release is cut.
+
 dirk tracks its own roadmap with [cairn](https://github.com/oddurs/cairn), so
 the backlog is the contribution guide.
 
@@ -15,13 +21,18 @@ does not tell you enough to start, that is a bug in the item; say so.
 
 ## Before you start
 
-Claim the item, so nobody duplicates your work:
-
 ```sh
-cairn claim 7
+make setup            # once per checkout: the git alias and the hooks
+git work start 7      # claims the item, branches, opens a worktree
 ```
 
-`cairn release 7` hands it back if you change your mind.
+`git work start` claims the item so nobody duplicates your work, branches from
+`origin/main`, and gives the branch a worktree of its own — so two people, or
+two agents, can work at once without sharing a build directory. It prints the
+path; everything after that happens there.
+
+`cairn release 7` hands the item back if you change your mind, and
+`git work list` says what you have in flight.
 
 ## While you work
 
@@ -35,11 +46,16 @@ cairn edit 7
 ## Before you send it
 
 ```sh
-make check
+git work ship
 ```
 
-That runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and
-the full test suite. All of it must pass.
+That runs `make check` — formatting, clippy with warnings denied, and the full
+test suite, all of which must pass — then pushes, opens the pull request, and
+turns auto-merge on so it lands itself when CI goes green. `git work land`
+closes the item and removes the worktree afterwards.
+
+Doing it by hand is fine too; `make check` is the only part that is not
+optional.
 
 ## Testing a program that draws a terminal
 
@@ -82,6 +98,13 @@ it paints.
 say why, not what — the code already says what. A comment that records a
 decision, a trap, or a thing that was tried and rejected is worth keeping; one
 that narrates the next line is not.
+
+## Attribution
+
+The history says who decided something, not which program typed it. Commits
+carry no `Co-authored-by` trailer naming a tool and no generated-with footer;
+`.githooks/commit-msg` strips them, and CI fails a branch that has one. Human
+co-authors are welcome and are left alone.
 
 ## Licence
 
