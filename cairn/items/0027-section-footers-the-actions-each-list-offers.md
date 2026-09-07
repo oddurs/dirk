@@ -2,8 +2,9 @@
 id: 27
 title: 'Section footers: the actions each list offers'
 type: feature
-status: backlog
+status: done
 milestone: v0.2
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1
@@ -26,7 +27,7 @@ Clickable, and a statement of what the section can do. Costs one row per
 section, which is what it is worth.
 
 ## Acceptance criteria
-- [ ] Per-section actions, clickable and keyed
-- [ ] The footer disappears with its section when collapsed
-- [ ] Actions that cannot apply right now are dim rather than absent, so the
+- [x] Per-section actions, clickable and keyed
+- [x] The footer disappears with its section when collapsed
+- [x] Actions that cannot apply right now are dim rather than absent, so the
       row does not change width as state changes

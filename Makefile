@@ -29,7 +29,12 @@ test:
 
 # Print what dirk currently paints, as plain text. The fastest way to see
 # whether a change to the chrome did what you meant.
+#
+# The build is not optional: the example spawns the built binary rather than
+# linking it, and `cargo run --example` will not rebuild that for you. Without
+# this line the shot happily shows you the last version of the chrome.
 shot:
+	$(CARGO) build
 	$(CARGO) run --example shot
 
 # Regenerate the roadmap from the backlog.
