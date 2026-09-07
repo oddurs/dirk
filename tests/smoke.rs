@@ -798,3 +798,36 @@ fn an_agent_sitting_on_an_approval_prompt_reads_as_blocked() {
         h.drawn()
     );
 }
+
+#[test]
+fn work_that_finishes_while_you_are_elsewhere_reads_as_done() {
+    // The seen rule, end to end. `done` and `idle` are the same underlying
+    // state and only whether you were looking separates them, so the only way
+    // to test it for real is to look somewhere else while work happens.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("agents"))),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+
+    // Work that will land after focus has moved away.
+    h.send(b"(sleep 3; printf 'zz%s' LATE) &\r");
+    h.prefix(b"n");
+
+    // The new workspace is focused, so the first one is working unwatched, and
+    // what it produces is unseen when it stops.
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| {
+            h.rows().iter().any(|r| r.trim_start().starts_with("+ "))
+        }),
+        "work that finished out of sight was not reported as done\n{}",
+        h.drawn()
+    );
+}
