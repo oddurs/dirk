@@ -534,3 +534,50 @@ fn escape_leaves_the_nav_without_going_anywhere() {
         h.drawn()
     );
 }
+
+#[test]
+fn a_layout_pane_holds_its_place_when_its_program_exits() {
+    // The bug: a panel that printed and exited was reaped like any other pane,
+    // so a dashboard of `cairn board` panels emptied itself within a second and
+    // left no sign the panels had been there.
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Test"
+key = "9"
+split = "rows"
+
+[[layout.pane]]
+title = "report"
+command = ["/bin/sh", "-c", "printf 'zz%s' KEPT; exit 3"]
+
+[[layout.pane]]
+title = "alive"
+command = ["/bin/sh"]
+"#,
+    );
+    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    h.prefix(b"9");
+
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("exited 3").is_some()),
+        "the pane did not report how it ended\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("zzKEPT").is_some(),
+        "its output was thrown away\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("report").is_some(),
+        "its label went with it\n{}",
+        h.drawn()
+    );
+    // The other pane is untouched, and the layout still has its shape.
+    assert!(
+        h.find("alive").is_some(),
+        "the layout was rearranged around it\n{}",
+        h.drawn()
+    );
+}

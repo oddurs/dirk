@@ -88,6 +88,7 @@ literal one through.
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
 | `1` `2` `3` | jump to a page |
 | `d` | hide the nav |
+| `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `q` | quit |
 
@@ -116,7 +117,8 @@ command = ["ptop"]
 key     = "1"
 
 # Panes nest. `size` is lines or columns ("5"), a share ("30%"), or absent to
-# take an even part of what is left.
+# take an even part of what is left. A pane runs in the directory of whatever
+# was focused when the layout opened, unless it names a `cwd` of its own.
 [[layout]]
 name  = "Overview"
 key   = "4"
@@ -234,9 +236,7 @@ v0.1 is a single process. Close the terminal and the work goes with it, so
 [herdr](https://herdr.dev) stays installed for anything long-running — that is
 item `0007`, and the whole of v0.4.
 
-Two other gaps worth naming rather than burying. The state glyph beside a
-workspace is inferred from whether its pane has ever published a title, so
-everything that has looks like it is working and `blocked` is never shown
-(`0030`, `0031`). And a layout pane whose program exits still vanishes instead
-of holding its output, which makes a print-and-exit panel like `cairn board`
-the panel dirk is least able to show (`0049`).
+The gap worth naming rather than burying: the state glyph beside a workspace is
+inferred from whether its pane has ever published a title, so everything that
+has looks like it is working and `blocked` — the one state waiting on you — is
+never shown. That is `0030` and `0031`, and the whole of v0.3.

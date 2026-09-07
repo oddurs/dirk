@@ -23,7 +23,7 @@ closing the terminal ends the session. Shipped.
 
 ## v0.2 — The nav
 
-`#######···` 69% · 11 of 16 done · due 2026-10-15
+`##########` 94% · 15 of 16 done · due 2026-10-15
 
 The sidebar becomes the product. Three sections — layouts, spaces, agents — with
 two-line rows carrying project, worktree, branch and intent. Static layouts, and
@@ -31,25 +31,25 @@ the split tree they need underneath. This is the milestone dirk is for.
 
 ### backlog
 
-- [ ] `0015` Pages: per-page working directory and overlay placement <sup>feature · p1 · layout</sup>
-- [ ] `0023` The dashboard layout <sup>feature · p1 · layout</sup>
-- [ ] `0024` Where do the dashboard panels come from? <sup>spike · p0 · layout</sup>
-- [ ] `0049` A layout pane whose program exits should not vanish <sup>bug · p1 · layout</sup>
 - [ ] `0050` Sections should shrink proportionally, not scroll as one list <sup>feature · p2 · nav</sup>
 
 ### done
 
 - [x] `0010` Git branch and worktree awareness <sup>feature · p1 · git</sup>
 - [x] `0011` Nested splits <sup>feature · p0 · layout</sup>
+- [x] `0015` Pages: per-page working directory and overlay placement <sup>feature · p1 · layout</sup>
 - [x] `0019` Sidebar: three sections — layouts, spaces, agents <sup>feature · p0 · nav</sup>
 - [x] `0020` Two-line rows: identity above, intent below <sup>feature · p0 · nav</sup>
 - [x] `0021` The agents section, ordered by attention <sup>feature · p0 · nav</sup>
 - [x] `0022` Static layouts, declared in configuration <sup>feature · p0 · layout</sup>
+- [x] `0023` The dashboard layout <sup>feature · p1 · layout</sup>
+- [x] `0024` Where do the dashboard panels come from? <sup>spike · p0 · layout</sup>
 - [x] `0025` Expand a space to its tabs and panes <sup>feature · p1 · nav</sup>
 - [x] `0026` Sidebar scrolling and keyboard selection <sup>feature · p0 · nav</sup>
 - [x] `0027` Section footers: the actions each list offers <sup>feature · p1 · nav</sup>
 - [x] `0028` Age, right-aligned <sup>feature · p2 · nav</sup>
 - [x] `0029` Drag the sidebar divider <sup>feature · p2 · nav</sup>
+- [x] `0049` A layout pane whose program exits should not vanish <sup>bug · p1 · layout</sup>
 
 ## v0.3 — It knows what the agents are doing
 

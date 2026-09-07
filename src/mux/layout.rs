@@ -63,6 +63,7 @@ fn root(def: &LayoutDef) -> PaneDef {
         split: def.split.clone(),
         pane: def.pane.clone(),
         size: String::new(),
+        cwd: String::new(),
     }
 }
 

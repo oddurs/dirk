@@ -57,11 +57,19 @@ pub struct Pane {
     pub id: PaneId,
     pub term: Arc<Mutex<Term>>,
     pub cwd: PathBuf,
+    /// Kept so a stopped pane can be started again in place.
+    pub argv: Vec<String>,
     /// Drawn as a rule above the pane. Set for panes that came from a layout,
     /// where knowing which panel is which is most of the point; a shell you
     /// opened yourself needs no caption.
     pub label: Option<String>,
     pub dead: bool,
+    /// How the program ended, once it has. Shown in the pane's rule, because a
+    /// panel that stopped should say so rather than simply going quiet.
+    pub exit: Option<String>,
+    /// Set when a human closed this pane, as opposed to its program exiting on
+    /// its own. The two look identical from the pty and mean opposite things.
+    pub closing: bool,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -154,8 +162,11 @@ impl Pane {
             id,
             term,
             cwd: cwd.to_path_buf(),
+            argv: argv.to_vec(),
             label: None,
             dead: false,
+            exit: None,
+            closing: false,
             writer,
             master,
             child,
@@ -195,10 +206,26 @@ impl Pane {
             .and_then(|t| t.callbacks().title.clone())
     }
 
-    pub fn kill(&mut self) {
+    /// Close this pane for good. The child's exit arrives as an event like any
+    /// other; `closing` is what tells that event this was deliberate.
+    pub fn close(&mut self) {
+        self.closing = true;
         let _ = self.child.kill();
         let _ = self.child.wait();
         self.dead = true;
+    }
+
+    /// Note that the program has ended, and how.
+    ///
+    /// The child has already exited by the time this is called — the read end
+    /// returned EOF — so the wait returns immediately.
+    pub fn finish(&mut self) {
+        self.dead = true;
+        self.exit = Some(match self.child.wait() {
+            Ok(s) if s.success() => "exited".into(),
+            Ok(s) => format!("exited {}", s.exit_code()),
+            Err(_) => "exited".into(),
+        });
     }
 }
 

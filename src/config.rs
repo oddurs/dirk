@@ -37,6 +37,11 @@ pub struct PaneDef {
     pub size: String,
     /// How this pane's children divide it: `"cols"` or `"rows"`.
     pub split: String,
+    /// Where to run. Empty means the directory of whatever was focused when the
+    /// layout was opened, which is almost always what a panel wants: a board or
+    /// a repository browser is about the project you are in, not about your
+    /// home directory. `~` is expanded.
+    pub cwd: String,
     pub pane: Vec<PaneDef>,
 }
 
@@ -182,11 +187,49 @@ fn default_layouts() -> Vec<LayoutDef> {
         command: command.iter().map(|s| (*s).to_string()).collect(),
         ..LayoutDef::default()
     };
+    let pane = |title: &str, command: &[&str], size: &str| PaneDef {
+        title: title.into(),
+        command: command.iter().map(|s| (*s).to_string()).collect(),
+        size: size.into(),
+        ..PaneDef::default()
+    };
+
     vec![
-        one("ptop", '1', &["ptop"]),
-        one("lazygit", '2', &["lazygit"]),
-        one("cairn", '3', &["cairn", "board"]),
+        // A dashboard, when the machine has the programs for one. It is
+        // dropped like any other layout if they are not installed, so a fresh
+        // install gets it without configuring anything and never gets a broken
+        // version of it.
+        LayoutDef {
+            name: "Overview".into(),
+            key: Some('1'),
+            split: "rows".into(),
+            pane: vec![
+                pane("roadmap", &["cairn", "roadmap"], "10"),
+                PaneDef {
+                    split: "cols".into(),
+                    pane: vec![
+                        pane("ptop", &["ptop"], ""),
+                        pane("board", &["cairn", "board"], "40%"),
+                    ],
+                    ..PaneDef::default()
+                },
+            ],
+            ..LayoutDef::default()
+        },
+        one("ptop", '2', &["ptop"]),
+        one("lazygit", '3', &["lazygit"]),
+        one("cairn", '4', &["cairn", "board"]),
     ]
+}
+
+/// Expand a leading `~`, which is the only shell expansion a path in a config
+/// file can reasonably expect.
+pub fn expand(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None if path == "~" => home(),
+        None => PathBuf::from(path),
+    }
 }
 
 pub fn home() -> PathBuf {

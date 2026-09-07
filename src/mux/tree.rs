@@ -144,6 +144,21 @@ impl Node {
         }
     }
 
+    /// Swap one pane for another in the same slot, keeping the shape.
+    ///
+    /// A restarted panel comes back where it was rather than the layout
+    /// rearranging around it.
+    pub fn replace(&mut self, old: PaneId, new: PaneId) -> bool {
+        match self {
+            Node::Leaf(x) if *x == old => {
+                *x = new;
+                true
+            }
+            Node::Leaf(_) => false,
+            Node::Split { children, .. } => children.iter_mut().any(|(_, n)| n.replace(old, new)),
+        }
+    }
+
     /// Take `id` out of the tree.
     ///
     /// Returns true when this node is now empty and its parent should drop it —
