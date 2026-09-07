@@ -125,7 +125,6 @@ mod tests {
         LayoutDef {
             name: "Overview".into(),
             key: Some('1'),
-            command: Vec::new(),
             split: "rows".into(),
             pane: vec![
                 PaneDef {
@@ -151,6 +150,7 @@ mod tests {
                     ..PaneDef::default()
                 },
             ],
+            ..LayoutDef::default()
         }
     }
 

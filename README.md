@@ -36,27 +36,31 @@ the opposite end: the sidebar is the product, and the panes hang off it.
 
 ## Three ideas, and keeping them apart is the whole design
 
-**The nav is three lists, and the order is the argument.** Layouts are places
-you go, spaces are where work lives, agents are what is asking for you.
-Attention flows down the column. The same workspace appears under spaces and
-under agents — that is not duplication: spaces answers "what is open, and
-where", agents answers "what needs me", and they sort differently for exactly
-that reason.
+**The nav is a column ordered by what is likely to need you.** Boards are what
+you glance at, spaces are where the work lives, and between them sits what is
+interrupting. Attention flows down the column.
+
+The middle zone is the same workspaces as spaces, not a second list of its own
+things — spaces answers "what is open, and where" and it answers "what needs
+me". And it is only there when something does: it holds blocked and finished
+work, in the order you would deal with them, and occupies no rows at all when
+there is none.
 
 **The nav lists what is open.** Not what exists —
 `~/Code` has ninety directories in it and a list of ninety things is a file
 browser. A project appears once it has a workspace, and disappears when its last
 one closes. `o` opens something new.
 
-**Layouts are not workspaces — except that they are.** A layout is a named
+**Boards are not workspaces — except that they are.** A board is a named
 arrangement of programs: one system monitor, one dashboard. There is one of
-each, they sit above the rule, and they are built the first time you open one
-rather than all running in the background so that one of them can occasionally
-be glanced at.
+each, they sit at the top of the column, and they are built the first time you
+open one rather than all running in the background so that one of them can
+occasionally be glanced at. A board that can say something about itself does so
+on its own row, which is what makes it an instrument rather than a link.
 
-Structurally a layout *is* a workspace — panes, a split tree, a focused pane and
+Structurally a board *is* a workspace — panes, a split tree, a focused pane and
 a name is the whole of one — so there is no second code path for them. A
-single-program layout and a five-pane dashboard differ only in how many leaves
+single-program board and a five-pane dashboard differ only in how many leaves
 they have.
 
 **Names come from the work, not from you.** A coding agent already publishes a
@@ -114,9 +118,9 @@ Everything else goes straight through to the program in the pane.
 
 ## What the column says
 
-Three zones down the left, in the order you ask the questions: **layouts** are
-places you go, **needs you** is what is interrupting, and **spaces** is where
-the work lives.
+Three zones down the left, in the order you ask the questions: **boards** are
+what you glance at, **needs you** is what is interrupting, and **spaces** is
+where the work lives.
 
 The middle one is only there when something is in it. A heading with nothing
 under it is slower to read than no heading, and an empty middle is the fastest
@@ -140,6 +144,35 @@ A folded project carries the worst state inside it and a count, so twenty repos
 fit on a screen and the one that is blocked still says so. `rows = "short"`
 drops the branch line, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
+
+### Boards
+
+A board is a named arrangement you jump to — a dashboard, lazygit, a log tail.
+What makes it an instrument rather than a link is that it can report without
+being opened:
+
+```toml
+[[board]]
+name    = "git"
+key     = "g"
+command = ["lazygit"]
+keep    = false              # not left running when you look away
+status  = { run = ["dirk-git-badge"], every = "10s" }
+```
+
+The first line of what `run` prints becomes a badge on the row, at most eight
+columns. dirk does not parse it — the moment it starts understanding git's
+output it owns that format for ever, so if you want `3↑ 2•` you write the script
+that prints `3↑ 2•`.
+
+No `status` means no subprocess, which is what keeps the default configuration
+exactly as cheap as it was. The interval is floored at two seconds, a command
+that fails shows `—` and backs off rather than retrying, and none of it runs on
+the drawing thread. `keep = false` shuts the board's panes when you look away,
+for something you opened for ten seconds that should not sit there holding a
+lock.
+
+`[[layout]]` still parses — it is what these were called first.
 
 ### Knowing an agent is done
 
@@ -287,9 +320,9 @@ path  = "~/Code/dirk"
 agent = "claude"             # twelve repositories do not want one answer
 sound = true
 
-# A layout whose programs are not all on PATH is dropped at startup: an entry
+# A board whose programs are not all on PATH is dropped at startup: an entry
 # that could only ever show `command not found` is worse than no entry.
-[[layout]]
+[[board]]
 name    = "ptop"
 command = ["ptop"]
 key     = "1"
@@ -297,17 +330,17 @@ key     = "1"
 # Panes nest. `size` is lines or columns ("5"), a share ("30%"), or absent to
 # take an even part of what is left. A pane runs in the directory of whatever
 # was focused when the layout opened, unless it names a `cwd` of its own.
-[[layout]]
+[[board]]
 name  = "Overview"
 key   = "4"
 split = "rows"
 
-  [[layout.pane]]
+  [[board.pane]]
   title   = "brief"
   command = ["smali", "brief"]
   size    = "6"
 
-  [[layout.pane]]
+  [[board.pane]]
   split = "cols"
 
     [[layout.pane.pane]]

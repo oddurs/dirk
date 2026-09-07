@@ -99,6 +99,7 @@ marks! {
 
     // Disclosure, and the pane subtree under a workspace.
     Collapsed "collapsed"  ">"  "▸",
+    Rule      "rule"       "-"  "─",
     Expanded  "expanded"   "v"  "▾",
     TreeMid   "tree-mid"   "+"  "├",
     TreeLast  "tree-last"  "\\" "└",
@@ -111,9 +112,10 @@ marks! {
     BarPlain   "bar-plain"   ":" "▏",
     Close      "close"       "x" "✕",
 
-    // Where a name ran out of room, and what stands between two things on one
-    // line.
+    // Where a name ran out of room, what stands between two things on one
+    // line, and what a board says when it could not answer.
     Ellipsis  "ellipsis"   "~"  "…",
+    Absent    "absent"     "-"  "—",
     Sep       "separator"  "-"  "·",
     Enter     "enter"      "^M" "↵",
 

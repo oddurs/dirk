@@ -172,12 +172,17 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
                 let Some(pane) = ws.active_pane() else {
                     continue;
                 };
-                let Some(kind) = pane.occupant.agent() else {
+                // A harness dirk does not recognise but which reports its own
+                // state is still an agent -- being told is the best signal
+                // there is, and a list that ignored it would make rank one
+                // worth less than the guessing it replaced.
+                let kind = pane.occupant.agent();
+                if kind.is_none() && ws.reported.is_none() {
                     continue;
-                };
+                }
                 list.push(json!({
                     "name": pane.agent_name,
-                    "kind": kind.name.clone(),
+                    "kind": kind.map(|k| k.name.clone()),
                     "pane": pane_id(ws.id, pane.id),
                     "workspace": workspace_id(ws.id),
                     "state": ws.state.glyph_name(),

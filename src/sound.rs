@@ -69,8 +69,19 @@ pub fn play(cfg: &crate::config::Sound, which: Alert) {
         return;
     }
     let command = cfg.command(which);
-    std::thread::spawn(move || match command.split_first() {
-        Some((program, args)) => {
+    // Nothing to run: the terminal's own bell, written here rather than on a
+    // thread of its own. It goes to the same stdout the renderer is writing
+    // frames to, and two writers to one terminal is how a bell lands in the
+    // middle of an escape sequence.
+    if command.is_empty() {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(bell(which));
+        let _ = out.flush();
+        return;
+    }
+    std::thread::spawn(move || {
+        if let Some((program, args)) = command.split_first() {
             let _ = Command::new(program)
                 .args(args)
                 .stdin(Stdio::null())
@@ -78,20 +89,18 @@ pub fn play(cfg: &crate::config::Sound, which: Alert) {
                 .stderr(Stdio::null())
                 .status();
         }
-        // Nothing to run: the terminal's own bell, which needs no file and no
-        // player. Once for finished and twice for waiting, which is as much of
-        // a distinction as a bell can carry and enough to tell them apart
-        // without looking.
-        None => {
-            use std::io::Write;
-            let mut out = std::io::stdout();
-            let _ = out.write_all(match which {
-                Alert::Blocked => b"\x07\x07",
-                Alert::Done => b"\x07",
-            });
-            let _ = out.flush();
-        }
     });
+}
+
+/// The bell, when there is no player and no file.
+///
+/// Once for finished and twice for waiting: as much of a distinction as a bell
+/// can carry, and enough to tell them apart without looking.
+pub fn bell(which: Alert) -> &'static [u8] {
+    match which {
+        Alert::Blocked => b"\x07\x07",
+        Alert::Done => b"\x07",
+    }
 }
 
 #[cfg(test)]
@@ -104,10 +113,15 @@ mod tests {
         // With your back to the screen they are all you have. One that
         // interrupts and one that satisfies, and if they sound alike the
         // feature is a bell with extra steps.
+        //
+        // Where the distinction lives depends on the machine: two files on a
+        // mac, and the number of beeps everywhere else. Either is a difference;
+        // having neither is the bug.
         let cfg = Sound::default();
+        let audible = |a| (cfg.command(a), bell(a));
         assert_ne!(
-            cfg.command(Alert::Blocked),
-            cfg.command(Alert::Done),
+            audible(Alert::Blocked),
+            audible(Alert::Done),
             "blocked and done sound the same by default"
         );
     }

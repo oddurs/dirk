@@ -1180,3 +1180,55 @@ fn short_rows_drop_the_branch_and_keep_the_workspace() {
         h.drawn()
     );
 }
+
+// ── Boards that report ──────────────────────────────────────────────────
+
+#[test]
+fn a_board_says_what_it_has_to_say_without_being_opened() {
+    // The difference between a link and an instrument. A dashboard you have to
+    // open to find out whether it matters is a link with extra steps.
+    let mut h = Harness::start_with_config(
+        "[[board]]\n\
+         name    = \"git\"\n\
+         command = [\"sh\"]\n\
+         status  = { run = [\"printf\", \"3up 2dot\"], every = \"2s\" }\n",
+    );
+    assert!(h.wait_for("boards", START), "never started\n{}", h.drawn());
+    assert!(
+        h.wait_for("3up 2dot", Duration::from_secs(15)),
+        "the board never reported\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_status_command_that_cannot_run_says_so_rather_than_nothing() {
+    // A command that fails is a configuration problem. Showing a dash says the
+    // board was asked and could not answer, which is different from a board
+    // that was never asked at all.
+    let mut h = Harness::start_with_config(
+        "[[board]]\n\
+         name    = \"broken\"\n\
+         command = [\"sh\"]\n\
+         status  = { run = [\"definitely-not-a-program\"], every = \"2s\" }\n",
+    );
+    assert!(h.wait_for("boards", START), "never started");
+    assert!(
+        h.wait_for("—", Duration::from_secs(15)),
+        "a board that could not answer said nothing at all\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_old_word_for_a_board_still_parses() {
+    // `[[layout]]` is what these were called first. Somebody's configuration
+    // should not stop working because the interface learned a better word.
+    let mut h =
+        Harness::start_with_config("[[layout]]\nname = \"still-here\"\ncommand = [\"sh\"]\n");
+    assert!(
+        h.wait_for("still-here", START),
+        "an existing config stopped working\n{}",
+        h.drawn()
+    );
+}

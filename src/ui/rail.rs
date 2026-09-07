@@ -50,6 +50,7 @@ pub fn render(
     buf: &mut Buffer,
     area: Rect,
     cfg: &Config,
+    g: &crate::glyph::Glyphs,
     session: &Session,
     now: &Now,
     hits: &mut HitMap,
@@ -59,9 +60,12 @@ pub fn render(
         note: status,
         quit_armed: armed,
     } = *now;
-    let g = cfg.nav.glyphs();
     fill(buf, area, THEME.rail());
-    if area.width < 20 {
+    // Enough for the brand and both ways out. Below that they would be written
+    // over each other -- the counts and the clock saturate to column zero and
+    // land on the brand -- and a bar that overlaps itself says less than a bar
+    // that says nothing.
+    if area.width < 34 {
         return;
     }
 
@@ -156,15 +160,21 @@ pub fn render(
         parts.join(&format!("  {}  ", g.text(G::Sep)))
     };
     let right_w = cells(&right);
+    // Only if it fits after the brand. Saturating put it at column zero, on top
+    // of the brand, which is worse than leaving it out.
     let mut right_x = detach_x.saturating_sub(right_w + 1);
-    write_str(
-        buf,
-        right_x,
-        area.y,
-        &right,
-        THEME.dim().patch(THEME.rail()),
-        right_w,
-    );
+    if right_x > x + 1 {
+        write_str(
+            buf,
+            right_x,
+            area.y,
+            &right,
+            THEME.dim().patch(THEME.rail()),
+            right_w,
+        );
+    } else {
+        right_x = detach_x;
+    }
 
     // ── What is owed ────────────────────────────────────────────────────
     // Only when it is not zero. An empty middle is the fastest possible way to

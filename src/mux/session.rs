@@ -621,6 +621,25 @@ impl Session {
         }
     }
 
+    /// Shut a board's panes down, so a board that does not keep them does not.
+    ///
+    /// Everything a board is made of is a running program, and one you opened
+    /// for ten seconds should not sit there afterwards holding a lock. Only for
+    /// boards that asked: the default is still that an open board keeps what is
+    /// running in it.
+    pub fn close_layout(&mut self, i: usize) {
+        let Some(layout) = self.layouts.get_mut(i) else {
+            return;
+        };
+        let Some(ws) = layout.ws.take() else {
+            return;
+        };
+        for mut pane in ws.panes {
+            pane.close();
+        }
+        self.refocus();
+    }
+
     /// Start the focused pane's program again, in place.
     ///
     /// Only for a pane that has stopped. The tree keeps its shape, so the panel
@@ -794,12 +813,22 @@ fn observe(ws: &Workspace, now: Instant) -> Observed {
     // occupant is even consulted: `agent start` reports `starting` for a pane
     // whose process has not appeared in the table yet, and that gap is exactly
     // the moment the state is most worth having.
-    if let Some((said, at)) = ws.reported {
-        // Output contradicts a claim that nothing is happening, and nothing
-        // else. A pane producing text is not finished, whatever it said.
-        if !(said.quiescent() && pane.touched > at) {
-            return Observed::Said(said);
-        }
+    //
+    // Output ends it, whatever it said. A report is a claim about a moment, and
+    // the moment is over as soon as the pane says something the report did not
+    // account for -- which is true in both directions and not only of a claim
+    // that nothing is happening. A `blocked` that outlived the answer you typed
+    // pins the workspace to the top of the attention zone until the next hook
+    // fires; a `working` whose agent was interrupted sticks for ever and, worse,
+    // forces `seen` false on every tick so it can never be cleared.
+    //
+    // Nothing is lost by being strict here: inference runs on the very next
+    // line, and if the agent really is still blocked its own prompt is on the
+    // screen for the screen rule to find.
+    if let Some((said, at)) = ws.reported
+        && pane.touched <= at
+    {
+        return Observed::Said(said);
     }
 
     let Some(kind) = pane.occupant.agent() else {

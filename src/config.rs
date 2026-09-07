@@ -51,7 +51,7 @@ pub struct PaneDef {
 /// A layout with a `command` and no `pane` entries is a single-program layout,
 /// which is what the three defaults are. Nothing distinguishes it structurally
 /// from the dashboard except how many leaves it has.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct LayoutDef {
     pub name: String,
@@ -61,6 +61,70 @@ pub struct LayoutDef {
     pub command: Vec<String>,
     pub split: String,
     pub pane: Vec<PaneDef>,
+    /// What to say on the row without being opened.
+    ///
+    /// This is the difference between a link and an instrument: a dashboard you
+    /// have to open to find out whether it matters is a link with extra steps.
+    #[serde(default)]
+    pub status: Option<StatusDef>,
+    /// Whether the panes stay running when you look away.
+    ///
+    /// A monitoring dashboard keeps; a thing you opened for ten seconds should
+    /// not sit there holding a lock. One boolean rather than a second concept:
+    /// a separate "utility window" type would be two code paths that drift.
+    pub keep: bool,
+}
+
+/// A command whose output becomes a badge on a board's row.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusDef {
+    pub run: Vec<String>,
+    /// How often, as a duration: `10s`, `2m`, or seconds on their own.
+    #[serde(default = "ten_seconds")]
+    pub every: String,
+}
+
+fn ten_seconds() -> String {
+    "10s".into()
+}
+
+impl StatusDef {
+    /// The interval, floored.
+    ///
+    /// Two seconds is the floor because this is a subprocess: four boards at
+    /// ten seconds is already twenty-four processes a minute, and somebody
+    /// writing `100ms` has not thought about what they are asking for.
+    pub fn interval(&self) -> std::time::Duration {
+        const FLOOR: std::time::Duration = std::time::Duration::from_secs(2);
+        // Capped as well as floored: an interval of a century is a number, not
+        // an intention, and the backoff multiplies whatever this returns.
+        const CEILING: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+        parse_every(&self.every)
+            .unwrap_or(std::time::Duration::from_secs(10))
+            .clamp(FLOOR, CEILING)
+    }
+
+    /// How long a run may take before it is killed.
+    ///
+    /// Its own interval, so a board asked every ten seconds may take ten -- but
+    /// never less than a couple of seconds, because a slow disk is not a hang.
+    pub fn cap(&self) -> std::time::Duration {
+        self.interval().max(std::time::Duration::from_secs(2))
+    }
+}
+
+/// `10s`, `2m`, `1h`, or a bare number of seconds.
+pub fn parse_every(text: &str) -> Option<std::time::Duration> {
+    let text = text.trim();
+    let (digits, scale) = match text.chars().last()? {
+        's' => (&text[..text.len() - 1], 1),
+        'm' => (&text[..text.len() - 1], 60),
+        'h' => (&text[..text.len() - 1], 3600),
+        _ => (text, 1),
+    };
+    let n: u64 = digits.trim().parse().ok()?;
+    Some(std::time::Duration::from_secs(n.saturating_mul(scale)))
 }
 
 impl PaneDef {
@@ -133,7 +197,9 @@ pub struct Config {
     pub brand: Brand,
     /// Where `o` looks for projects to open.
     pub projects_root: PathBuf,
-    #[serde(rename = "layout")]
+    /// Named arrangements you jump to. `board` is the word the interface uses;
+    /// `layout` is what it was called first and still parses.
+    #[serde(rename = "board", alias = "layout")]
     pub layouts: Vec<LayoutDef>,
     /// Empty means `$SHELL`.
     pub shell: String,
@@ -611,6 +677,24 @@ impl Default for Config {
 /// Three single-program layouts. One whose program is not installed is dropped
 /// at startup rather than left to fail on first open — an entry that only ever
 /// shows `command not found` is worse than no entry.
+/// Written out rather than derived, because `#[serde(default = "yes")]` is a
+/// *deserialization* default and does not reach `LayoutDef::default()` -- which
+/// is how every shipped board was born with `keep: false` and shut itself down
+/// the first time you looked at another one.
+impl Default for LayoutDef {
+    fn default() -> Self {
+        LayoutDef {
+            name: String::new(),
+            key: None,
+            command: Vec::new(),
+            split: String::new(),
+            pane: Vec::new(),
+            status: None,
+            keep: true,
+        }
+    }
+}
+
 fn default_layouts() -> Vec<LayoutDef> {
     let one = |name: &str, key: char, command: &[&str]| LayoutDef {
         name: name.into(),
@@ -710,6 +794,27 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
     // An agent that can never match anything is a definition that does nothing,
     // and saying so is cheaper than wondering why a harness is never
     // recognised.
+    for l in &cfg.layouts {
+        if let Some(status) = &l.status {
+            if status.run.is_empty() {
+                out.push(format!("board {}: a status with nothing to run", l.name));
+            }
+            match parse_every(&status.every) {
+                None => out.push(format!(
+                    "board {}: every = {:?} is not a duration like \"10s\"",
+                    l.name, status.every
+                )),
+                // Said rather than silently obeyed: a board somebody set to a
+                // tenth of a second is not going to run at a tenth of a second,
+                // and finding that out by measurement is worse than being told.
+                Some(d) if d < std::time::Duration::from_secs(2) => out.push(format!(
+                    "board {}: every = {:?} is below the two second floor",
+                    l.name, status.every
+                )),
+                Some(_) => {}
+            }
+        }
+    }
     for def in &cfg.agents {
         if def.names.is_empty() && def.argv.is_empty() && def.name.is_empty() {
             out.push("agent: an entry with no name, names or argv can never match".into());
@@ -852,6 +957,59 @@ mod tests {
 
     fn parsed(text: &str) -> Config {
         toml::from_str::<Config>(text).expect("parses")
+    }
+
+    #[test]
+    fn a_board_keeps_its_panes_unless_it_says_otherwise() {
+        // `#[serde(default = ...)]` is a deserialization default and does not
+        // reach `LayoutDef::default()`, which is what `default_layouts` builds
+        // every shipped board through. They were all born `keep: false` and
+        // shut themselves down the first time you looked at another one.
+        assert!(LayoutDef::default().keep, "the struct default disagrees");
+        for board in default_layouts() {
+            assert!(board.keep, "shipped board {} does not keep", board.name);
+        }
+        let named: Config =
+            toml::from_str("[[board]]\nname = \"x\"\ncommand = [\"sh\"]\nkeep = false\n")
+                .expect("parses");
+        assert!(!named.layouts[0].keep, "an explicit false was ignored");
+        let quiet: Config =
+            toml::from_str("[[board]]\nname = \"y\"\ncommand = [\"sh\"]\n").expect("parses");
+        assert!(
+            quiet.layouts[0].keep,
+            "a board that said nothing lost its panes"
+        );
+    }
+
+    #[test]
+    fn a_status_interval_is_a_duration_and_has_a_floor() {
+        assert_eq!(parse_every("10s"), Some(std::time::Duration::from_secs(10)));
+        assert_eq!(parse_every("2m"), Some(std::time::Duration::from_secs(120)));
+        assert_eq!(
+            parse_every("1h"),
+            Some(std::time::Duration::from_secs(3600))
+        );
+        assert_eq!(parse_every("30"), Some(std::time::Duration::from_secs(30)));
+        assert_eq!(parse_every("soon"), None);
+
+        // Four boards at ten seconds is already twenty-four processes a
+        // minute. Somebody writing a tenth of a second has not thought about
+        // what they are asking for, and is told rather than obeyed.
+        let quick = StatusDef {
+            run: vec!["true".into()],
+            every: "0s".into(),
+        };
+        assert_eq!(quick.interval(), std::time::Duration::from_secs(2));
+        let mut cfg = Config::default();
+        cfg.layouts.push(LayoutDef {
+            name: "fast".into(),
+            status: Some(quick),
+            ..LayoutDef::default()
+        });
+        assert!(
+            complaints(&cfg).iter().any(|c| c.contains("floor")),
+            "an interval under the floor was accepted in silence"
+        );
     }
 
     #[test]
