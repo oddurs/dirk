@@ -1488,3 +1488,123 @@ fn a_pane_can_be_moved_past_its_neighbour() {
         h.drawn()
     );
 }
+
+// ── Everything dirk can do ──────────────────────────────────────────────
+
+#[test]
+fn the_palette_lists_what_dirk_can_do_and_what_to_press_instead() {
+    // The answer to "how do I", and the thing that takes the pressure off
+    // binding everything.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.prefix(b"p");
+    assert!(
+        h.wait_for("Open a project", Duration::from_secs(10)),
+        "the palette did not open\n{}",
+        h.drawn()
+    );
+    // The key beside it, because a palette that does not teach you the key is
+    // one you keep coming back to.
+    assert!(
+        h.rows().iter().any(|r| r.contains("o  Open a project")),
+        "no key beside the action\n{}",
+        h.drawn()
+    );
+
+    // What cannot be done now is shown with the reason rather than hidden.
+    assert!(
+        h.rows()
+            .iter()
+            .any(|r| r.contains("Zoom") && r.contains("only one pane")),
+        "an unavailable action was hidden rather than explained\n{}",
+        h.drawn()
+    );
+
+    // Typing filters, out of order and by subsequence.
+    h.send(b"opro");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            h.rows().iter().any(|r| r.contains("Open a project"))
+                && !h.rows().iter().any(|r| r.contains("Split into rows"))
+        }),
+        "typing did not filter\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_palette_is_a_way_to_go_somewhere_as_well() {
+    // Boards and spaces are places as much as the actions are things.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+    h.prefix(b"p");
+    assert!(
+        h.wait_for("Open a project", Duration::from_secs(10)),
+        "no palette"
+    );
+    // Typed for, because the actions come first and there are more of them than
+    // there are rows.
+    h.send(b"goto");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("Go to "))),
+        "nowhere to go from the palette\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_key_can_be_moved_and_the_old_one_stops_working() {
+    // A rebind that leaves the old key working is one that looks like it did
+    // not take.
+    let mut h = Harness::start_with_config("[keys]\n\"nav.toggle\" = \"H\"\n");
+    assert!(h.wait_for(READY, START), "never started");
+    assert!(h.find("spaces").is_some(), "the nav was never there");
+
+    h.prefix(b"b");
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(
+        h.find("spaces").is_some(),
+        "the old key still hides the nav\n{}",
+        h.drawn()
+    );
+
+    h.prefix(b"H");
+    assert!(
+        h.wait_until(Duration::from_secs(5), |h| h.find("spaces").is_none()),
+        "the new key does not hide the nav\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_binding_for_something_that_does_not_exist_is_reported() {
+    // A line in a file that looks like it works is worse than one that is
+    // rejected.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--keys"])
+        .env("XDG_CONFIG_HOME", {
+            let dir = std::env::temp_dir().join("dirk-badkeys").join(format!(
+                "{}-{}",
+                std::process::id(),
+                next_config_id()
+            ));
+            std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+            std::fs::write(
+                dir.join("dirk").join("config.toml"),
+                "[keys]\n\"nav.togle\" = \"H\"\n",
+            )
+            .expect("config");
+            dir
+        })
+        .output()
+        .expect("run dirk");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("nav.togle"),
+        "a binding for nothing was accepted in silence: {said}"
+    );
+}

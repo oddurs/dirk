@@ -213,6 +213,9 @@ pub struct Config {
     /// What to pipe a selection into. Empty means whatever this platform is
     /// likely to have -- `pbcopy`, `wl-copy`, `xclip`.
     pub clipboard: Vec<String>,
+    /// Keys, by the name of the thing they do. Anything not named here keeps
+    /// the key it ships with.
+    pub keys: std::collections::BTreeMap<String, String>,
     pub nav: Nav,
     /// Harnesses dirk should recognise, on top of the ones it ships with.
     #[serde(rename = "agent")]
@@ -411,6 +414,17 @@ impl Config {
 }
 
 impl Config {
+    /// Which key runs what, after the file has had its say.
+    pub fn keys(&self) -> crate::action::Keys {
+        let mut keys = crate::action::Keys::default();
+        for (name, key) in &self.keys {
+            if let Some(action) = crate::action::Action::named(name) {
+                keys.bind(action, key);
+            }
+        }
+        keys
+    }
+
     /// Which agent to start in a project: what it asks for, then the global
     /// answer, then nothing -- which means asking.
     ///
@@ -670,6 +684,7 @@ impl Default for Config {
             notify: Notify::default(),
             sound: Sound::default(),
             clipboard: Vec::new(),
+            keys: std::collections::BTreeMap::new(),
             nav: Nav::default(),
             agents: Vec::new(),
             default_agent: String::new(),
@@ -793,6 +808,27 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
             out.push(format!(
                 "layout {}: defined twice; only the first is reachable",
                 l.name
+            ));
+        }
+    }
+    // A binding for something that does not exist is a line in a file that
+    // looks like it works. Reported with the nearest thing it might have meant,
+    // since the usual cause is remembering the name slightly wrong.
+    for name in cfg.keys.keys() {
+        if crate::action::Action::named(name).is_none() {
+            out.push(format!(
+                "keys: nothing called {name:?}. `dirk --keys` lists them"
+            ));
+        }
+    }
+    // Two things on one key means one of them is unreachable, and which one is
+    // an accident of ordering.
+    let bound = cfg.keys();
+    for a in crate::action::Action::ALL {
+        if bound.key(*a).is_none() {
+            out.push(format!(
+                "keys: {} has no key; something else took it",
+                a.name()
             ));
         }
     }

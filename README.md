@@ -111,6 +111,12 @@ The prefix is <kbd>Ctrl</kbd>+<kbd>Space</kbd>. <kbd>Ctrl</kbd>+<kbd>a</kbd> and
 Ctrl-Space is NUL, which nothing sends on purpose. Press it twice to send a
 literal one through.
 
+`Ctrl-Space p` opens the palette: everything dirk can do, filtered by typing,
+with the key beside each one. It is the answer to "how do I", and it takes the
+pressure off binding everything — an action nobody has a key for is still one
+keystroke and a word away. Boards and spaces are in it too, so it doubles as a
+jump. `dirk --keys` prints the same list to a terminal.
+
 | After the prefix | |
 | --- | --- |
 | `n` | new workspace in this project |
@@ -129,6 +135,7 @@ literal one through.
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `a` | start an agent here |
 | `W` | a worktree, and a space open in it |
+| `p` | the palette — everything dirk can do |
 | `[` | read this pane's scrollback, and copy out of it |
 | `/` | find a line, in any pane |
 | `d` | **detach** — leave, and let everything keep running |
@@ -382,6 +389,21 @@ merging — somebody overriding claude's markers does not want to inherit half o
 ours. Markers are substrings, not patterns: this runs against the screen on
 every tick, and a regular expression out of a config file is a way to make a
 redraw depend on somebody else's backtracking.
+
+### Keys
+
+Every key is a name and a default, and `[keys]` moves one:
+
+```toml
+[keys]
+"session.quit" = "Q"
+"nav.toggle"   = "H"
+```
+
+Rebinding takes the old key away — an action reachable from two keys, one of
+which you did not ask for, is how a rebind looks like it did not take. A name
+that does not exist is reported at startup rather than ignored, and so is an
+action left with no key because something else took it.
 
 ### Marks and the font
 

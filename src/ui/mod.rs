@@ -20,6 +20,7 @@
 pub mod ask;
 pub mod found;
 pub mod nav;
+pub mod palette;
 pub mod pane;
 pub mod picker;
 pub mod rail;
