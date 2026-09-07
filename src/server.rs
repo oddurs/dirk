@@ -108,6 +108,11 @@ impl Sink {
 
 /// A client, and the screen it is being shown.
 pub struct View {
+    /// Which client this is.
+    ///
+    /// A detach carries one too, so the reader thread of a client that has been
+    /// taken over cannot clear the view of the one that replaced it.
+    pub id: u64,
     pub out: UnixStream,
     pub term: Terminal<CrosstermBackend<Sink>>,
     sink: Sink,
@@ -120,11 +125,31 @@ impl std::fmt::Debug for View {
 }
 
 impl View {
-    fn new(out: UnixStream, cols: u16, rows: u16) -> io::Result<Self> {
+    fn new(id: u64, out: UnixStream, cols: u16, rows: u16) -> io::Result<Self> {
         let sink = Sink::default();
-        let mut term = Terminal::new(CrosstermBackend::new(sink.clone()))?;
-        term.resize(ratatui::layout::Rect::new(0, 0, cols.max(1), rows.max(1)))?;
-        Ok(Self { out, term, sink })
+        // Fixed, not fullscreen. A fullscreen viewport re-asks the backend for
+        // the size before every draw, and the backend asks the *process* --
+        // which in a server with no controlling terminal fails, falls back to
+        // `tput`, and answers 80x24. Every draw would then resize the client's
+        // screen back to that, so anyone on a larger terminal would get an
+        // 80x24 dirk and resizing the window would do nothing. It also shelled
+        // out twice per frame to find that out.
+        let area = ratatui::layout::Rect::new(0, 0, cols.max(1), rows.max(1));
+        let options = ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(area),
+        };
+        let term = Terminal::with_options(CrosstermBackend::new(sink.clone()), options)?;
+
+        // A client that stops draining must not take the session with it. The
+        // event loop writes frames itself, and a socket whose buffer is full
+        // would block it for ever -- no input, no tick, no takeover, no quit.
+        let _ = out.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+        Ok(Self {
+            id,
+            out,
+            term,
+            sink,
+        })
     }
 
     /// Say the whole screen again.
@@ -167,15 +192,36 @@ pub fn listen(listener: UnixListener, tx: Sender<Ev>) {
 }
 
 fn client(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>) {
-    // The first message says how big the terminal is. Anything else is not a
-    // dirk client.
-    let Ok(Some((Kind::Hello, body))) = wire::recv(&mut reader) else {
+    // The first message says what kind of connection this is. A viewer says
+    // hello with its size; a caller asks something.
+    let Ok(Some((kind, body))) = wire::recv(&mut reader) else {
         return;
     };
-    let Ok(hello) = serde_json::from_slice::<Hello>(&body) else {
+    match kind {
+        Kind::Hello => view(out, reader, tx, &body),
+        Kind::Command => {
+            let mut out = out;
+            if answer(&mut out, &tx, &body).is_err() {
+                return;
+            }
+            // The connection stays open for more, so a caller making several
+            // requests pays for one connection rather than one each.
+            while let Ok(Some((Kind::Command, body))) = wire::recv(&mut reader) {
+                if answer(&mut out, &tx, &body).is_err() {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn view(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>, body: &[u8]) {
+    let Ok(hello) = serde_json::from_slice::<Hello>(body) else {
         return;
     };
-    let Ok(view) = View::new(out, hello.cols, hello.rows) else {
+    let id = next_client_id();
+    let Ok(view) = View::new(id, out, hello.cols, hello.rows) else {
         return;
     };
     if tx.send(Ev::Attach(Box::new(view))).is_err() {
@@ -196,7 +242,46 @@ fn client(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>) {
             return;
         }
     }
-    let _ = tx.send(Ev::Detach);
+    // Named, so a client that was taken over cannot clear the view of the one
+    // that replaced it on its way out.
+    let _ = tx.send(Ev::Detach(id));
+}
+
+fn next_client_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Put one request to the loop that owns the state, and post what it says.
+///
+/// Answered there rather than here so a command sees the session between
+/// frames, never halfway through one.
+fn answer(out: &mut UnixStream, tx: &Sender<Ev>, body: &[u8]) -> io::Result<()> {
+    let reply = match serde_json::from_slice::<wire::Request>(body) {
+        Ok(req) => {
+            let (back, wait) = std::sync::mpsc::sync_channel(1);
+            match tx.send(Ev::Command(req, back)) {
+                Ok(()) => wait
+                    .recv()
+                    .unwrap_or_else(|_| wire::Reply::err("the session went away")),
+                Err(_) => wire::Reply::err("the session went away"),
+            }
+        }
+        Err(e) => wire::Reply::err(format!("not a request: {e}")),
+    };
+    wire::send_json(out, Kind::Reply, &reply)
+}
+
+/// Ask a running session something, from outside it.
+pub fn ask(path: &Path, req: &wire::Request) -> io::Result<wire::Reply> {
+    let mut sock = UnixStream::connect(path)?;
+    wire::send_json(&mut sock, Kind::Command, req)?;
+    let mut reader = sock.try_clone()?;
+    match wire::recv(&mut reader)? {
+        Some((Kind::Reply, body)) => serde_json::from_slice(&body).map_err(io::Error::other),
+        _ => Err(io::Error::other("the session did not answer")),
+    }
 }
 
 /// Can anyone still reach this server?
@@ -206,8 +291,37 @@ fn client(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>) {
 /// session and nothing can ever connect to it again, so it should not keep
 /// running. Checked rather than assumed, because the alternative is a process
 /// that only `kill` can end and only `ps` can find.
-pub fn reachable(path: &Path) -> bool {
-    path.exists()
+pub fn reachable(path: &Path, ours: u64) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // The inode, not the path. A socket can be removed and another server can
+    // bind a fresh one at the same name before the next tick -- and a server
+    // that only asked whether *something* is there would see the newcomer's
+    // socket and keep running, holding every pane behind an address that now
+    // belongs to somebody else.
+    std::fs::metadata(path)
+        .map(|m| m.ino())
+        .is_ok_and(|ino| ino == ours)
+}
+
+/// The inode of the socket just bound, as proof of which one is ours.
+pub fn inode(path: &Path) -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).map(|m| m.ino())
+}
+
+/// A session name has to be one path segment.
+///
+/// It is interpolated into a path that is later removed, so `../../.ssh/config`
+/// would be resolved rather than refused. Same-user throughout, so this is a
+/// footgun rather than a boundary — but a footgun with a trigger guard.
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name != "."
+        && name != ".."
 }
 
 /// Start a server for this session in the background, and wait until its socket

@@ -131,8 +131,13 @@ impl Pane {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         // So a shell prompt or an agent can tell it is inside dirk.
+        // So a shell prompt, or an agent, can tell it is inside dirk and say
+        // which pane it is in — which is what `--current` resolves from.
         cmd.env("DIRK", "1");
-        cmd.env("DIRK_PANE", id.to_string());
+        cmd.env("DIRK_PANE_ID", format!("p{id}"));
+        if let Ok(session) = std::env::var("DIRK_SESSION") {
+            cmd.env("DIRK_SESSION", session);
+        }
 
         let child = slave.spawn_command(cmd).map_err(oops)?;
         // The slave fd must go, or the pty never reports EOF when the child

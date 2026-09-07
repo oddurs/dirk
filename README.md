@@ -281,6 +281,33 @@ be a small change rather than a second implementation.
 One client at a time. A second `dirk` takes the session over and the first is
 told why.
 
+## Asking a session things
+
+A session answers for itself, which is the difference between a multiplexer
+agents happen to run in and one they can work in.
+
+```console
+$ dirk pane list
+$ dirk pane split w7:p12 rows
+$ dirk pane send-keys --current "cargo test"
+$ dirk agent list
+$ dirk session commands          # the whole surface
+```
+
+Answers are JSON, including the failures — a caller is a program, and prose on
+stderr is not something a program can branch on.
+
+**Ids are opaque and stable.** `w7` is a workspace and `w7:p12` a pane in it; the
+number the nav shows beside a workspace is positional and changes when spaces
+are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
+`--current` resolves from them — so a command from inside a pane reaches the
+session holding it without the caller looking anything up first.
+
+**Reads do not mark an agent seen.** Focusing a workspace is what says you have
+looked at it; asking about one over a socket is not looking. Without that rule a
+status line polling the session would quietly clear every notification it was
+built to show.
+
 ## Build
 
 ```console

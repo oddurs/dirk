@@ -34,8 +34,18 @@ pub enum Ev {
     Term(crossterm::event::Event),
     /// A client connected, with the screen it is to be shown.
     Attach(Box<crate::server::View>),
-    /// The attached client went away. The session does not.
-    Detach,
+    /// A client went away, named so that one being taken over cannot clear the
+    /// view of the one that replaced it. The session does not go anywhere.
+    Detach(u64),
+    /// Something asked of the session from outside, and where to answer.
+    ///
+    /// Answered on the loop that owns the state rather than from the socket
+    /// thread, so a command sees the session between frames rather than halfway
+    /// through one.
+    Command(
+        crate::wire::Request,
+        std::sync::mpsc::SyncSender<crate::wire::Reply>,
+    ),
     /// The id is unused while dirk redraws whole frames; it is what a
     /// damage-tracked renderer would key on.
     Output(#[allow(dead_code)] PaneId),

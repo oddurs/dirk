@@ -47,14 +47,20 @@ struct Client {
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     screen: Arc<Mutex<vt100::Parser>>,
+    cols: u16,
+    rows: u16,
 }
 
 impl Client {
     fn attach(session: &str) -> Self {
+        Self::attach_sized(session, COLS, ROWS)
+    }
+
+    fn attach_sized(session: &str, cols: u16, rows: u16) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
-                rows: ROWS,
-                cols: COLS,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -71,7 +77,7 @@ impl Client {
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("reader");
-        let screen = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
+        let screen = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
         let sink = Arc::clone(&screen);
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
@@ -87,14 +93,16 @@ impl Client {
             writer: pair.master.take_writer().expect("writer"),
             child,
             screen,
+            cols,
+            rows,
         }
     }
 
     fn rows(&self) -> Vec<String> {
         let s = self.screen.lock().unwrap();
-        (0..ROWS)
+        (0..self.rows)
             .map(|r| {
-                (0..COLS)
+                (0..self.cols)
                     .map(|c| match s.screen().cell(r, c) {
                         Some(cell) if !cell.contents().is_empty() => cell.contents().to_string(),
                         _ => " ".to_string(),
@@ -276,4 +284,151 @@ fn a_server_nobody_can_reach_does_not_keep_running() {
         std::thread::sleep(Duration::from_millis(200));
     }
     panic!("the server outlived every way of reaching it");
+}
+
+#[test]
+fn a_client_that_took_over_is_the_one_being_drawn_for() {
+    // Taking over is only half of it. The client that was replaced closes its
+    // socket on the way out, and an unnamed detach would clear the view of the
+    // one that replaced it -- leaving the new client attached to a session that
+    // had quietly stopped drawing for it.
+    let session = unique("still-drawing");
+
+    let first = Client::attach(&session);
+    assert!(
+        first.wait_for(READY, START),
+        "never started\n{}",
+        first.drawn()
+    );
+
+    let mut second = Client::attach(&session);
+    assert!(
+        second.wait_for(READY, START),
+        "the second never drew\n{}",
+        second.drawn()
+    );
+    assert!(
+        first.wait_for("taken over", Duration::from_secs(10)),
+        "the first was not told\n{}",
+        first.drawn()
+    );
+    drop(first);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // The point: the survivor still works.
+    second.send(b"printf 'zz%s' AFTER\r");
+    assert!(
+        second.wait_for("zzAFTER", Duration::from_secs(10)),
+        "the client that took over was frozen\n{}",
+        second.drawn()
+    );
+    drop(second);
+    quit(&session);
+}
+
+#[test]
+fn a_session_uses_the_whole_terminal_it_is_shown_on() {
+    // The server has no terminal of its own. Asking a backend for "the size"
+    // there answers with the process's, which fails and falls back to 80x24 --
+    // so every client on anything larger got an 80x24 dirk, and the panes
+    // inside it were 80x24 too. A suite that only ever opens 80x24 terminals is
+    // exactly the one that would not notice.
+    let session = unique("big");
+    let client = Client::attach_sized(&session, 120, 40);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let rows = client.rows();
+    let last = rows.iter().rposition(|r| !r.trim().is_empty()).unwrap_or(0);
+    assert!(
+        last > 24,
+        "nothing was drawn below row 24 of a 40-row terminal: the size did not survive\n{}",
+        client.drawn()
+    );
+    // And the rail runs the whole width.
+    let widest = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
+    assert!(
+        widest > 80,
+        "nothing was drawn past column 80 of a 120-column terminal"
+    );
+    drop(client);
+    quit(&session);
+}
+
+/// Ask a running session something, the way a shell or an agent would.
+fn ask(session: &str, args: &[&str]) -> (bool, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--session", session])
+        .args(args)
+        .output()
+        .expect("run dirk");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+#[test]
+fn a_session_answers_for_itself() {
+    // The difference between a multiplexer agents happen to run in and one they
+    // can work in. Driven the way a caller would: ask what is there, act on an
+    // id from the answer, and read back what happened.
+    let session = unique("api");
+    let client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let id = panes
+        .split('"')
+        .find(|s| s.starts_with('w') && s.contains(":p"))
+        .expect("a pane id in the answer")
+        .to_string();
+
+    // Ids come back to dirk in the next command.
+    let (ok, split) = ask(&session, &["pane", "split", &id, "rows"]);
+    assert!(ok, "split failed: {split}");
+    assert!(split.contains(":p"), "the new pane was not named: {split}");
+
+    let (ok, _) = ask(&session, &["pane", "send-keys", &id, "printf zzASKED\n"]);
+    assert!(ok, "send-keys failed");
+
+    // Read it back from the pane rather than from the screen: that is the path
+    // an agent looking at a neighbour would take.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut saw = false;
+    while Instant::now() < deadline && !saw {
+        saw = ask(&session, &["pane", "read", &id, "10"])
+            .1
+            .contains("zzASKED");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(saw, "what was typed never came back out");
+
+    // A failure is structured, not prose on stdout.
+    let (ok, _) = ask(&session, &["pane", "read", "p99999"]);
+    assert!(!ok, "reading a pane that does not exist should fail");
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn a_command_does_not_conjure_a_session_to_answer_it() {
+    // `dirk pane list` with nothing running should say so, not start a session
+    // in order to have something to list.
+    let session = unique("absent");
+    let (ok, _) = ask(&session, &["pane", "list"]);
+    assert!(!ok, "a command started a session");
+    let socket = std::env::temp_dir()
+        .join(format!("dirk-{}", unsafe { libc::getuid() }))
+        .join(format!("{session}.sock"));
+    assert!(!socket.exists(), "a command left a session behind");
 }

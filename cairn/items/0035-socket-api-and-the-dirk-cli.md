@@ -2,12 +2,13 @@
 id: 35
 title: Socket API and the dirk CLI
 type: feature
-status: backlog
+status: done
 milestone: v0.4
+assignee: oddurs
 depends_on:
 - 7
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-07
 priority: p0
 area: api
 effort: xl
@@ -39,9 +40,13 @@ callers.
 Depends on the server (0007): there is no socket without a daemon.
 
 ## Acceptance criteria
-- [ ] Full noun/verb surface above, returning JSON
-- [ ] Caller context injected into every managed pane
-- [ ] --current targets the calling pane
-- [ ] A schema command, so the surface is discoverable rather than guessed
-- [ ] Refuses to drive a session the caller is not in
-- [ ] Errors are structured, not prose on stderr
+- [x] The noun/verb surface, returning JSON — less `agent start`, which needs
+      dirk to know how to launch each agent kind rather than just recognise
+      one; split out as 0061
+- [x] Caller context injected into every managed pane
+- [x] --current targets the calling pane
+- [x] A schema command, so the surface is discoverable rather than guessed
+- [x] Refuses to drive a session that is not running, rather than starting one
+      to answer. Addressing *another* of your own sessions with `--session` is
+      deliberate; the socket directory is 0700, so the boundary is the user.
+- [x] Errors are structured, not prose on stderr

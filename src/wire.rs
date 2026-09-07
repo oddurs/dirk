@@ -52,6 +52,10 @@ pub enum Kind {
     Frame = 3,
     /// Server says why it is ending the connection.
     Bye = 4,
+    /// A caller asks the session to do or report something.
+    Command = 5,
+    /// The answer to one command.
+    Reply = 6,
 }
 
 impl Kind {
@@ -61,8 +65,53 @@ impl Kind {
             2 => Kind::Input,
             3 => Kind::Frame,
             4 => Kind::Bye,
+            5 => Kind::Command,
+            6 => Kind::Reply,
             _ => return None,
         })
+    }
+}
+
+/// One thing asked of a session.
+///
+/// A name and a list of words rather than a type per command: the surface is
+/// meant to grow, and every caller on the other side is a shell or an agent
+/// composing strings. A typed tree would be a nicer thing to hold and a worse
+/// thing to call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Request {
+    pub cmd: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// The answer.
+///
+/// Structured, including the failure. A caller is a program, and prose on
+/// stderr is not something a program can branch on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reply {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub result: serde_json::Value,
+}
+
+impl Reply {
+    pub fn ok(result: serde_json::Value) -> Self {
+        Self {
+            ok: true,
+            error: None,
+            result,
+        }
+    }
+    pub fn err(why: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(why.into()),
+            result: serde_json::Value::Null,
+        }
     }
 }
 
