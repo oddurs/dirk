@@ -858,7 +858,13 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
         // is how a five-pane dashboard says which panel is which.
         let inner = mux::session::content_of(pane.label.is_some(), r);
         if let Some(label) = &pane.label {
-            rule(buf, Rect { height: 1, ..r }, label, pane.exit.as_deref());
+            rule(
+                buf,
+                Rect { height: 1, ..r },
+                label,
+                pane.exit.as_deref(),
+                id == ws.focus,
+            );
         }
         if let Ok(t) = pane.term.lock() {
             // A stopped pane keeps its last output, dimmed. The output is
@@ -871,30 +877,56 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
 
 /// `─ brief ─────────────`. A rule rather than a border: three sides of a box
 /// only repeat what the neighbouring pane's own edge already says.
-fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>) {
+fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>, focused: bool) {
     ui::fill(buf, area, THEME.panel());
+
+    // The tail is measured first: the label's budget has to know about it, or a
+    // long label is drawn and then written over halfway through a word.
+    let tail = exit.map(|e| format!(" {e} · r restarts "));
+    let tail_w = tail.as_ref().map_or(0, |t| {
+        (t.chars().count() as u16).min(area.width.saturating_sub(4))
+    });
+
     let mut x = area.x;
-    x += ui::write_str(buf, x, area.y, "─ ", THEME.rule_strong(), area.width);
-    let left = area.width.saturating_sub(x - area.x).saturating_sub(2) as usize;
-    let style = if exit.is_some() {
-        THEME.dim()
+    // The focused pane is marked on its own rule. Without it, a dashboard whose
+    // panels have all stopped is uniformly dim and nothing says which one `r`
+    // would bring back.
+    let (lead, lead_style) = if focused {
+        ("▊ ", THEME.working())
     } else {
-        THEME.title()
+        ("─ ", THEME.rule_strong())
+    };
+    x += ui::write_str(buf, x, area.y, lead, lead_style, area.width);
+
+    let left = area
+        .width
+        .saturating_sub(x - area.x)
+        .saturating_sub(tail_w + 2) as usize;
+    let style = match (exit.is_some(), focused) {
+        (false, _) => THEME.title(),
+        (true, true) => THEME.text(),
+        (true, false) => THEME.dim(),
     };
     x += ui::write_str(buf, x, area.y, &ui::elide(label, left), style, area.width);
     x += ui::write_str(buf, x, area.y, " ", THEME.rule_strong(), area.width);
 
-    // A panel that stopped says so on its own rule, where the name already is,
-    // rather than going quiet and looking like it is merely idle.
-    let tail = exit.map(|e| format!(" {e} · r restarts "));
-    let tail_w = tail.as_ref().map_or(0, |t| t.chars().count() as u16);
     for c in x..area.right().saturating_sub(tail_w) {
         ui::write_str(buf, c, area.y, "─", THEME.rule_strong(), 1);
     }
+    // Elided rather than dropped: a narrow stopped panel showing frozen output
+    // and no explanation is the worst version of this.
     if let Some(t) = tail
-        && area.width > tail_w
+        && tail_w > 0
     {
-        ui::write_str(buf, area.right() - tail_w, area.y, &t, THEME.warn(), tail_w);
+        let text = ui::elide(&t, tail_w as usize);
+        ui::write_str(
+            buf,
+            area.right() - tail_w,
+            area.y,
+            &text,
+            THEME.warn(),
+            tail_w,
+        );
     }
 }
 
