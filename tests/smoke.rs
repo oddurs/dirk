@@ -94,6 +94,11 @@ impl Harness {
             .expect("openpty");
 
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_dirk"));
+        // One process, no session. These tests are about the multiplexer
+        // rather than about how it is reached, and a shared session would mean
+        // every one of them attaching to whichever server started first --
+        // with whichever configuration that one was given.
+        cmd.arg("--no-session");
         cmd.cwd(env!("CARGO_MANIFEST_DIR"));
         cmd.env("TERM", "xterm-256color");
         // A predictable, quiet shell: an interactive zsh would paint a prompt

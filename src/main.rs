@@ -43,6 +43,7 @@
 //! all. There is no polling anywhere in this file.
 
 mod agent;
+mod client;
 mod config;
 mod git;
 mod hit;
@@ -51,9 +52,11 @@ mod llm;
 mod mux;
 mod name;
 mod notify;
+mod server;
 mod theme;
 mod tokens;
 mod ui;
+mod wire;
 
 use config::Config;
 use crossterm::event::{
@@ -79,12 +82,23 @@ use ui::nav::{Nav, Row};
 use ui::picker::Picker;
 
 const USAGE: &str = "\
-Usage: dirk [OPTION]...
+Usage: dirk [OPTION]... [COMMAND]
 Run a terminal multiplexer with a clickable project tree, static layouts, and
 workspaces named from what the program inside them says it is doing.
 
-  -h, --help     display this help and exit
-  -V, --version  output version information and exit
+With no command, attach to the session, starting it if it is not running.  The
+session outlives the terminal it was started from: close this one and everything
+in it keeps going.
+
+Commands:
+  attach                 attach to the session (the default)
+  server                 be the session; started for you, not usually typed
+
+Options:
+      --session NAME     which session, default \"default\"
+      --no-session       one process, no session, ends with this terminal
+  -h, --help             display this help and exit
+  -V, --version          output version information and exit
 
 dirk reads ~/.config/dirk/config.toml when it exists, and runs on built-in
 defaults when it does not.  The prefix key is Ctrl-Space; press it and then 'q'
@@ -109,7 +123,12 @@ fn main() -> io::Result<()> {
     // Options are answered before the terminal is touched, so `dirk --version`
     // in a pipe behaves like any other program rather than briefly taking over
     // the screen. dirk takes at most one, and every one of them exits.
-    if let Some(arg) = std::env::args().nth(1) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut session = "default".to_string();
+    let mut mode = Mode::Attach;
+
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -119,6 +138,16 @@ fn main() -> io::Result<()> {
                 print!("{VERSION}");
                 return Ok(());
             }
+            "server" => mode = Mode::Server,
+            "attach" => mode = Mode::Attach,
+            "--no-session" => mode = Mode::Alone,
+            "--session" => match rest.next() {
+                Some(name) => session = name.clone(),
+                None => {
+                    eprintln!("dirk: --session needs a name");
+                    std::process::exit(1);
+                }
+            },
             other => {
                 eprintln!("dirk: unrecognized option '{other}'");
                 eprintln!("Try 'dirk --help' for more information.");
@@ -127,8 +156,56 @@ fn main() -> io::Result<()> {
         }
     }
 
+    let path = server::socket_path(&session);
+    match mode {
+        Mode::Server => serve(&session, &path),
+        Mode::Attach => {
+            if !server::is_running(&path) {
+                server::spawn(&session, &path)?;
+            }
+            client::attach(&path)
+        }
+        Mode::Alone => alone(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Attach to the session, starting it if it is not there.
+    Attach,
+    /// Be the session. Started by the above; not usually typed.
+    Server,
+    /// One process, no session, dies with the terminal.
+    Alone,
+}
+
+/// Be the session.
+fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
+    let listener = server::bind(path)?;
     let cfg = Config::load();
 
+    let (tx, rx) = mpsc::channel::<Ev>();
+    spawn_ticker(tx.clone());
+    server::listen(listener, tx.clone());
+
+    // No terminal to ask, so a size until a client says otherwise.
+    let size = ratatui::layout::Size {
+        width: 80,
+        height: 24,
+    };
+    let mut app = App::new(cfg, Session::new(&Config::load(), tx.clone()), size, tx);
+    app.socket = Some(path.to_path_buf());
+    app.bootstrap();
+
+    let result = app.serve(rx);
+    let _ = std::fs::remove_file(path);
+    let _ = session;
+    result
+}
+
+/// One process, no session. What dirk was before it had one.
+fn alone() -> io::Result<()> {
+    let cfg = Config::load();
     let (tx, rx) = mpsc::channel::<Ev>();
     spawn_input(tx.clone());
     spawn_ticker(tx.clone());
@@ -223,6 +300,13 @@ struct App {
     /// the session, and the button sits at the edge of the screen where a stray
     /// click is most likely, so it takes two.
     quit_armed: Option<Instant>,
+    /// Where this session's socket is, when it has one. Checked on the tick:
+    /// a server whose socket has gone cannot be reached by anyone and should
+    /// not keep holding a shell.
+    socket: Option<std::path::PathBuf>,
+    /// The client being drawn for, if one is attached. A session with nobody
+    /// looking at it keeps running; that is the point of the whole milestone.
+    view: Option<server::View>,
     /// True while a process-table sample is in flight.
     sampling: bool,
     /// True while the pointer is dragging the divider. Held as state because a
@@ -249,6 +333,8 @@ impl App {
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
+            socket: None,
+            view: None,
             sampling: false,
             quit_armed: None,
             dragging: false,
@@ -274,6 +360,40 @@ impl App {
     fn note(&mut self, msg: &str) {
         self.status = msg.to_string();
         self.status_at = Instant::now();
+    }
+
+    /// One turn of the loop: take everything queued, then settle the state.
+    ///
+    /// Returns false when there is nothing left to run for.
+    fn turn(&mut self, rx: &Receiver<Ev>) -> bool {
+        let Ok(ev) = rx.recv() else { return false };
+        self.handle(ev);
+        // Coalesce whatever else has already queued. A pane writing fast
+        // produces one redraw, not one per write.
+        while let Ok(next) = rx.try_recv() {
+            self.handle(next);
+        }
+        let changes = self.session.update_states(Instant::now());
+        self.announce(changes);
+        !(self.quit || self.session.is_empty())
+    }
+
+    /// Serve whichever client is attached, for as long as the session lasts.
+    fn serve(&mut self, rx: Receiver<Ev>) -> io::Result<()> {
+        while self.turn(&rx) {
+            // Taken out so the render can borrow the rest of `self`.
+            let Some(mut view) = self.view.take() else {
+                continue;
+            };
+            let _ = view.term.draw(|f| self.render(f));
+            if view.flush().is_ok() {
+                self.view = Some(view);
+            }
+        }
+        if let Some(mut view) = self.view.take() {
+            let _ = wire::send_json(&mut view.out, wire::Kind::Bye, &"the session ended");
+        }
+        Ok(())
     }
 
     fn run(&mut self, terminal: &mut Term, rx: Receiver<Ev>) -> io::Result<()> {
@@ -304,7 +424,33 @@ impl App {
         match ev {
             Ev::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
             Ev::Term(Event::Mouse(m)) => self.on_mouse(m),
-            Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
+            Ev::Term(Event::Resize(cols, rows)) => {
+                if let Some(view) = &mut self.view {
+                    let area = Rect::new(0, 0, cols.max(1), rows.max(1));
+                    let _ = view.term.resize(area);
+                    // The old contents are wrong at the new size, and ratatui
+                    // would otherwise only send what changed against them.
+                    let _ = view.repaint();
+                }
+            }
+            Ev::Term(_) => {}
+            Ev::Attach(view) => {
+                if let Some(old) = self.view.take() {
+                    // Told why, rather than simply going quiet.
+                    let mut out = old.out;
+                    let _ =
+                        wire::send_json(&mut out, wire::Kind::Bye, &"taken over by another client");
+                }
+                let mut view = *view;
+                // The client's terminal holds whatever was on it before, and
+                // ratatui only sends what changed since its own last draw.
+                let _ = view.repaint();
+                self.view = Some(view);
+            }
+            Ev::Detach => {
+                // The session does not end because nobody is watching it.
+                self.view = None;
+            }
             Ev::Output(id) => {
                 self.session.touch(id);
                 self.session.track_intents(&self.cfg.naming);
@@ -322,6 +468,14 @@ impl App {
                 self.session.refocus();
             }
             Ev::Tick => {
+                if let Some(path) = &self.socket
+                    && !server::reachable(path)
+                {
+                    // Unreachable: nothing can attach, and what is here would
+                    // only be findable with `ps`.
+                    self.quit = true;
+                    return;
+                }
                 self.read_agents();
                 self.read_repos();
                 self.session.track_intents(&self.cfg.naming);

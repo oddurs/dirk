@@ -257,6 +257,30 @@ without it. Your key is read from the environment; the configuration file holds
 only the *name* of the variable, because a configuration file is a thing people
 paste into issues.
 
+## Sessions
+
+`dirk` attaches to a session, starting it if it is not running. The session is a
+separate process that owns the panes, so closing the terminal does not close
+anything in it — come back with `dirk` and everything is where you left it,
+including whatever happened while nobody was watching.
+
+```console
+$ dirk                      # attach, starting the session if needed
+$ dirk --session review     # a session of its own
+$ dirk --no-session         # one process, ends with this terminal
+```
+
+**The server renders; the client paints bytes it does not read.** That is the
+decision the rest follows from. Shipping session state and letting each client
+compose it sounds more principled and costs more: two renderers drift, the local
+one gets a fix, the remote one does not, and the difference is a rendering bug
+nobody can reproduce. There is one renderer, it lives in the session, and a
+client is a terminal with a socket — which is also why attaching over `ssh` will
+be a small change rather than a second implementation.
+
+One client at a time. A second `dirk` takes the session over and the first is
+told why.
+
 ## Build
 
 ```console
@@ -324,6 +348,8 @@ split tree; the API needs a daemon; ordering agents by attention is a re-sort of
 a guess until the states are real.
 
 ## Status
+
+v0.4 has begun: sessions outlive the terminal they were started from.
 
 v0.3 is done. dirk reads what is running in each pane from its foreground
 process group, so a shell is a shell and an agent is an agent; the four

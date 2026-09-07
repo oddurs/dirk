@@ -32,6 +32,10 @@ pub use tree::Dir;
 #[derive(Debug)]
 pub enum Ev {
     Term(crossterm::event::Event),
+    /// A client connected, with the screen it is to be shown.
+    Attach(Box<crate::server::View>),
+    /// The attached client went away. The session does not.
+    Detach,
     /// The id is unused while dirk redraws whole frames; it is what a
     /// damage-tracked renderer would key on.
     Output(#[allow(dead_code)] PaneId),
