@@ -1,4 +1,12 @@
 /target
+
+# Generated at distribution time from the history; the history is the changelog
+# here, and keeping a second copy under version control means keeping two.
+/ChangeLog
+/dirk-*.tar.gz
+/dirk-*/
+/dist
+
 # Editors and platforms leave things behind; none of it belongs in the history.
 *.swp
 .DS_Store

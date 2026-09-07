@@ -1,0 +1,175 @@
+Working on dirk
+===============
+
+CONTRIBUTING.md is the social half: what a good change looks like, and what the
+code is trying to be. This is the mechanical half — the loop, from a fresh
+clone to a merged pull request, and how a release is cut.
+
+
+One command, once
+-----------------
+
+    $ git clone https://github.com/oddurs/dirk && cd dirk
+    $ make setup
+
+`make setup` configures this checkout, and only this checkout:
+
+  * `git work`, the alias that drives everything below.
+  * `core.hooksPath = .githooks`, so the hooks in the repository are the hooks
+    that run.
+  * rerere, so a conflict solved once is not solved again on the next rebase.
+  * `merge.conflictstyle = zdiff3`, which shows the common ancestor. The
+    difference between reading a conflict and guessing at one.
+  * autosetupremote, autostash, autosquash, prune on fetch, histogram diffs,
+    branches sorted by date rather than alphabet.
+
+It touches nothing global. Nothing here is a preference imposed on you; it is
+what the workflow below assumes.
+
+
+The loop
+--------
+
+Every branch gets a worktree of its own. Two pieces of work can then be in
+flight at once without sharing a build directory — which matters here, because
+much of this is written by coding agents, and an agent that has to `git switch`
+is an agent that corrupts whatever else is running.
+
+    $ git work start 44
+    claimed 0044 — Create and manage worktrees from the nav
+    /Users/you/Code/.dirk-worktrees/create-and-manage-worktrees
+
+`start` takes a backlog id or a branch name. Given an id it reads the title,
+claims the item so nobody duplicates the work, derives the branch name, and
+branches from `origin/main` rather than from wherever you happened to be.
+
+The link between the branch and the item is kept in `branch.<name>.cairn-item`,
+which is what per-branch git config is for. Nothing has to be remembered and
+nothing has to be passed twice.
+
+    $ cd /Users/you/Code/.dirk-worktrees/create-and-manage-worktrees
+    $ ... work ...
+    $ git work sync           # rebase onto origin/main, when it has moved
+    $ git work ship
+
+`ship` runs the gate, pushes, opens a pull request titled from the item and
+bodied from its reasoning, and turns on auto-merge. When CI goes green GitHub
+squashes it and deletes the branch. `git work ship --land` waits for that to
+happen and then does the last step for you.
+
+    $ git work land           # close the item, remove the worktree
+    $ git work list           # what is still in flight
+    $ git work clean          # reap everything that has already merged
+
+`land` is safe to forget. `clean`, run from the main checkout, finds every
+worktree whose branch is now an ancestor of `origin/main`, closes its item, and
+removes it.
+
+Worktrees live in a sibling directory — `../.dirk-worktrees` by default,
+`$DIRK_WORKTREES` if you want them elsewhere — so nothing nests inside a
+checkout and there is no ignore rule to maintain.
+
+
+The gate
+--------
+
+    $ make check
+
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and the full
+test suite. It is what CI runs, and `git work ship` runs it before it pushes,
+so a red pull request should be a surprise.
+
+    $ make shot
+
+prints what dirk currently paints, as plain text. The fastest way to see
+whether a change to the chrome did what you meant, and it pastes into an issue
+far better than a screenshot of a terminal does.
+
+
+Testing a program that draws a terminal
+---------------------------------------
+
+The naming policy in `src/name.rs` is pure and is unit tested directly.
+Everything else is a terminal talking to a terminal, and the only honest way to
+test that is to give it one: `tests/smoke.rs` spawns the real binary on a real
+pseudo-terminal, reads what it paints, and drives it with real keystrokes.
+
+One trap, because it has already caught someone: the harness drains the
+pseudo-terminal on its own thread, always. A test that reads only while waiting
+for output fills the buffer the moment it stops, dirk blocks in `write`, and the
+next keystroke is never processed — which looks exactly like dirk ignoring your
+input.
+
+
+The backlog
+-----------
+
+The roadmap and the issue tracker are the same thing, and both are files in the
+repository, kept with cairn <https://github.com/oddurs/cairn>.
+
+    $ cairn next          # what is ready to start
+    $ cairn show 44       # the reasoning that produced it
+    $ cairn claim 44      # take it
+    $ cairn check         # must pass before the work is finished
+
+There are no ad-hoc TODO, PLAN or NOTES files in this repository, and there
+should not be: an item carries the same information, appears on the board, and
+arrives in the generated roadmap. `ROADMAP.md` is generated — never edit it.
+
+
+Agents
+------
+
+`AGENTS.md` is the brief every coding agent reads. `.claude/agents/` holds
+subagents for the jobs this repository actually has: the backlog, the pty smoke
+tests, the chrome, NEWS, review, and the documentation. `.claude/commands/`
+holds the loop above, so `/ship` is the same thing `git work ship` is.
+
+The history says who decided something, not which program typed it.
+`.githooks/commit-msg` strips tool attribution from every commit message —
+`Co-authored-by` trailers naming a tool, generated-with footers — regardless of
+which harness is running. Human co-authors are left alone.
+
+
+Style
+-----
+
+`cargo fmt` decides formatting; do not argue with it in review. Comments say
+why, not what — the code already says what. A comment recording a decision, a
+trap, or something that was tried and rejected is worth keeping; one that
+narrates the next line is not.
+
+Commit subjects are lowercase, colon-prefixed by area, and say what changed
+rather than what was done: `boards: a row that reports without being opened`.
+The body says why, in prose, with a GNU-style file list at the end when the
+change touches more than one place.
+
+
+Cutting a release
+-----------------
+
+NEWS is the changelog. Release notes are cut from it rather than written twice,
+which means writing it is the first step and not the last.
+
+    $ $EDITOR NEWS                # a new "* Noteworthy changes in release X"
+    $ make news                   # what the release notes will say
+    $ git work release 0.5.0      # branch, bump, commit, pull request
+    ... it lands ...
+    $ git work tag 0.5.0          # tag main, which cuts the release
+
+The tag is the trigger. `.github/workflows/release.yml` refuses to build if the
+tag, `Cargo.toml` and NEWS disagree about the version — a release whose notes
+belong to a different version is worse than no release — then builds five
+targets, tars each with the README, COPYING, NEWS and the manual page, adds the
+source tarball from `make dist`, writes SHA256SUMS, and publishes.
+
+Nothing about a release happens outside the ordinary loop except the tag
+itself.
+
+
+----------------------------------------------------------------------
+Copyright (C) 2026 Oddur Sigurdsson.
+
+Copying and distribution of this file, with or without modification, are
+permitted in any medium without royalty provided the copyright notice and this
+notice are preserved.
