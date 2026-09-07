@@ -299,13 +299,112 @@ fn attention(session: &Session, sort: Sort) -> Vec<(usize, usize)> {
     v
 }
 
+/// A section as it was last drawn.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Band {
+    index: usize,
+    len: usize,
+    y: u16,
+    height: u16,
+}
+
+/// Keep a section's selection visible inside its own band, with a margin.
+fn scroll_within(offset: &mut usize, at: usize, len: usize, height: usize) {
+    const MARGIN: usize = 1;
+    if len <= height {
+        *offset = 0;
+        return;
+    }
+    let top = at.saturating_sub(MARGIN);
+    let bottom = (at + MARGIN + 1).min(len);
+    if *offset > top {
+        *offset = top;
+    } else if bottom > *offset + height {
+        *offset = bottom - height;
+    }
+    *offset = (*offset).min(len - height);
+}
+
+/// Split the flat row list into one range per section.
+///
+/// The list is flat because selection, hit testing and targets all want one
+/// index space. Height, though, is allocated per section — so this is the one
+/// place that has to know where the seams are.
+pub fn sections(rows: &[Row]) -> Vec<(Section, std::ops::Range<usize>)> {
+    let mut out: Vec<(Section, std::ops::Range<usize>)> = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if let Row::Heading(section, _) = row {
+            if let Some(last) = out.last_mut() {
+                last.1.end = i;
+            }
+            out.push((*section, i..rows.len()));
+        }
+    }
+    out
+}
+
+/// Give each section a height.
+///
+/// A section that fits gets exactly what it needs; only sections asking for
+/// more than their share are shrunk, and the space a short section did not want
+/// goes to the ones that did. Without this the nav is one list with one offset
+/// and whatever is last simply falls off the bottom — which is the agents
+/// section, the one that exists to be noticed.
+pub fn allocate(wants: &[usize], height: usize) -> Vec<usize> {
+    let total: usize = wants.iter().sum();
+    if total <= height || wants.is_empty() {
+        return wants.to_vec();
+    }
+
+    // Everyone is offered an equal share. Whoever wants less takes only what
+    // they want, and what they leave is offered round again.
+    let mut given = vec![0usize; wants.len()];
+    let mut left = height;
+    let mut open: Vec<usize> = (0..wants.len()).collect();
+
+    while !open.is_empty() {
+        let share = left / open.len();
+        // Nothing left to divide: the remainder goes to the first claimants,
+        // one line each, rather than to nobody.
+        if share == 0 {
+            for (n, &i) in open.iter().enumerate() {
+                given[i] += usize::from(n < left);
+            }
+            break;
+        }
+        let (small, big): (Vec<usize>, Vec<usize>) =
+            open.iter().partition(|&&i| wants[i] - given[i] <= share);
+        if small.is_empty() {
+            for &i in &open {
+                given[i] += share;
+            }
+            // Whatever rounding left over goes to the first section, which is
+            // the one nearest the top of the screen.
+            let used = share * open.len();
+            given[open[0]] += left - used;
+            break;
+        }
+        for &i in &small {
+            left -= wants[i] - given[i];
+            given[i] = wants[i];
+        }
+        open = big;
+    }
+    given
+}
+
 /// Where the nav is looking. Distinct from focus: moving the selection does not
 /// move the keyboard, and Enter is what commits it.
 #[derive(Debug, Default)]
 pub struct Nav {
     pub selected: usize,
-    pub offset: usize,
     pub sort: Sort,
+    /// One scroll offset per section, keyed by position in `sections()`. A
+    /// section that fits is never scrolled at all.
+    offsets: Vec<usize>,
+    /// Where each section ended up on screen, so the wheel can find the one
+    /// under the pointer.
+    bands: Vec<Band>,
     /// Whether the view should chase the selection on the next frame.
     ///
     /// Set when the selection moves, cleared once the scroll has happened.
@@ -365,42 +464,24 @@ impl Nav {
         rows.get(self.selected).copied()
     }
 
-    /// Keep the offset pointing at rows that exist. Rows come and go as
-    /// workspaces open and close, and an offset past the end draws nothing.
-    fn clamp(&mut self, len: usize, height: usize) {
-        if len <= height {
-            self.offset = 0;
-            return;
-        }
-        self.offset = self.offset.min(len - height);
-    }
-
-    /// Keep the selection visible with a margin, so it never sits on the edge
-    /// with no context on one side of it.
-    fn scroll_to(&mut self, len: usize, height: usize) {
-        const MARGIN: usize = 2;
-        if len <= height {
-            self.offset = 0;
-            return;
-        }
-        let top = self.selected.saturating_sub(MARGIN);
-        let bottom = (self.selected + MARGIN + 1).min(len);
-        if self.offset > top {
-            self.offset = top;
-        } else if bottom > self.offset + height {
-            self.offset = bottom - height;
-        }
-        self.offset = self.offset.min(len - height);
-    }
-
     pub fn cycle_sort(&mut self) {
         self.sort = self.sort.next();
     }
 
-    /// Scroll without moving the selection, which is what a wheel does.
-    pub fn scroll_by(&mut self, delta: isize, len: usize, height: usize) {
+    /// Scroll the section under the pointer, without moving the selection.
+    pub fn scroll_by(&mut self, row: u16, delta: isize) {
+        let Some(band) = self
+            .bands
+            .iter()
+            .find(|b| row >= b.y && row < b.y + b.height)
+        else {
+            return;
+        };
+        let (i, len, height) = (band.index, band.len, band.height as usize);
         let max = len.saturating_sub(height);
-        self.offset = (self.offset as isize + delta).clamp(0, max as isize) as usize;
+        if let Some(off) = self.offsets.get_mut(i) {
+            *off = (*off as isize + delta).clamp(0, max as isize) as usize;
+        }
         // The view is now somewhere the selection did not ask for, and the next
         // frame must not drag it back.
         self.follow = false;
@@ -426,71 +507,102 @@ pub fn render(
     if !nav.active {
         nav.sync(&all, session.focus);
     }
-    let height = area.height as usize;
-    nav.clamp(all.len(), height);
-    if std::mem::take(&mut nav.follow) {
-        nav.scroll_to(all.len(), height);
-    }
+
+    let bands = sections(&all);
+    let wants: Vec<usize> = bands.iter().map(|(_, r)| r.len()).collect();
+    let heights = allocate(&wants, area.height as usize);
+    nav.offsets.resize(bands.len(), 0);
+    nav.bands.clear();
+
+    let follow = std::mem::take(&mut nav.follow);
     let inner = Rect {
         x: area.x + 1,
         width: area.width.saturating_sub(2),
         ..area
     };
+    let mut y = area.y;
 
-    for (line, index) in (nav.offset..all.len())
-        .take(area.height as usize)
-        .enumerate()
-    {
-        let y = area.y + line as u16;
-        let full = Rect {
-            x: area.x,
+    for (b, ((_, range), height)) in bands.iter().zip(heights.iter().copied()).enumerate() {
+        if height == 0 {
+            continue;
+        }
+        let len = range.len();
+        let offset = &mut nav.offsets[b];
+        *offset = (*offset).min(len.saturating_sub(height));
+        if follow && range.contains(&nav.selected) {
+            scroll_within(offset, nav.selected - range.start, len, height);
+        }
+        let offset = *offset;
+        nav.bands.push(Band {
+            index: b,
+            len,
             y,
-            width: area.width,
-            height: 1,
-        };
-        let row = all[index];
+            height: height as u16,
+        });
 
-        // A selected row is marked whether or not the nav holds the keyboard,
-        // but only brightly while it does — otherwise two things on screen
-        // claim to be "where you are".
-        if nav.selected == index && row.selectable() {
-            fill(
+        for line in 0..height {
+            let index = range.start + offset + line;
+            if index >= range.end {
+                break;
+            }
+            let row = all[index];
+            let ry = y + line as u16;
+            let full = Rect {
+                x: area.x,
+                y: ry,
+                width: area.width,
+                height: 1,
+            };
+
+            // A selected row is marked whether or not the nav holds the
+            // keyboard, but only brightly while it does -- otherwise two things
+            // on screen claim to be "where you are".
+            if nav.selected == index && row.selectable() {
+                fill(
+                    buf,
+                    full,
+                    if nav.active {
+                        THEME.selected()
+                    } else {
+                        THEME.active_row()
+                    },
+                );
+            }
+            draw(
                 buf,
-                full,
-                if nav.active {
-                    THEME.selected()
-                } else {
-                    THEME.active_row()
+                hits,
+                row,
+                &Ctx {
+                    inner,
+                    sort: nav.sort,
+                    y: ry,
+                    session,
+                    selected: nav.selected == index && row.selectable(),
+                    active: nav.active,
                 },
             );
+            if let Some(t) = row.target() {
+                hits.push(full, t);
+            }
         }
-        draw(
-            buf,
-            hits,
-            row,
-            &Ctx {
-                inner,
-                sort: nav.sort,
-                y,
-                session,
-                selected: nav.selected == index && row.selectable(),
-                active: nav.active,
-            },
-        );
-        if let Some(t) = row.target() {
-            hits.push(full, t);
-        }
-    }
 
-    // A list with more below it should say so, rather than simply ending.
-    if all.len() > area.height as usize {
-        let more = all.len() - nav.offset - area.height as usize;
-        if more > 0 {
-            let y = area.y + area.height - 1;
-            let text = format!("{more} more");
-            let x = area.right().saturating_sub(text.chars().count() as u16 + 1);
-            write_str(buf, x, y, &text, THEME.faint(), area.width);
+        // A section with more below it says so on its own last line, rather
+        // than simply ending.
+        let hidden = len.saturating_sub(offset + height);
+        if hidden > 0 {
+            let text = format!("{hidden} more");
+            let x = inner.right().saturating_sub(text.chars().count() as u16);
+            write_str(
+                buf,
+                x,
+                y + height as u16 - 1,
+                &text,
+                THEME.faint(),
+                inner.width,
+            );
         }
+
+        y += height as u16;
     }
 
     all
@@ -920,61 +1032,6 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_keeps_the_selection_off_the_edges() {
-        let rows: Vec<Row> = (0..40)
-            .map(|w| Row::Workspace { p: 0, w, n: w + 1 })
-            .collect();
-        let mut nav = Nav::default();
-        let height = 10;
-
-        nav.selected = 0;
-        nav.scroll_to(rows.len(), height);
-        assert_eq!(
-            nav.offset, 0,
-            "the top does not scroll to make room above it"
-        );
-
-        nav.selected = 20;
-        nav.scroll_to(rows.len(), height);
-        assert!(
-            nav.offset <= 20 && 20 < nav.offset + height,
-            "selection visible"
-        );
-        assert!(20 - nav.offset >= 2, "with room above");
-        assert!(nav.offset + height - 20 > 2, "and below");
-
-        nav.selected = 39;
-        nav.scroll_to(rows.len(), height);
-        assert_eq!(
-            nav.offset, 30,
-            "the bottom stops rather than scrolling past"
-        );
-    }
-
-    #[test]
-    fn a_list_shorter_than_the_pane_never_scrolls() {
-        let rows = sample();
-        let mut nav = Nav {
-            selected: rows.len() - 1,
-            ..Nav::default()
-        };
-        nav.scroll_to(rows.len(), 40);
-        assert_eq!(nav.offset, 0);
-    }
-
-    #[test]
-    fn the_wheel_cannot_scroll_past_either_end() {
-        let rows: Vec<Row> = (0..20)
-            .map(|w| Row::Workspace { p: 0, w, n: w + 1 })
-            .collect();
-        let mut nav = Nav::default();
-        nav.scroll_by(-5, rows.len(), 10);
-        assert_eq!(nav.offset, 0);
-        nav.scroll_by(500, rows.len(), 10);
-        assert_eq!(nav.offset, 10, "the last row stays on screen");
-    }
-
-    #[test]
     fn every_selectable_row_knows_what_activating_it_means() {
         for row in sample() {
             if row.selectable() {
@@ -1048,79 +1105,74 @@ mod tests {
         assert_ne!(pane.target(), Row::Workspace { p: 1, w: 2, n: 1 }.target());
     }
 
-    /// What `render` does to the scroll each frame, without a terminal.
-    fn frame(nav: &mut Nav, len: usize, height: usize) {
-        nav.clamp(len, height);
-        if std::mem::take(&mut nav.follow) {
-            nav.scroll_to(len, height);
+    #[test]
+    fn sections_that_fit_all_get_what_they_asked_for() {
+        assert_eq!(allocate(&[3, 5, 2], 20), vec![3, 5, 2]);
+        assert_eq!(allocate(&[3, 5, 2], 10), vec![3, 5, 2]);
+    }
+
+    #[test]
+    fn only_the_greedy_sections_are_shrunk() {
+        // Layouts wants 3, spaces wants 40, agents wants 4, and there are 20
+        // lines. The two small sections should get exactly what they need; the
+        // large one absorbs the shortfall on its own.
+        let given = allocate(&[3, 40, 4], 20);
+        assert_eq!(given[0], 3, "a section that fits should not be shrunk");
+        assert_eq!(given[2], 4, "nor should the one after the greedy one");
+        assert_eq!(given[1], 13);
+        assert_eq!(given.iter().sum::<usize>(), 20);
+    }
+
+    #[test]
+    fn the_agents_section_is_never_the_one_silently_cut() {
+        // The failure this exists to prevent: one flat list meant a long spaces
+        // section pushed agents off the bottom entirely.
+        let given = allocate(&[3, 100, 4], 20);
+        assert!(given[2] > 0, "agents got no height at all: {given:?}");
+        assert_eq!(given.iter().sum::<usize>(), 20);
+    }
+
+    #[test]
+    fn every_line_is_handed_out_even_when_there_are_barely_any() {
+        for height in 0..12 {
+            let given = allocate(&[5, 5, 5], height);
+            assert_eq!(
+                given.iter().sum::<usize>(),
+                height,
+                "at height {height}: {given:?}"
+            );
         }
     }
 
     #[test]
-    fn the_wheel_survives_the_next_frame() {
-        // Scrolling to the selection on every frame silently undid the wheel
-        // between one redraw and the next, which made it do nothing at all.
-        let rows: Vec<Row> = (0..40)
-            .map(|w| Row::Workspace { p: 0, w, n: w + 1 })
-            .collect();
-        let mut nav = Nav::default();
-        frame(&mut nav, rows.len(), 10);
-
-        nav.scroll_by(6, rows.len(), 10);
-        assert_eq!(nav.offset, 6);
-        frame(&mut nav, rows.len(), 10);
-        assert_eq!(
-            nav.offset, 6,
-            "the frame dragged the view back to the selection"
-        );
-    }
-
-    #[test]
-    fn moving_the_selection_does_bring_the_view_with_it() {
-        let rows: Vec<Row> = (0..40)
-            .map(|w| Row::Workspace { p: 0, w, n: w + 1 })
-            .collect();
-        let mut nav = Nav::default();
-        for _ in 0..30 {
-            nav.step(&rows, 1);
-        }
-        frame(&mut nav, rows.len(), 10);
-        assert!(
-            nav.offset > 0,
-            "the view should follow a selection that walked off it"
-        );
-        assert!(nav.selected >= nav.offset && nav.selected < nav.offset + 10);
-    }
-
-    #[test]
-    fn an_offset_past_the_end_is_pulled_back() {
-        // Workspaces close, and the list gets shorter under a scrolled view.
-        let mut nav = Nav {
-            offset: 30,
-            ..Nav::default()
-        };
-        nav.clamp(12, 10);
-        assert_eq!(nav.offset, 2);
-        nav.clamp(4, 10);
-        assert_eq!(
-            nav.offset, 0,
-            "a list shorter than the pane starts at the top"
-        );
-    }
-
-    #[test]
-    fn syncing_to_where_the_selection_already_is_does_not_disturb_the_view() {
+    fn sections_are_found_by_their_headings() {
         let rows = sample();
-        let mut nav = Nav::default();
-        nav.sync(&rows, Focus::Ws { p: 0, w: 0 });
-        frame(&mut nav, rows.len(), 4);
+        let found = sections(&rows);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].0, Section::Layouts);
+        assert_eq!(found[1].0, Section::Spaces);
+        // Contiguous, and covering everything from the first heading on.
+        assert_eq!(found[0].1.end, found[1].1.start);
+        assert_eq!(found[1].1.end, rows.len());
+    }
 
-        nav.scroll_by(1, rows.len(), 4);
-        let scrolled = nav.offset;
-        // `render` syncs every frame while the nav is not driving; that must
-        // not count as the selection moving.
-        nav.sync(&rows, Focus::Ws { p: 0, w: 0 });
-        frame(&mut nav, rows.len(), 4);
-        assert_eq!(nav.offset, scrolled);
+    #[test]
+    fn a_section_that_fits_is_never_scrolled() {
+        let mut offset = 3;
+        scroll_within(&mut offset, 2, 4, 10);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn a_section_scrolls_to_keep_its_own_selection_visible() {
+        let mut offset = 0;
+        scroll_within(&mut offset, 18, 40, 6);
+        assert!(
+            offset <= 18 && 18 < offset + 6,
+            "selection outside the band"
+        );
+        // And stops rather than scrolling past the end.
+        scroll_within(&mut offset, 39, 40, 6);
+        assert_eq!(offset, 34);
     }
 }

@@ -144,9 +144,14 @@ pub struct Session {
     pub layouts: Vec<Layout>,
     pub projects: Vec<Project>,
     pub focus: Focus,
-    /// Where focus was before a layout was opened, so closing one returns you
-    /// exactly there rather than to whatever happens to be first.
-    previous: Option<Focus>,
+    /// The pane that had focus before a layout was opened, so closing one
+    /// returns you exactly there.
+    ///
+    /// A pane id rather than `Focus`: `Focus::Ws` is a pair of indices, and
+    /// `reap` removes workspaces and projects with `Vec::remove`, which shifts
+    /// every index after them. Restoring by index lands you on whatever moved
+    /// into the slot — exactly what "exactly where you were" promised not to do.
+    previous: Option<PaneId>,
     pub shell: String,
     scrollback: usize,
     next_id: u64,
@@ -389,7 +394,7 @@ impl Session {
             });
         }
         if !matches!(self.focus, Focus::Layout(_)) {
-            self.previous = Some(self.focus);
+            self.previous = self.active_pane().map(|p| p.id);
         }
         self.focus = Focus::Layout(i);
     }
@@ -424,10 +429,9 @@ impl Session {
                 if empty || ws.panes.is_empty() {
                     self.layouts[i].ws = None;
                     if self.focus == Focus::Layout(i) {
-                        // Back exactly where you were, if that is still there.
-                        let back = self.previous.filter(
-                            |f| matches!(f, Focus::Ws { p, w } if self.workspace(*p, *w).is_some()),
-                        );
+                        // Back exactly where you were, found by identity so a
+                        // workspace closing in the meantime cannot redirect it.
+                        let back = self.previous.and_then(|id| self.holding(id));
                         self.focus = back
                             .or_else(|| self.first_workspace())
                             .unwrap_or(Focus::Layout(i));
@@ -456,6 +460,18 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Which workspace holds this pane, if any still does.
+    fn holding(&self, id: PaneId) -> Option<Focus> {
+        for (p, proj) in self.projects.iter().enumerate() {
+            for (w, ws) in proj.workspaces.iter().enumerate() {
+                if ws.panes.iter().any(|x| x.id == id) {
+                    return Some(Focus::Ws { p, w });
+                }
+            }
+        }
+        None
     }
 
     fn first_workspace(&self) -> Option<Focus> {
@@ -488,8 +504,17 @@ impl Session {
     /// and `reap` does the structural work — so closing by hand and a program
     /// exiting on its own take exactly the same path.
     pub fn close_focused(&mut self) {
-        if let Some(pane) = self.active_pane_mut() {
-            pane.close();
+        let Some(pane) = self.active_pane_mut() else {
+            return;
+        };
+        let (id, already_gone) = (pane.id, pane.dead);
+        pane.close();
+        // Killing a child that has already exited produces no new event, so a
+        // stopped pane would sit there for ever waiting to be reaped by
+        // something that was never going to arrive. This is the one case that
+        // has to reap itself.
+        if already_gone {
+            self.reap(id);
         }
     }
 

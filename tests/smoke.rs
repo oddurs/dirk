@@ -36,6 +36,13 @@ const COLS: u16 = 80;
 /// had drawn anything.
 const READY: &str = "+ workspace";
 
+/// How long to allow for dirk to come up.
+///
+/// Generous on purpose. Starting is a process spawn, a pty, a shell and a first
+/// frame, and on a loaded CI runner that is not instant — a tight bound here
+/// fails as "never started" and reads like a bug in dirk.
+const START: Duration = Duration::from_secs(30);
+
 /// Unique per config directory, so concurrent tests do not share one.
 fn next_config_id() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -171,6 +178,14 @@ impl Harness {
         self.rows().join("\n")
     }
 
+    /// A left click at a cell, in the SGR encoding dirk enables.
+    fn click(&mut self, col: u16, row: u16) {
+        let (c, r) = (col + 1, row + 1);
+        self.send(format!("\x1b[<0;{c};{r}M").as_bytes());
+        self.send(format!("\x1b[<0;{c};{r}m").as_bytes());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
     fn send(&mut self, bytes: &[u8]) {
         self.writer.write_all(bytes).expect("write");
         self.writer.flush().expect("flush");
@@ -189,7 +204,7 @@ fn it_comes_up_and_draws_its_chrome() {
 
     // The nav's three sections, as plain words.
     assert!(
-        h.wait_for(READY, Duration::from_secs(10)),
+        h.wait_for(READY, START),
         "the nav never drew; dirk drew:\n{}",
         h.drawn()
     );
@@ -203,7 +218,7 @@ fn it_comes_up_and_draws_its_chrome() {
 #[test]
 fn a_shell_in_a_pane_runs_and_echoes() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // Straight through to the pane: no prefix, so this is the focused shell.
     h.send(b"echo dirk-is-alive\r");
@@ -217,7 +232,7 @@ fn a_shell_in_a_pane_runs_and_echoes() {
 #[test]
 fn the_prefix_opens_the_picker_and_escape_closes_it() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // Ctrl-Space, then o.
     h.send(&[0]);
@@ -233,7 +248,7 @@ fn the_prefix_opens_the_picker_and_escape_closes_it() {
 #[test]
 fn prefix_q_quits() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     h.send(&[0]);
     h.send(b"q");
@@ -264,7 +279,7 @@ impl Harness {
 #[test]
 fn splitting_twice_gives_three_side_by_side_columns() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // The sidebar is hidden so the panes are wide enough that neither the
     // echoed command nor the marker wraps; a wrapped marker is not a layout
@@ -322,7 +337,7 @@ fn splitting_twice_gives_three_side_by_side_columns() {
 #[test]
 fn closing_a_split_pane_gives_the_whole_width_back() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     h.prefix(b"|");
     h.prefix(b"x");
@@ -364,7 +379,7 @@ title = "lower"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // The configured layout replaces the built-in ones, so it is the only entry
     // in the section above the tree.
@@ -402,7 +417,7 @@ key = "9"
 command = ["definitely-not-installed-anywhere"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     // An entry that could only ever show `command not found` is worse than no
     // entry, so it is dropped at startup rather than left to fail on first use.
@@ -434,7 +449,7 @@ title = "right"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
     h.prefix(b"9");
     assert!(
         h.wait_for("left", Duration::from_secs(10)),
@@ -473,7 +488,7 @@ key = "9"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
     assert!(
         h.wait_for("Solo", Duration::from_secs(5)),
         "layout not listed\n{}",
@@ -512,7 +527,7 @@ command = ["/bin/sh"]
 #[test]
 fn escape_leaves_the_nav_without_going_anywhere() {
     let mut h = Harness::start();
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
 
     h.prefix(b"w");
     h.send(b"j");
@@ -556,7 +571,7 @@ title = "alive"
 command = ["/bin/sh"]
 "#,
     );
-    assert!(h.wait_for(READY, Duration::from_secs(10)), "never started");
+    assert!(h.wait_for(READY, START), "never started");
     h.prefix(b"9");
 
     assert!(
@@ -580,4 +595,85 @@ command = ["/bin/sh"]
         "the layout was rearranged around it\n{}",
         h.drawn()
     );
+}
+
+#[test]
+fn a_stopped_layout_pane_can_still_be_closed() {
+    // Holding a stopped pane introduced its own trap: `close` kills the child,
+    // and killing one that has already exited produces no new event -- so the
+    // pane sat there waiting to be reaped by something that was never coming.
+    let mut h = Harness::start_with_config(
+        r#"
+[[layout]]
+name = "Test"
+key = "9"
+split = "rows"
+
+[[layout.pane]]
+title = "report"
+command = ["/bin/sh", "-c", "printf 'zz%s' KEPT; exit 3"]
+
+[[layout.pane]]
+title = "alive"
+command = ["/bin/sh"]
+"#,
+    );
+    assert!(h.wait_for(READY, START), "never started");
+    h.prefix(b"9");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("exited 3").is_some()),
+        "the pane never reported stopping\n{}",
+        h.drawn()
+    );
+
+    // Focus is on the first leaf, which is the stopped one.
+    h.prefix(b"x");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzKEPT").is_none()),
+        "x did not close the stopped pane\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.find("alive").is_some(),
+        "closing it took the layout with it\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_quit_button_takes_two_clicks() {
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    // The button is the last cell of the bottom row.
+    let (row, col) = h
+        .rows()
+        .iter()
+        .enumerate()
+        .find_map(|(r, line)| line.find('✕').map(|c| (r, line[..c].chars().count())))
+        .expect("no quit button in the rail");
+    assert_eq!(row, ROWS as usize - 1, "the button belongs in the rail");
+
+    // One click arms it and says so; it must not quit.
+    h.click(col as u16, row as u16);
+    assert!(
+        h.wait_for("quit?", Duration::from_secs(5)),
+        "one click should arm, not quit\n{}",
+        h.drawn()
+    );
+    assert!(
+        h.child.try_wait().ok().flatten().is_none(),
+        "one click quit dirk"
+    );
+
+    // The second confirms.
+    h.click(col as u16, row as u16);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = h.child.try_wait() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("the second click did not quit\n{}", h.drawn());
 }
