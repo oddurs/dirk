@@ -493,17 +493,33 @@ impl Nav {
     }
 }
 
+/// Everything outside the nav that a frame of it depends on.
+///
+/// The same argument as `Ctx` one level down: the signature was growing a
+/// parameter every time a row learned to say something new, and four of them
+/// are read-only for the whole frame.
+pub struct Frame<'a> {
+    pub cfg: &'a Config,
+    pub glyphs: &'a Glyphs,
+    pub session: &'a Session,
+    /// What a board last reported about itself, by name.
+    pub badges: &'a dyn Fn(&str) -> Option<String>,
+}
+
 pub fn render(
     buf: &mut Buffer,
     area: Rect,
-    cfg: &Config,
-    session: &Session,
-    badges: &dyn Fn(&str) -> Option<String>,
+    f: &Frame,
     nav: &mut Nav,
     hits: &mut HitMap,
 ) -> Vec<Row> {
+    let Frame {
+        cfg,
+        glyphs,
+        session,
+        badges,
+    } = *f;
     fill(buf, area, THEME.panel());
-    let glyphs = cfg.nav.glyphs();
     let all = rows(cfg, session);
     if area.width < 8 || area.height == 0 {
         return all;
@@ -582,7 +598,7 @@ pub fn render(
                 row,
                 &Ctx {
                     inner,
-                    g: &glyphs,
+                    g: glyphs,
                     badges,
                     y: ry,
                     session,

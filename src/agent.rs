@@ -106,12 +106,17 @@ pub fn defaults() -> Vec<Kind> {
             &["Allow command?", "Approve?"],
             true,
         ),
-        k(
-            "opencode",
-            &["opencode/cli", "opencode/bin"],
-            &["Allow", "Approve"],
-            true,
-        ),
+        // The four below are recognised but ship with no markers, on purpose.
+        // A marker is a string another program prints, and these are ones dirk
+        // has not verified. A missing one degrades to "never blocked" -- the
+        // state dirk had before any of this -- while a wrong one is an
+        // interruption you did not need, and bare words like "Allow" and
+        // "Approve" appear in ordinary agent prose beside a numbered plan,
+        // which is exactly what the menu rule looks for.
+        //
+        // `dirk agent hooks <name>` is the better answer for these anyway, and
+        // anybody who knows the phrase can add it in four lines of config.
+        k("opencode", &["opencode/cli", "opencode/bin"], &[], true),
         k(
             "aider",
             &["aider/main", "aider.main"],
@@ -120,24 +125,9 @@ pub fn defaults() -> Vec<Kind> {
             false,
         ),
         k("goose", &["goose/cli"], &["Do you approve"], true),
-        k(
-            "amp",
-            &["amp/cli", "sourcegraph/amp"],
-            &["Allow", "Approve"],
-            true,
-        ),
-        k(
-            "cursor-agent",
-            &["cursor-agent"],
-            &["Allow", "Approve"],
-            true,
-        ),
-        k(
-            "gemini",
-            &["gemini/cli", "google-gemini"],
-            &["Allow", "Apply this change"],
-            true,
-        ),
+        k("amp", &["amp/cli", "sourcegraph/amp"], &[], true),
+        k("cursor-agent", &["cursor-agent"], &[], true),
+        k("gemini", &["gemini/cli", "google-gemini"], &[], true),
     ]
 }
 
@@ -338,16 +328,6 @@ impl State {
 }
 
 impl State {
-    /// Whether this is a claim that nothing is happening.
-    ///
-    /// Output contradicts one of these and nothing else. A pane producing text
-    /// is not finished, whatever it said a minute ago -- and without that rule
-    /// a harness whose hook fires on stop but not on start sticks on `done`
-    /// while it grinds, which is worse than the guess it replaced.
-    pub fn quiescent(self) -> bool {
-        matches!(self, State::Done | State::Idle | State::Starting)
-    }
-
     pub fn named(name: &str) -> Option<State> {
         Some(match name {
             "blocked" => State::Blocked,
@@ -614,16 +594,32 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_says_how_to_tell_it_is_waiting() {
-        // A kind with no markers can never be blocked, which is the state dirk
-        // had before any of this and not worth shipping again by omission.
+    fn every_kind_can_be_found_and_most_can_be_read() {
+        // Everything shipped has to be recognisable, or it is an entry that
+        // does nothing.
         for kind in &defaults() {
-            assert!(
-                !kind.blocked.is_empty(),
-                "{} has no blocked markers",
-                kind.name
-            );
             assert!(!kind.names.is_empty(), "{} matches nothing", kind.name);
+            assert!(!kind.command.is_empty(), "{} cannot be started", kind.name);
+        }
+        // Markers are a different promise. A kind without them relies on the
+        // hook and is never falsely blocked; a kind with them must not carry
+        // one that matches ordinary prose.
+        //
+        // What separates a prompt from a word is a second word or some
+        // punctuation. "Approve?" is a question being asked and "(Y)es/(N)o" is
+        // an answer set; "Approve" is half of "Approved by", and the menu rule
+        // does not save you from it -- an agent printing a numbered plan
+        // produces exactly the menu that rule looks for.
+        for kind in &defaults() {
+            for marker in &kind.blocked {
+                let asks = marker.contains(' ') || marker.chars().any(|c| !c.is_alphanumeric());
+                assert!(asks, "{}: {marker:?} is a word, not a prompt", kind.name);
+            }
+        }
+        // And the ones dirk was built against still carry theirs.
+        for name in ["claude", "codex", "aider"] {
+            let kind = defaults().into_iter().find(|k| k.name == name).unwrap();
+            assert!(!kind.blocked.is_empty(), "{name} lost its markers");
         }
     }
 

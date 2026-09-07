@@ -51,7 +51,7 @@ pub struct PaneDef {
 /// A layout with a `command` and no `pane` entries is a single-program layout,
 /// which is what the three defaults are. Nothing distinguishes it structurally
 /// from the dashboard except how many leaves it has.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct LayoutDef {
     pub name: String,
@@ -72,7 +72,6 @@ pub struct LayoutDef {
     /// A monitoring dashboard keeps; a thing you opened for ten seconds should
     /// not sit there holding a lock. One boolean rather than a second concept:
     /// a separate "utility window" type would be two code paths that drift.
-    #[serde(default = "yes")]
     pub keep: bool,
 }
 
@@ -98,9 +97,20 @@ impl StatusDef {
     /// writing `100ms` has not thought about what they are asking for.
     pub fn interval(&self) -> std::time::Duration {
         const FLOOR: std::time::Duration = std::time::Duration::from_secs(2);
+        // Capped as well as floored: an interval of a century is a number, not
+        // an intention, and the backoff multiplies whatever this returns.
+        const CEILING: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
         parse_every(&self.every)
             .unwrap_or(std::time::Duration::from_secs(10))
-            .max(FLOOR)
+            .clamp(FLOOR, CEILING)
+    }
+
+    /// How long a run may take before it is killed.
+    ///
+    /// Its own interval, so a board asked every ten seconds may take ten -- but
+    /// never less than a couple of seconds, because a slow disk is not a hang.
+    pub fn cap(&self) -> std::time::Duration {
+        self.interval().max(std::time::Duration::from_secs(2))
     }
 }
 
@@ -667,6 +677,24 @@ impl Default for Config {
 /// Three single-program layouts. One whose program is not installed is dropped
 /// at startup rather than left to fail on first open — an entry that only ever
 /// shows `command not found` is worse than no entry.
+/// Written out rather than derived, because `#[serde(default = "yes")]` is a
+/// *deserialization* default and does not reach `LayoutDef::default()` -- which
+/// is how every shipped board was born with `keep: false` and shut itself down
+/// the first time you looked at another one.
+impl Default for LayoutDef {
+    fn default() -> Self {
+        LayoutDef {
+            name: String::new(),
+            key: None,
+            command: Vec::new(),
+            split: String::new(),
+            pane: Vec::new(),
+            status: None,
+            keep: true,
+        }
+    }
+}
+
 fn default_layouts() -> Vec<LayoutDef> {
     let one = |name: &str, key: char, command: &[&str]| LayoutDef {
         name: name.into(),
@@ -929,6 +957,28 @@ mod tests {
 
     fn parsed(text: &str) -> Config {
         toml::from_str::<Config>(text).expect("parses")
+    }
+
+    #[test]
+    fn a_board_keeps_its_panes_unless_it_says_otherwise() {
+        // `#[serde(default = ...)]` is a deserialization default and does not
+        // reach `LayoutDef::default()`, which is what `default_layouts` builds
+        // every shipped board through. They were all born `keep: false` and
+        // shut themselves down the first time you looked at another one.
+        assert!(LayoutDef::default().keep, "the struct default disagrees");
+        for board in default_layouts() {
+            assert!(board.keep, "shipped board {} does not keep", board.name);
+        }
+        let named: Config =
+            toml::from_str("[[board]]\nname = \"x\"\ncommand = [\"sh\"]\nkeep = false\n")
+                .expect("parses");
+        assert!(!named.layouts[0].keep, "an explicit false was ignored");
+        let quiet: Config =
+            toml::from_str("[[board]]\nname = \"y\"\ncommand = [\"sh\"]\n").expect("parses");
+        assert!(
+            quiet.layouts[0].keep,
+            "a board that said nothing lost its panes"
+        );
     }
 
     #[test]

@@ -1040,6 +1040,39 @@ fn output_contradicts_a_claim_that_nothing_is_happening() {
 }
 
 #[test]
+fn a_reported_block_does_not_outlive_the_answer_you_gave_it() {
+    // A report is a claim about a moment, and the moment ends when the pane
+    // says something the report did not account for. Without that, answering
+    // the prompt leaves the workspace pinned to the top of the attention zone
+    // until the next hook happens to fire.
+    let session = unique("stuck");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let (ok, _) = ask(&session, &["agent", "state", "blocked"]);
+    assert!(ok, "the report was refused");
+    assert!(
+        client.wait_for("needs you", START),
+        "the report never landed\n{}",
+        client.drawn()
+    );
+
+    let (ok, _) = ask(&session, &["pane", "send-keys", &pane, "printf 'zzON'\r"]);
+    assert!(ok, "send-keys failed");
+    assert!(
+        client.wait_until(START, |c| !c.drawn().contains("needs you")),
+        "it was still waiting on somebody after the pane went back to work\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
 fn a_state_nobody_defined_is_refused() {
     let session = unique("nostate");
     let client = Client::attach(&session);

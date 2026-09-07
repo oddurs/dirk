@@ -534,18 +534,43 @@ fn spawn_ticker(tx: Sender<Ev>) {
 /// what dirk does with the text is show it. It does not parse it: the moment
 /// dirk starts understanding git's or cairn's output it owns their formats for
 /// ever, and if you want `3↑ 2•` you write the script that prints `3↑ 2•`.
-fn run_status(run: &[String]) -> Option<String> {
+fn run_status(run: &[String], cap: Duration) -> Option<String> {
     let (program, args) = run.split_first()?;
-    let out = std::process::Command::new(config::expand(program))
+    let mut child = std::process::Command::new(config::expand(program))
         .args(args)
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
-    if !out.status.success() {
-        return None;
+
+    // Given a deadline, because `output()` waits for as long as the child
+    // feels like taking. A `git fetch` against a host that is not answering
+    // would otherwise hold the one badge thread open for ever -- and with it
+    // every other board, none of which would refresh again for the life of the
+    // session.
+    let until = Instant::now() + cap;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if !status.success() => return None,
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= until => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => return None,
+        }
     }
-    let text = String::from_utf8_lossy(&out.stdout);
+
+    let mut text = String::new();
+    if let Some(out) = child.stdout.take() {
+        use std::io::Read;
+        // Bounded: what is wanted is one short line, and a command that decides
+        // to print a gigabyte should not be able to make dirk hold it.
+        let _ = out.take(64 * 1024).read_to_string(&mut text);
+    }
     Some(text.lines().next().unwrap_or_default().trim().to_string())
 }
 
@@ -594,13 +619,24 @@ struct App {
     written: Option<state::Saved>,
     /// The harnesses to recognise, resolved from the configuration.
     kinds: std::sync::Arc<Vec<crate::agent::Kind>>,
+    /// The marks to draw with, resolved from the configuration.
+    ///
+    /// Here rather than in the renderer: it cannot change without a reload, and
+    /// building twenty-two heap strings twice a frame -- once for the nav and
+    /// once for the rail -- on a session where a pane is producing output is a
+    /// few thousand allocations a second for a table that never moves.
+    glyphs: glyph::Glyphs,
     /// What each board last reported, by name.
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
     badging: bool,
-    /// Where focus was at the end of the last turn, so a board that does not
-    /// keep its panes can be shut when you leave it.
-    was: Focus,
+    /// Which board was focused at the end of the last turn, by name, so one
+    /// that does not keep its panes can be shut when you leave it.
+    ///
+    /// By name rather than by index for the same reason `merge_layouts` remaps
+    /// focus by name: a reload can reorder the list, and an index kept across
+    /// one closes a different board than the one you left.
+    was: Option<String>,
     /// A saved session is there and unreadable, so this one does not write.
     readonly: bool,
     /// Whether the failure to save has been mentioned. Once is enough.
@@ -625,6 +661,7 @@ struct App {
 impl App {
     fn new(cfg: Config, session: Session, size: ratatui::layout::Size, tx: Sender<Ev>) -> Self {
         let kinds = std::sync::Arc::new(cfg.kinds());
+        let glyphs = cfg.nav.glyphs();
         let width = size.width;
         let height = size.height;
         let sidebar_w = cfg.sidebar_width;
@@ -644,9 +681,10 @@ impl App {
             session_name: None,
             written: None,
             kinds,
+            glyphs,
             badges: std::collections::HashMap::new(),
             badging: false,
-            was: Focus::Layout(0),
+            was: None,
             readonly: false,
             complained: false,
             socket: None,
@@ -794,13 +832,20 @@ impl App {
         // A board that does not keep its panes loses them when you look away.
         // Checked here rather than at every place focus can move, because focus
         // moves from keys, clicks, the API and a workspace closing under you.
-        if let Focus::Layout(i) = self.was
-            && self.session.focus != self.was
-            && self.session.layouts.get(i).is_some_and(|l| !l.def.keep)
+        let now = match self.session.focus {
+            Focus::Layout(i) => self.session.layouts.get(i).map(|l| l.def.name.clone()),
+            Focus::Ws { .. } => None,
+        };
+        if let Some(left) = self.was.take().filter(|name| Some(name) != now.as_ref())
+            && let Some(i) = self
+                .session
+                .layouts
+                .iter()
+                .position(|l| l.def.name == left && !l.def.keep)
         {
             self.session.close_layout(i);
         }
-        self.was = self.session.focus;
+        self.was = now;
 
         let changes = self.session.update_states(Instant::now());
         self.announce(changes);
@@ -1052,12 +1097,17 @@ impl App {
 
         match req.cmd.as_str() {
             "session.reload" => match Config::reload(&mut self.cfg, &mut self.session) {
-                Ok(said) => Reply::ok(serde_json::json!({
-                    "reloaded": true,
-                    // Whatever the file was wrong about. Empty is the usual
-                    // answer and the only one worth not reading.
-                    "notes": said,
-                })),
+                Ok(said) => {
+                    // Rebuilt here, which is the only place it can change.
+                    self.glyphs = self.cfg.nav.glyphs();
+                    self.kinds = std::sync::Arc::new(self.cfg.kinds());
+                    Reply::ok(serde_json::json!({
+                        "reloaded": true,
+                        // Whatever the file was wrong about. Empty is the usual
+                        // answer and the only one worth not reading.
+                        "notes": said,
+                    }))
+                }
                 Err(e) => Reply::err(e),
             },
 
@@ -1230,13 +1280,21 @@ impl App {
                 let Some(state) = crate::agent::State::named(&arg(0)) else {
                     return Reply::err("no such state");
                 };
-                // No target means the workspace you are looking at, which is
-                // what a hook running inside a pane resolves to anyway.
-                let here = match self.session.focus {
-                    Focus::Ws { p, w } => Some((p, w)),
-                    Focus::Layout(_) => None,
+                // No target means the workspace you are looking at. A target
+                // that was given and did not resolve is an error, not an
+                // invitation to pick one: `--current` outside a pane arrives
+                // here as the literal string, and a hook firing just after its
+                // workspace closed would otherwise land its state -- and its
+                // notification, and its noise -- on whatever you happen to be
+                // looking at instead.
+                let target = match arg(1).is_empty() {
+                    true => match self.session.focus {
+                        Focus::Ws { p, w } => Some((p, w)),
+                        Focus::Layout(_) => None,
+                    },
+                    false => api::target_workspace(&self.session, &arg(1)),
                 };
-                let Some((p, w)) = api::target_workspace(&self.session, &arg(1)).or(here) else {
+                let Some((p, w)) = target else {
                     return Reply::err("no such workspace");
                 };
                 let Some(ws) = self.session.workspace_mut(p, w) else {
@@ -1259,7 +1317,7 @@ impl App {
                 let Some(pane) = api::target_pane(&self.session, &arg(1)) else {
                     return Reply::err("no such pane");
                 };
-                match self.start_agent(pane, &kind) {
+                match self.start_agent(pane, &kind, false) {
                     Ok(id) => Reply::ok(serde_json::json!({
                         "started": kind.name,
                         "pane": id,
@@ -1305,11 +1363,13 @@ impl App {
             .workspace(p, w)
             .and_then(|ws| ws.active_pane())
             .is_some_and(|pane| pane.occupant.available());
+        let mut ours = false;
         if !free {
             let (rows, cols) = (self.content.height, self.content.width);
             if self.session.new_workspace(p, rows, cols).is_none() {
                 return self.note("could not make a workspace");
             }
+            ours = true;
         }
         let Some(pane) = self
             .session
@@ -1324,7 +1384,7 @@ impl App {
         else {
             return self.note("nowhere to start it");
         };
-        match self.start_agent(pane, &kind) {
+        match self.start_agent(pane, &kind, ours) {
             Ok(_) => self.note(&format!("starting {name}")),
             Err(why) => self.note(&why),
         }
@@ -1343,6 +1403,7 @@ impl App {
         &mut self,
         pane: crate::mux::PaneId,
         kind: &crate::agent::Kind,
+        ours: bool,
     ) -> Result<String, String> {
         let Some((p, w)) = api::locate(&self.session, pane) else {
             return Err("no such pane".into());
@@ -1353,7 +1414,12 @@ impl App {
         let Some(target) = ws.pane(pane) else {
             return Err("no such pane".into());
         };
-        if !target.occupant.available() {
+        // A pane dirk made a moment ago is not somebody else's, and it has not
+        // been sampled yet: a fresh one reads as `Unknown` until the next `ps`
+        // round, which is up to a second away. Checking availability there
+        // meant the "make somewhere for it" path could never succeed -- it
+        // refused the workspace it had just created.
+        if !ours && !target.occupant.available() {
             return Err(format!(
                 "that pane is busy: {}",
                 match &target.occupant {
@@ -1411,7 +1477,7 @@ impl App {
             return;
         }
         let now = Instant::now();
-        let due: Vec<(String, Vec<String>)> = self
+        let due: Vec<(String, Vec<String>, Duration)> = self
             .cfg
             .layouts
             .iter()
@@ -1423,14 +1489,17 @@ impl App {
                 let wait = match self.badges.get(&l.name) {
                     // Backing off: doubling to a cap, so a command that cannot
                     // run costs one attempt a minute rather than thirty.
-                    Some(b) if b.fails > 0 => {
-                        status.interval() * 2u32.saturating_pow(b.fails.min(5))
-                    }
+                    // Saturating, because `Duration: Mul<u32>` panics on
+                    // overflow and the interval comes out of a file.
+                    Some(b) if b.fails > 0 => status
+                        .interval()
+                        .saturating_mul(2u32.saturating_pow(b.fails.min(5))),
                     Some(_) => status.interval(),
-                    None => return Some((l.name.clone(), status.run.clone())),
+                    None => return Some((l.name.clone(), status.run.clone(), status.cap())),
                 };
                 let last = self.badges.get(&l.name)?.at;
-                (now.duration_since(last) >= wait).then(|| (l.name.clone(), status.run.clone()))
+                (now.duration_since(last) >= wait)
+                    .then(|| (l.name.clone(), status.run.clone(), status.cap()))
             })
             .collect();
         if due.is_empty() {
@@ -1441,8 +1510,8 @@ impl App {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let mut out = Vec::new();
-            for (name, run) in due {
-                out.push((name, run_status(&run)));
+            for (name, run, cap) in due {
+                out.push((name, run_status(&run, cap)));
             }
             let _ = tx.send(Ev::Badges(out));
         });
@@ -1635,19 +1704,28 @@ impl App {
             let badges = |name: &str| {
                 self.badges
                     .get(name)
-                    .map(|b| b.text.clone().unwrap_or_else(|| "—".into()))
+                    // A dash is an answer: the board was asked and could not
+                    // reply, which is not the same as one nobody asked.
+                    .map(|b| {
+                        b.text
+                            .clone()
+                            .unwrap_or_else(|| self.glyphs.text(glyph::G::Absent).to_string())
+                    })
             };
             self.nav_rows = ui::nav::render(
                 buf,
                 side,
-                &self.cfg,
-                &self.session,
-                &badges,
+                &ui::nav::Frame {
+                    cfg: &self.cfg,
+                    glyphs: &self.glyphs,
+                    session: &self.session,
+                    badges: &badges,
+                },
                 &mut self.nav,
                 &mut self.hits,
             );
         }
-        draw_content(buf, content, &self.session, &mut self.hits);
+        draw_content(buf, content, &self.glyphs, &self.session, &mut self.hits);
 
         let clock = chrono::Local::now().format("%H:%M").to_string();
         let status = if self.prefix { "prefix" } else { &self.status };
@@ -1655,6 +1733,7 @@ impl App {
             buf,
             rail,
             &self.cfg,
+            &self.glyphs,
             &self.session,
             &ui::rail::Now {
                 clock: &clock,
@@ -2113,7 +2192,13 @@ impl App {
 ///
 /// A layout and a project workspace draw identically, because a layout is a
 /// workspace. The only thing this function decides is which one.
-fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitMap) {
+fn draw_content(
+    buf: &mut Buffer,
+    area: Rect,
+    g: &glyph::Glyphs,
+    session: &Session,
+    hits: &mut HitMap,
+) {
     let ws = match session.focus {
         Focus::Layout(i) => match session.layouts.get(i).and_then(|l| l.ws.as_ref()) {
             Some(ws) => ws,
@@ -2135,6 +2220,7 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
             rule(
                 buf,
                 Rect { height: 1, ..r },
+                g,
                 label,
                 pane.exit.as_deref(),
                 id == ws.focus,
@@ -2151,26 +2237,34 @@ fn draw_content(buf: &mut Buffer, area: Rect, session: &Session, hits: &mut HitM
 
 /// `─ brief ─────────────`. A rule rather than a border: three sides of a box
 /// only repeat what the neighbouring pane's own edge already says.
-fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>, focused: bool) {
+fn rule(
+    buf: &mut Buffer,
+    area: Rect,
+    g: &glyph::Glyphs,
+    label: &str,
+    exit: Option<&str>,
+    focused: bool,
+) {
     ui::fill(buf, area, THEME.panel());
 
     // The tail is measured first: the label's budget has to know about it, or a
     // long label is drawn and then written over halfway through a word.
     let tail = exit.map(|e| format!(" {e} · r restarts "));
-    let tail_w = tail.as_ref().map_or(0, |t| {
-        (t.chars().count() as u16).min(area.width.saturating_sub(4))
-    });
+    let tail_w = tail
+        .as_ref()
+        .map_or(0, |t| ui::cells(t).min(area.width.saturating_sub(4)));
 
     let mut x = area.x;
     // The focused pane is marked on its own rule. Without it, a dashboard whose
     // panels have all stopped is uniformly dim and nothing says which one `r`
     // would bring back.
     let (lead, lead_style) = if focused {
-        ("▊ ", THEME.working())
+        (g.text(glyph::G::BarFocused), THEME.working())
     } else {
-        ("─ ", THEME.rule_strong())
+        (g.text(glyph::G::Rule), THEME.rule_strong())
     };
     x += ui::write_str(buf, x, area.y, lead, lead_style, area.width);
+    x += ui::write_str(buf, x, area.y, " ", lead_style, area.width);
 
     let left = area
         .width
@@ -2185,21 +2279,28 @@ fn rule(buf: &mut Buffer, area: Rect, label: &str, exit: Option<&str>, focused: 
         buf,
         x,
         area.y,
-        &ui::elide(label, left, "…"),
+        &ui::elide(label, left, g.text(glyph::G::Ellipsis)),
         style,
         area.width,
     );
     x += ui::write_str(buf, x, area.y, " ", THEME.rule_strong(), area.width);
 
     for c in x..area.right().saturating_sub(tail_w) {
-        ui::write_str(buf, c, area.y, "─", THEME.rule_strong(), 1);
+        ui::write_str(
+            buf,
+            c,
+            area.y,
+            g.text(glyph::G::Rule),
+            THEME.rule_strong(),
+            1,
+        );
     }
     // Elided rather than dropped: a narrow stopped panel showing frozen output
     // and no explanation is the worst version of this.
     if let Some(t) = tail
         && tail_w > 0
     {
-        let text = ui::elide(&t, tail_w as usize, "…");
+        let text = ui::elide(&t, tail_w as usize, g.text(glyph::G::Ellipsis));
         ui::write_str(
             buf,
             area.right() - tail_w,

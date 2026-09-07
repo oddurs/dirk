@@ -36,27 +36,31 @@ the opposite end: the sidebar is the product, and the panes hang off it.
 
 ## Three ideas, and keeping them apart is the whole design
 
-**The nav is three lists, and the order is the argument.** Layouts are places
-you go, spaces are where work lives, agents are what is asking for you.
-Attention flows down the column. The same workspace appears under spaces and
-under agents — that is not duplication: spaces answers "what is open, and
-where", agents answers "what needs me", and they sort differently for exactly
-that reason.
+**The nav is a column ordered by what is likely to need you.** Boards are what
+you glance at, spaces are where the work lives, and between them sits what is
+interrupting. Attention flows down the column.
+
+The middle zone is the same workspaces as spaces, not a second list of its own
+things — spaces answers "what is open, and where" and it answers "what needs
+me". And it is only there when something does: it holds blocked and finished
+work, in the order you would deal with them, and occupies no rows at all when
+there is none.
 
 **The nav lists what is open.** Not what exists —
 `~/Code` has ninety directories in it and a list of ninety things is a file
 browser. A project appears once it has a workspace, and disappears when its last
 one closes. `o` opens something new.
 
-**Layouts are not workspaces — except that they are.** A layout is a named
+**Boards are not workspaces — except that they are.** A board is a named
 arrangement of programs: one system monitor, one dashboard. There is one of
-each, they sit above the rule, and they are built the first time you open one
-rather than all running in the background so that one of them can occasionally
-be glanced at.
+each, they sit at the top of the column, and they are built the first time you
+open one rather than all running in the background so that one of them can
+occasionally be glanced at. A board that can say something about itself does so
+on its own row, which is what makes it an instrument rather than a link.
 
-Structurally a layout *is* a workspace — panes, a split tree, a focused pane and
+Structurally a board *is* a workspace — panes, a split tree, a focused pane and
 a name is the whole of one — so there is no second code path for them. A
-single-program layout and a five-pane dashboard differ only in how many leaves
+single-program board and a five-pane dashboard differ only in how many leaves
 they have.
 
 **Names come from the work, not from you.** A coding agent already publishes a
