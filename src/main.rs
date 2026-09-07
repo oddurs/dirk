@@ -528,6 +528,38 @@ fn spawn_ticker(tx: Sender<Ev>) {
     });
 }
 
+/// Run one board's status command and take the first line of what it said.
+///
+/// One line, because a badge that wraps has already lost the argument -- and
+/// what dirk does with the text is show it. It does not parse it: the moment
+/// dirk starts understanding git's or cairn's output it owns their formats for
+/// ever, and if you want `3↑ 2•` you write the script that prints `3↑ 2•`.
+fn run_status(run: &[String]) -> Option<String> {
+    let (program, args) = run.split_first()?;
+    let out = std::process::Command::new(config::expand(program))
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Some(text.lines().next().unwrap_or_default().trim().to_string())
+}
+
+/// What a board last said about itself.
+struct Badge {
+    /// The text, or nothing while it has not answered yet.
+    text: Option<String>,
+    /// When it last ran, successfully or not.
+    at: Instant,
+    /// Consecutive failures. A command that cannot run is a configuration
+    /// problem, and retrying it every two seconds turns one mistake into a fan.
+    fails: u32,
+}
+
 // ── App ─────────────────────────────────────────────────────────────────
 
 struct App {
@@ -562,6 +594,13 @@ struct App {
     written: Option<state::Saved>,
     /// The harnesses to recognise, resolved from the configuration.
     kinds: std::sync::Arc<Vec<crate::agent::Kind>>,
+    /// What each board last reported, by name.
+    badges: std::collections::HashMap<String, Badge>,
+    /// One round of status commands at a time, for the same reason as `ps`.
+    badging: bool,
+    /// Where focus was at the end of the last turn, so a board that does not
+    /// keep its panes can be shut when you leave it.
+    was: Focus,
     /// A saved session is there and unreadable, so this one does not write.
     readonly: bool,
     /// Whether the failure to save has been mentioned. Once is enough.
@@ -605,6 +644,9 @@ impl App {
             session_name: None,
             written: None,
             kinds,
+            badges: std::collections::HashMap::new(),
+            badging: false,
+            was: Focus::Layout(0),
             readonly: false,
             complained: false,
             socket: None,
@@ -749,6 +791,17 @@ impl App {
         while let Ok(next) = rx.try_recv() {
             self.handle(next);
         }
+        // A board that does not keep its panes loses them when you look away.
+        // Checked here rather than at every place focus can move, because focus
+        // moves from keys, clicks, the API and a workspace closing under you.
+        if let Focus::Layout(i) = self.was
+            && self.session.focus != self.was
+            && self.session.layouts.get(i).is_some_and(|l| !l.def.keep)
+        {
+            self.session.close_layout(i);
+        }
+        self.was = self.session.focus;
+
         let changes = self.session.update_states(Instant::now());
         self.announce(changes);
         !(self.quit || self.session.is_empty())
@@ -844,6 +897,24 @@ impl App {
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
+            Ev::Badges(results) => {
+                self.badging = false;
+                let now = Instant::now();
+                for (name, text) in results {
+                    let fails = match &text {
+                        Some(_) => 0,
+                        None => self.badges.get(&name).map_or(1, |b| b.fails + 1),
+                    };
+                    self.badges.insert(
+                        name,
+                        Badge {
+                            text,
+                            at: now,
+                            fails,
+                        },
+                    );
+                }
+            }
             Ev::Suggested { pane, intent } => self.session.apply_suggestion(pane, intent),
             Ev::Agents(reading) => {
                 self.sampling = false;
@@ -864,6 +935,7 @@ impl App {
                     return;
                 }
                 self.persist();
+                self.read_badges();
                 self.read_agents();
                 self.read_repos();
                 self.session.track_intents(&self.cfg.naming);
@@ -1329,6 +1401,53 @@ impl App {
     /// cheap to be worth a thread. Turning them into names needs the process
     /// table, which does not belong on the drawing thread: `ps` on a loaded
     /// machine is slow, and a slow `ps` must not be able to stop dirk redrawing.
+    /// Ask each board that is due what it has to say.
+    ///
+    /// One round at a time and never on the drawing thread, like every other
+    /// external call. A board with no `status` is not asked anything, which is
+    /// what keeps the default configuration exactly as cheap as it was.
+    fn read_badges(&mut self) {
+        if self.badging {
+            return;
+        }
+        let now = Instant::now();
+        let due: Vec<(String, Vec<String>)> = self
+            .cfg
+            .layouts
+            .iter()
+            .filter_map(|l| {
+                let status = l.status.as_ref()?;
+                if status.run.is_empty() {
+                    return None;
+                }
+                let wait = match self.badges.get(&l.name) {
+                    // Backing off: doubling to a cap, so a command that cannot
+                    // run costs one attempt a minute rather than thirty.
+                    Some(b) if b.fails > 0 => {
+                        status.interval() * 2u32.saturating_pow(b.fails.min(5))
+                    }
+                    Some(_) => status.interval(),
+                    None => return Some((l.name.clone(), status.run.clone())),
+                };
+                let last = self.badges.get(&l.name)?.at;
+                (now.duration_since(last) >= wait).then(|| (l.name.clone(), status.run.clone()))
+            })
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+
+        self.badging = true;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            for (name, run) in due {
+                out.push((name, run_status(&run)));
+            }
+            let _ = tx.send(Ev::Badges(out));
+        });
+    }
+
     fn read_agents(&mut self) {
         // One sample at a time. Without this, a `ps` slower than the tick --
         // which is the loaded machine this is written to survive -- accumulates
@@ -1513,11 +1632,17 @@ impl App {
         self.side = side;
         let buf = f.buffer_mut();
         if side.width > 0 {
+            let badges = |name: &str| {
+                self.badges
+                    .get(name)
+                    .map(|b| b.text.clone().unwrap_or_else(|| "—".into()))
+            };
             self.nav_rows = ui::nav::render(
                 buf,
                 side,
                 &self.cfg,
                 &self.session,
+                &badges,
                 &mut self.nav,
                 &mut self.hits,
             );

@@ -114,9 +114,9 @@ Everything else goes straight through to the program in the pane.
 
 ## What the column says
 
-Three zones down the left, in the order you ask the questions: **layouts** are
-places you go, **needs you** is what is interrupting, and **spaces** is where
-the work lives.
+Three zones down the left, in the order you ask the questions: **boards** are
+what you glance at, **needs you** is what is interrupting, and **spaces** is
+where the work lives.
 
 The middle one is only there when something is in it. A heading with nothing
 under it is slower to read than no heading, and an empty middle is the fastest
@@ -140,6 +140,35 @@ A folded project carries the worst state inside it and a count, so twenty repos
 fit on a screen and the one that is blocked still says so. `rows = "short"`
 drops the branch line, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
+
+### Boards
+
+A board is a named arrangement you jump to — a dashboard, lazygit, a log tail.
+What makes it an instrument rather than a link is that it can report without
+being opened:
+
+```toml
+[[board]]
+name    = "git"
+key     = "g"
+command = ["lazygit"]
+keep    = false              # not left running when you look away
+status  = { run = ["dirk-git-badge"], every = "10s" }
+```
+
+The first line of what `run` prints becomes a badge on the row, at most eight
+columns. dirk does not parse it — the moment it starts understanding git's
+output it owns that format for ever, so if you want `3↑ 2•` you write the script
+that prints `3↑ 2•`.
+
+No `status` means no subprocess, which is what keeps the default configuration
+exactly as cheap as it was. The interval is floored at two seconds, a command
+that fails shows `—` and backs off rather than retrying, and none of it runs on
+the drawing thread. `keep = false` shuts the board's panes when you look away,
+for something you opened for ten seconds that should not sit there holding a
+lock.
+
+`[[layout]]` still parses — it is what these were called first.
 
 ### Knowing an agent is done
 
@@ -287,9 +316,9 @@ path  = "~/Code/dirk"
 agent = "claude"             # twelve repositories do not want one answer
 sound = true
 
-# A layout whose programs are not all on PATH is dropped at startup: an entry
+# A board whose programs are not all on PATH is dropped at startup: an entry
 # that could only ever show `command not found` is worse than no entry.
-[[layout]]
+[[board]]
 name    = "ptop"
 command = ["ptop"]
 key     = "1"
@@ -297,17 +326,17 @@ key     = "1"
 # Panes nest. `size` is lines or columns ("5"), a share ("30%"), or absent to
 # take an even part of what is left. A pane runs in the directory of whatever
 # was focused when the layout opened, unless it names a `cwd` of its own.
-[[layout]]
+[[board]]
 name  = "Overview"
 key   = "4"
 split = "rows"
 
-  [[layout.pane]]
+  [[board.pane]]
   title   = "brief"
   command = ["smali", "brief"]
   size    = "6"
 
-  [[layout.pane]]
+  [[board.pane]]
   split = "cols"
 
     [[layout.pane.pane]]

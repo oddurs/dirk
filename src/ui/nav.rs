@@ -70,7 +70,7 @@ pub enum Section {
 impl Section {
     fn title(self) -> &'static str {
         match self {
-            Section::Layouts => "layouts",
+            Section::Layouts => "boards",
             Section::Spaces => "spaces",
             Section::Attention => "needs you",
         }
@@ -129,6 +129,12 @@ impl Action {
         }
     }
 }
+
+/// How much of a row a badge may take.
+///
+/// Eight columns in a column this narrow. A badge is a glance, and one that
+/// crowds out the name it belongs to has stopped being one.
+pub const BADGE: usize = 8;
 
 /// One line of the nav.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,6 +498,7 @@ pub fn render(
     area: Rect,
     cfg: &Config,
     session: &Session,
+    badges: &dyn Fn(&str) -> Option<String>,
     nav: &mut Nav,
     hits: &mut HitMap,
 ) -> Vec<Row> {
@@ -576,6 +583,7 @@ pub fn render(
                 &Ctx {
                     inner,
                     g: &glyphs,
+                    badges,
                     y: ry,
                     session,
                     selected: nav.selected == index && row.selectable(),
@@ -615,6 +623,8 @@ struct Ctx<'a> {
     inner: Rect,
     /// The marks to draw with, resolved once per frame.
     g: &'a Glyphs,
+    /// What a board last reported about itself, by name.
+    badges: &'a dyn Fn(&str) -> Option<String>,
     y: u16,
     session: &'a Session,
     /// This row is the selection.
@@ -728,7 +738,27 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 false => cx.g.cells(G::Running),
             };
             x += write_str(buf, x, y, " ", THEME.ok(), w);
-            let left = w.saturating_sub(x - inner.x) as usize;
+
+            // What the board has to say for itself, right-aligned and reserved
+            // before the name is written. This is the whole difference between
+            // a link and an instrument: a dashboard you have to open to find
+            // out whether it matters is a link with extra steps.
+            let mut right = 0u16;
+            if let Some(text) = (cx.badges)(&layout.def.name) {
+                let text = elide(&text, BADGE, cx.g.text(G::Ellipsis));
+                let width = cells(&text);
+                right = width + 1;
+                write_str(
+                    buf,
+                    inner.right().saturating_sub(width),
+                    y,
+                    &text,
+                    THEME.faint(),
+                    width,
+                );
+            }
+
+            let left = w.saturating_sub(x - inner.x).saturating_sub(right) as usize;
             let style = if focused {
                 style.patch(THEME.project())
             } else {
