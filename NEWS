@@ -6,6 +6,67 @@ See the end of the file for copying conditions.
 Please send bug reports and suggestions through the project's issue tracker.
 
 
+* Noteworthy changes in release 0.3.0 (2026-09-06)
+
+** What is running in a pane
+
+dirk reads the tty's foreground process group, which is exactly what is running
+in a pane right now -- the thing a shell sets before it waits for a command and
+resets when the command ends.  A pane holds a recognised agent, or is a shell at
+its prompt, or is running something else that is neither and is named rather
+than guessed at.
+
+An agent run under an interpreter is recognised too.  Installed through npm it
+executes as `node`, so its executable says nothing and its identity appears only
+in its command line; that is the one case where a command line is read at all.
+
+** Four states
+
+  working   producing output
+  blocked   an approval prompt is on screen
+  done      stopped, and not looked at since
+  idle      stopped, and seen
+
+`done` and `idle` are the same underlying state, and what separates them is
+whether you have looked.  That is the whole reason `done` exists: finished work
+nobody has noticed is the thing worth showing.  A workspace is seen while it is
+focused, and unseen for any moment of work you are not watching.
+
+An agent that is thinking redraws continuously, so silence is what says it has
+stopped.  Blocked is read from the rows around the cursor, where a question is
+being asked, and matched against markers per agent kind -- a phrase alone is not
+enough, since agents write "would you like" in ordinary prose, so a marker
+counts only above a menu of numbered answers.
+
+** Attention
+
+The rail carries what is owed, and only when it is not zero.  Clicking a count
+goes to the workspace that has been in that state longest.  The agents section of
+the nav is ordered the same way.
+
+A notification is sent when an agent blocks and when it finishes unseen, never
+for the workspace you are looking at, and at most one per workspace per state
+per interval.  Configurable, including off.
+
+** Names
+
+Every agent gets one, taken from the intent of the workspace it is in and unique
+among live agents.  It follows the agent and is cleared when the pane stops
+holding one.  Nothing addresses an agent by name yet; that is v0.4.
+
+** Naming
+
+A blocked agent is no longer renamed after the question it is asking.  Its title
+describes the dialog rather than the work, and the label would stick until the
+next intent arrived.
+
+** Known limitations
+
+Sessions still do not survive the terminal closing, which is v0.4 entire.  There
+is no scrollback view or copy mode, and keybindings are not configurable.  A
+notification cannot yet hand a click back to dirk, which is a packaging question.
+
+
 * Noteworthy changes in release 0.2.0 (2026-09-06)
 
 ** The nav
