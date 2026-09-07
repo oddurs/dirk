@@ -102,6 +102,7 @@ literal one through.
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `a` | start an agent here |
 | `[` | read this pane's scrollback, and copy out of it |
+| `/` | find a line, in any pane |
 | `d` | **detach** — leave, and let everything keep running |
 | `q` | **quit** — end every shell and every agent |
 
@@ -176,6 +177,23 @@ of thing you find out about afterwards.
 you are sitting at, not the one the session is on — and also runs a command on
 the client, `pbcopy` or `wl-copy` or `xclip`, since not every terminal answers
 the escape. `clipboard = [...]` names your own.
+
+## Finding it
+
+`Ctrl-Space /` searches **every pane in the session**, not just the one in front
+of you — the line you are looking for is usually in the pane you were not
+watching, which is why each result says where it came from.
+
+Everything the panes have said is read once, when the search opens, and each
+keystroke filters what was read. Asking the panes again per character would mean
+walking vt100's window over five thousand lines per pane on the thread that
+draws; and a search that shifted under you as a build printed is one you could
+not read the results of.
+
+<kbd>↑</kbd> <kbd>↓</kbd> move through the matches, <kbd>Enter</kbd> stays where
+you landed, and <kbd>Esc</kbd> puts you back where you were — a search you
+abandoned should cost you nothing, including your place. The match is marked
+with the same highlight a selection uses, so it is ready to copy.
 
 ### Boards
 

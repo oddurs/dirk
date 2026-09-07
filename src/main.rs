@@ -48,6 +48,7 @@ mod client;
 mod clipboard;
 mod config;
 mod copy;
+mod find;
 mod git;
 mod glyph;
 mod hit;
@@ -661,6 +662,8 @@ struct App {
     badging: bool,
     /// Selecting, when that is what is happening.
     copy: Option<copy::Mode>,
+    /// Searching, when that is.
+    find: Option<find::Find>,
     /// Which board was focused at the end of the last turn, by name, so one
     /// that does not keep its panes can be shut when you leave it.
     ///
@@ -716,6 +719,7 @@ impl App {
             badges: std::collections::HashMap::new(),
             badging: false,
             copy: None,
+            find: None,
             was: None,
             readonly: false,
             complained: false,
@@ -1805,6 +1809,9 @@ impl App {
             &mut self.hits,
         );
 
+        if let Some(f) = &self.find {
+            ui::found::render(buf, content, &self.glyphs, f, &mut self.hits);
+        }
         if let Some(p) = &self.picker {
             ui::picker::render(
                 buf,
@@ -1908,6 +1915,13 @@ impl App {
                 self.open_picker();
                 return;
             }
+            Target::FoundRow(i) => {
+                if let Some(f) = self.find.as_mut() {
+                    f.at = i;
+                }
+                self.show_found();
+                return;
+            }
             Target::PickerRow(i) => {
                 let path = self
                     .picker
@@ -1955,6 +1969,9 @@ impl App {
         if self.picker.is_some() {
             return self.picker_key(k);
         }
+        if self.find.is_some() && !self.prefix {
+            return self.find_key(k);
+        }
         // Before the prefix: while selecting, keys move a cursor rather than
         // reaching the program, and that has to be escapable without one.
         if self.copy.is_some() && !self.prefix {
@@ -1977,6 +1994,88 @@ impl App {
             return;
         }
         self.send_key(k);
+    }
+
+    /// Read everything every pane has said, and start filtering it.
+    fn start_find(&mut self) {
+        let Some(ws) = self.session.focused_workspace() else {
+            return self.note("nothing to search");
+        };
+        let origin = (ws.focus, self.session.scrolled());
+        self.find = Some(find::Find::new(self.session.everything_said(), origin));
+        self.copy = None;
+    }
+
+    /// Keys while a search is open.
+    fn find_key(&mut self, k: KeyEvent) {
+        let Some(f) = self.find.as_mut() else { return };
+        match k.code {
+            KeyCode::Esc => self.leave_find(true),
+            KeyCode::Enter => self.leave_find(false),
+            // Down and up rather than n and N: this is a box you are typing
+            // into, and a letter that moved the selection would be a letter you
+            // could not search for.
+            KeyCode::Down | KeyCode::Tab => {
+                f.step(1);
+                self.show_found();
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                f.step(-1);
+                self.show_found();
+            }
+            KeyCode::Backspace => {
+                f.query.pop();
+                f.refresh();
+                self.show_found();
+            }
+            KeyCode::Char(c) => {
+                f.query.push(c);
+                f.refresh();
+                self.show_found();
+            }
+            _ => {}
+        }
+    }
+
+    /// Take the view to the match currently pointed at.
+    ///
+    /// The match is marked with the same span a selection uses, so it is
+    /// highlighted by the code that already knows how to do that -- and it is
+    /// there to be copied the moment the search closes.
+    fn show_found(&mut self) {
+        let Some((hit, line)) = self.find.as_ref().and_then(|f| f.current()) else {
+            self.copy = None;
+            return;
+        };
+        let (pane, back, row, col, len) = (line.pane, line.back, line.row, hit.col, hit.len);
+        if let Some((p, w)) = api::locate(&self.session, pane) {
+            self.session.focus = Focus::Ws { p, w };
+        }
+        if let Some(ws) = self.session.focused_workspace_mut() {
+            ws.focus = pane;
+        }
+        self.session.scroll_to(pane, back);
+
+        let mut mode = copy::Mode::new(pane, (row, col + len.saturating_sub(1)));
+        mode.anchor = Some((row, col));
+        self.copy = Some(mode);
+    }
+
+    /// Close the search. `back` puts you where you were, which is what leaving
+    /// without choosing anything should cost.
+    fn leave_find(&mut self, back: bool) {
+        let Some(f) = self.find.take() else { return };
+        self.copy = None;
+        if back {
+            let (pane, at) = f.origin;
+            if let Some((p, w)) = api::locate(&self.session, pane) {
+                self.session.focus = Focus::Ws { p, w };
+            }
+            if let Some(ws) = self.session.focused_workspace_mut() {
+                ws.focus = pane;
+            }
+            self.session.scroll_to(pane, at);
+        }
     }
 
     /// Start reading a pane rather than typing into it.
@@ -2180,6 +2279,7 @@ impl App {
             KeyCode::Char('o') => self.open_picker(),
             KeyCode::Char('a') => self.new_agent(),
             KeyCode::Char('[') => self.start_copy(),
+            KeyCode::Char('/') => self.start_find(),
             KeyCode::Char('x') => self.session.close_focused(),
             KeyCode::Char('u') => {
                 if self.session.release_hold() {

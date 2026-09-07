@@ -1353,3 +1353,65 @@ fn a_selection_is_taken_and_the_terminal_is_asked_to_hold_it() {
         h.drawn()
     );
 }
+
+// ── Finding it ──────────────────────────────────────────────────────────
+
+#[test]
+fn a_line_that_has_left_the_screen_can_still_be_found() {
+    // Finding the error a build printed four minutes ago used to mean scrolling
+    // and reading.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf 'zzNEEDLE here\\n'\r");
+    assert!(h.wait_for("zzNEEDLE", Duration::from_secs(10)), "no output");
+    // Push it off the screen.
+    h.send(b"for i in $(seq 1 60); do printf 'filler%s\\n' $i; done\r");
+    assert!(h.wait_for("filler60", Duration::from_secs(10)), "no filler");
+    assert!(
+        h.find("zzNEEDLE").is_none(),
+        "it never left the screen, so there is nothing to find\n{}",
+        h.drawn()
+    );
+
+    h.prefix(b"/");
+    h.send(b"zzNEEDLE");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzNEEDLE").is_some()),
+        "the search found nothing\n{}",
+        h.drawn()
+    );
+    // And says how many, which an incremental search with no count leaves you
+    // typing at hopefully.
+    assert!(
+        h.rows().iter().any(|r| r.contains(" of ")),
+        "no count beside the query\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn leaving_a_search_puts_you_back_where_you_were() {
+    // A search you abandoned should cost you nothing, including your place.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+    h.send(b"printf 'zzOLD\\n'\r");
+    assert!(h.wait_for("zzOLD", Duration::from_secs(10)), "no output");
+    h.send(b"for i in $(seq 1 60); do printf 'pad%s\\n' $i; done\r");
+    assert!(h.wait_for("pad60", Duration::from_secs(10)), "no filler");
+
+    h.prefix(b"/");
+    h.send(b"zzOLD");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzOLD").is_some()),
+        "the search found nothing\n{}",
+        h.drawn()
+    );
+
+    h.send(b"\x1b");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("pad60").is_some()),
+        "leaving the search did not put the pane back\n{}",
+        h.drawn()
+    );
+}
