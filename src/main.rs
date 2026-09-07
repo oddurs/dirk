@@ -96,6 +96,7 @@ in it keeps going.
 Commands:
   attach                 attach to the session (the default)
   server                 be the session; started for you, not usually typed
+  relay                  a session on stdin and stdout; what --remote runs
 
 Asking a running session, from a shell or from inside a pane.  Answers are
 JSON; `--current` means the pane you are in.
@@ -104,17 +105,24 @@ JSON; `--current` means the pane you are in.
   pane      list|focus|split|read|send-keys|close
   layout    list|open
   agent     list
-  session   info
+  session   info|list|reload|commands
 
 Options:
       --session NAME     which session, default \"default\"
+      --remote TARGET    attach to a session on TARGET, over ssh
       --no-session       one process, no session, ends with this terminal
+      --skill            print what an agent needs to drive a session
   -h, --help             display this help and exit
   -V, --version          output version information and exit
 
 dirk reads ~/.config/dirk/config.toml when it exists, and runs on built-in
 defaults when it does not.  The prefix key is Ctrl-Space; press it and then 'q'
-to quit.
+to quit, or Ctrl-Space again to send one through to whatever is inside.
+
+Environment:
+  DIRK_SSH               the program --remote reaches the far side with
+  DIRK_REMOTE            the far-side dirk for --remote, default \"dirk\"
+  DIRK_DEBUG             a file for a session\'s own stderr to land in
 
 Report bugs to: <https://github.com/oddurs/dirk/issues>
 ";
@@ -142,6 +150,7 @@ fn main() -> io::Result<()> {
     // in another and type into a stranger's shell.
     let mut session = std::env::var("DIRK_SESSION").unwrap_or_else(|_| "default".to_string());
     let mut mode = Mode::Attach;
+    let mut remote: Option<String> = None;
 
     // `--session` may come before a command, so the flags are read first and
     // whatever is left is the command.
@@ -161,6 +170,14 @@ fn main() -> io::Result<()> {
                 return Ok(());
             }
             "server" => mode = Mode::Server,
+            "relay" => mode = Mode::Relay,
+            "--remote" => match rest.next() {
+                Some(target) => remote = Some(target.clone()),
+                None => {
+                    eprintln!("dirk: --remote needs a target");
+                    std::process::exit(1);
+                }
+            },
             "attach" => mode = Mode::Attach,
             "--no-session" => mode = Mode::Alone,
             "--session" => match rest.next() {
@@ -248,8 +265,22 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Nothing local is involved: no session is started here, and the socket
+    // this side computed is not the one that gets used.
+    if let Some(target) = remote {
+        return client::remote(&target, &session);
+    }
+
     match mode {
         Mode::Server => serve(&session, &path),
+        Mode::Relay => {
+            // Started if it is not there, exactly as attaching would: the point
+            // of a remote attach is that the far side behaves like the near one.
+            if !server::is_running(&path) {
+                server::spawn(&session, &path)?;
+            }
+            client::relay(&path)
+        }
         Mode::Attach => {
             if !server::is_running(&path) {
                 server::spawn(&session, &path)?;
@@ -325,6 +356,8 @@ enum Mode {
     Server,
     /// One process, no session, dies with the terminal.
     Alone,
+    /// A session socket on stdin and stdout. What ssh runs on the far side.
+    Relay,
 }
 
 /// Be the session.

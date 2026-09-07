@@ -63,7 +63,25 @@ impl Client {
         Self::attach_sized(session, COLS, ROWS)
     }
 
+    /// The way `--remote` reaches a session, with a stand-in for ssh.
+    ///
+    /// Not a network: what is being tested is the transport -- a pipe pair
+    /// instead of a socket, a relay on the far end, and a client that survives
+    /// losing one -- and a test that needed a second machine would be a test
+    /// nobody runs.
+    fn over(session: &str, ssh: &std::path::Path) -> Self {
+        Self::spawn(session, COLS, ROWS, &|cmd| {
+            cmd.args(["--remote", "somewhere"]);
+            cmd.env("DIRK_SSH", ssh);
+            cmd.env("DIRK_REMOTE", env!("CARGO_BIN_EXE_dirk"));
+        })
+    }
+
     fn attach_sized(session: &str, cols: u16, rows: u16) -> Self {
+        Self::spawn(session, cols, rows, &|_| {})
+    }
+
+    fn spawn(session: &str, cols: u16, rows: u16, extra: &dyn Fn(&mut CommandBuilder)) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -82,6 +100,8 @@ impl Client {
         // and pointing this at the checkout would leave saved sessions in the
         // repository.
         cmd.env("XDG_CONFIG_HOME", config_home());
+
+        extra(&mut cmd);
 
         let child = pair.slave.spawn_command(cmd).expect("spawn dirk");
         drop(pair.slave);
@@ -614,5 +634,90 @@ fn the_shape_of_a_session_comes_back_after_it_has_ended() {
         second.drawn()
     );
     drop(second);
+    quit(&session);
+}
+
+// ── Over a link that is not a socket ────────────────────────────────────
+
+/// A stand-in for ssh: drops `-T -- <target>` and runs the rest here.
+///
+/// `flaky` makes the first link die two seconds in, which is what a laptop lid
+/// looks like from this side.
+fn fake_ssh(name: &str, flaky: bool) -> std::path::PathBuf {
+    let path = config_home().join(format!("ssh-{name}"));
+    let body = match flaky {
+        false => "#!/bin/sh\nshift 3\nexec \"$@\"\n".to_string(),
+        // Killed rather than backgrounded: a POSIX shell gives an asynchronous
+        // list /dev/null for stdin, and a relay with no input has nothing to
+        // relay. The watchdog kills the script, which `exec` has made the relay.
+        true => format!(
+            "#!/bin/sh\nshift 3\n\
+             if [ -f {mark} ]; then exec \"$@\"; fi\n\
+             : > {mark}\n\
+             ( sleep 2; kill $$ 2>/dev/null ) &\n\
+             exec \"$@\"\n",
+            mark = config_home().join(format!("mark-{name}")).display()
+        ),
+    };
+    std::fs::write(&path, body).expect("write the stand-in");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let _ = std::fs::remove_file(config_home().join(format!("mark-{name}")));
+    path
+}
+
+#[test]
+fn a_session_reached_over_a_pipe_pair_draws_the_same_thing() {
+    // The client does not know what it is talking to. That is the whole claim
+    // of the remote attach: a transport, not a second implementation.
+    let session = unique("remote");
+    let client = Client::over(&session, &fake_ssh("plain", false));
+    assert!(
+        client.wait_for(READY, START),
+        "nothing came back over the relay\n{}",
+        client.drawn()
+    );
+    assert!(
+        client.wait_for("spaces", START),
+        "the frame is not a dirk frame\n{}",
+        client.drawn()
+    );
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn a_dropped_link_comes_back_to_the_same_session() {
+    // The session is a daemon and the link is not the session. Losing one
+    // should cost you the seconds it takes to make another and nothing else.
+    let session = unique("dropped");
+    let client = Client::over(&session, &fake_ssh("flaky", true));
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    // Past the two seconds the stand-in allows the first link.
+    std::thread::sleep(Duration::from_secs(4));
+
+    // Something the old frame cannot contain, so seeing it means a new link
+    // reached the session that was there before -- not a repaint of the last
+    // thing painted.
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "the session did not outlive the link: {list}");
+    let id = first_id(&list);
+    let (ok, _) = ask(&session, &["workspace", "rename", &id, "Still", "here"]);
+    assert!(ok, "rename failed");
+    assert!(
+        client.wait_for("Still here", START),
+        "the link never came back\n{}",
+        client.drawn()
+    );
+
+    drop(client);
     quit(&session);
 }
