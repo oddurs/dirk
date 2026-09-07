@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+#
+# pre-push — main is landed on, not pushed to.
+#
+# The server-side ruleset says the same thing, but it says it after the upload,
+# in a paragraph of GitHub's prose. This says it in one line, immediately.
+#
+# Tags are how a release is cut and are not affected.
+#
+set -eu
+
+trunk=${DIRK_TRUNK:-main}
+
+while read -r local_ref _ remote_ref _; do
+    case $remote_ref in
+        "refs/heads/$trunk")
+            [ "$local_ref" = "(delete)" ] && continue
+            echo "pre-push: $trunk is landed on, not pushed to." >&2
+            echo "          git work ship  opens the pull request that does it." >&2
+            echo "          --no-verify if you mean it." >&2
+            exit 1
+            ;;
+    esac
+done
+
+exit 0

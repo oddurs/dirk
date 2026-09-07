@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+#
+# work — the loop, as one verb per step.
+#
+# Installed as `git work` by `make setup`. Every branch gets a worktree of its
+# own, so two pieces of work can be in flight without sharing a build
+# directory, and the backlog item that justified the branch is remembered in
+# git config rather than in whoever started it.
+#
+#   git work start <ID|name> [name]   claim, branch, add a worktree
+#   git work sync                     rebase this worktree onto origin/main
+#   git work check                    the gate
+#   git work ship [--land]            check, push, pull request, merge on green
+#   git work land [branch]            close the item, remove the worktree
+#   git work list                     what is in flight
+#   git work clean                    reap whatever has already merged
+#   git work release <VERSION>        the version bump, as an ordinary branch
+#   git work tag <VERSION>            tag main, which cuts the release
+#
+set -euo pipefail
+
+die()  { printf 'work: %s\n' "$*" >&2; exit 1; }
+say()  { printf '%s\n' "$*" >&2; }
+step() { printf '\n\033[1m%s\033[0m\n' "$*" >&2; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
+
+# The main worktree, whichever one this was run from. `git worktree list` puts
+# it first, always; --git-common-dir would need the same trimming and is a
+# relative path more often than the documentation admits.
+root=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+name=$(basename "$root")
+
+# Worktrees sit beside the repository rather than inside it: nothing nests in a
+# checkout, no ignore rule has to be maintained, and `ls` in the parent
+# directory says what is in flight.
+worktrees=${DIRK_WORKTREES:-$(dirname "$root")/.$name-worktrees}
+
+remote=${DIRK_REMOTE:-origin}
+trunk=${DIRK_TRUNK:-main}
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+slug() {
+    printf '%s' "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//' \
+        | cut -c1-40 \
+        | sed 's/-[^-]*$//;s/-$//'
+}
+
+branch_of() { git -C "${1:-.}" symbolic-ref --quiet --short HEAD 2>/dev/null || true; }
+
+# The item a branch was started for. Per-branch config is what git keeps for
+# exactly this, and it lives in the common config, so every worktree sees it.
+item_of()     { git config --get "branch.$1.cairn-item" 2>/dev/null || true; }
+item_set()    { git config "branch.$1.cairn-item" "$2"; }
+item_forget() { git config --unset "branch.$1.cairn-item" 2>/dev/null || true; }
+
+cairn_json() { have cairn && cairn show "$1" --json 2>/dev/null || true; }
+
+cairn_field() {
+    have cairn || return 0
+    cairn show "$1" --json 2>/dev/null \
+        | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get(sys.argv[1],"") or "")' "$2" \
+        2>/dev/null || true
+}
+
+cairn_try() { have cairn && cairn "$@" >/dev/null 2>&1 || true; }
+
+require_gh() {
+    have gh || die "gh is not installed; see https://cli.github.com"
+    gh auth status >/dev/null 2>&1 || die "gh is not logged in; run: gh auth login"
+}
+
+require_clean() {
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        die "the working tree has uncommitted changes; commit them first"
+    fi
+}
+
+worktree_dir_for() { printf '%s/%s\n' "$worktrees" "$1"; }
+
+# ─── start ───────────────────────────────────────────────────────────────────
+
+cmd_start() {
+    local arg=${1:-} given=${2:-} id='' title='' branch=''
+    [ -n "$arg" ] || die "usage: git work start <ID|name> [branch-name]"
+
+    if printf '%s' "$arg" | grep -qE '^[0-9]+$'; then
+        have cairn || die "start by id needs cairn; pass a branch name instead"
+        title=$(cairn_field "$arg" title)
+        [ -n "$title" ] || die "no cairn item $arg"
+        id=$arg
+        branch=${given:-$(slug "$title")}
+    else
+        branch=$arg
+    fi
+
+    [ -n "$branch" ] || die "could not work out a branch name"
+    git show-ref --quiet "refs/heads/$branch" && die "branch $branch already exists"
+
+    local dir; dir=$(worktree_dir_for "$branch")
+    [ -e "$dir" ] && die "$dir is already there"
+
+    step "fetching $remote"
+    git fetch --prune --quiet "$remote"
+
+    step "worktree $dir on $branch"
+    mkdir -p "$worktrees"
+    git worktree add --quiet -b "$branch" "$dir" "$remote/$trunk"
+
+    if [ -n "$id" ]; then
+        item_set "$branch" "$id"
+        cairn_try claim "$id"
+        cairn_try set "$id" status=doing
+        say "claimed $id — $title"
+    fi
+
+    printf '%s\n' "$dir"
+    say ""
+    say "  cd $dir"
+    [ -n "$id" ] && say "  cairn show $id"
+    say "  git work ship          when it is done"
+}
+
+# ─── sync ────────────────────────────────────────────────────────────────────
+
+cmd_sync() {
+    local branch; branch=$(branch_of)
+    [ -n "$branch" ] || die "detached head"
+    [ "$branch" = "$trunk" ] && die "$trunk syncs itself; pull"
+    require_clean
+    step "rebasing $branch onto $remote/$trunk"
+    git fetch --prune --quiet "$remote"
+    git rebase "$remote/$trunk"
+}
+
+# ─── check ───────────────────────────────────────────────────────────────────
+
+cmd_check() {
+    step "make check"
+    make -C "$(git rev-parse --show-toplevel)" check
+}
+
+# ─── ship ────────────────────────────────────────────────────────────────────
+
+cmd_ship() {
+    local wait=no draft=no
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --land|--wait) wait=yes ;;
+            --draft)       draft=yes ;;
+            *)             die "unknown option $1" ;;
+        esac
+        shift
+    done
+
+    require_gh
+    local branch; branch=$(branch_of)
+    [ -n "$branch" ] || die "detached head"
+    [ "$branch" = "$trunk" ] && die "$trunk is not shipped; start a branch"
+    require_clean
+
+    git rev-parse --quiet --verify "$remote/$trunk" >/dev/null || git fetch --quiet "$remote"
+    [ "$(git rev-list --count "$remote/$trunk..HEAD")" -gt 0 ] \
+        || die "nothing to ship: $branch has no commits $remote/$trunk does not"
+
+    cmd_check
+
+    step "pushing $branch"
+    git push --quiet --set-upstream "$remote" "$branch"
+
+    local id title body url
+    id=$(item_of "$branch")
+    title=$(git log -1 --format=%s)
+    if [ -n "$id" ]; then
+        local t; t=$(cairn_field "$id" title)
+        [ -n "$t" ] && title=$t
+    fi
+
+    url=$(gh pr view "$branch" --json url --jq .url 2>/dev/null || true)
+    if [ -z "$url" ]; then
+        body=$(ship_body "$id")
+        step "opening the pull request"
+        local args=(--title "$title" --body "$body" --base "$trunk" --head "$branch")
+        [ "$draft" = yes ] && args+=(--draft)
+        url=$(gh pr create "${args[@]}")
+    else
+        say "pull request already open: $url"
+    fi
+
+    if [ "$draft" = no ]; then
+        step "auto-merge on green"
+        gh pr merge "$branch" --squash --auto --delete-branch >/dev/null \
+            || say "could not enable auto-merge; merge it by hand: $url"
+    fi
+
+    [ -n "$id" ] && cairn_try set "$id" status=review
+
+    say ""
+    say "  $url"
+
+    if [ "$wait" = yes ]; then
+        step "waiting for the checks"
+        gh pr checks "$branch" --watch --fail-fast || die "the checks failed; $url"
+        wait_for_merge "$branch"
+        cmd_land "$branch"
+    fi
+}
+
+# owner/repo, from whatever the remote happens to be spelled as.
+repo_slug() {
+    git remote get-url "$remote" 2>/dev/null \
+        | sed -e 's|^git@[^:]*:||' -e 's|^https\{0,1\}://[^/]*/||' -e 's|\.git$||'
+}
+
+ship_body() {
+    local id=$1 ref url why problem
+    if [ -n "$id" ]; then
+        ref=$(cairn_field "$id" ref)
+        url="https://github.com/$(repo_slug)/blob/$trunk/$(cairn_field "$id" path)"
+        why="Backlog item [\`$ref\`]($url)."
+        problem=$(cairn_field "$id" body | awk '/^## Problem/{f=1;next} /^## /{f=0} f' | head -14)
+    else
+        why="Not filed in the backlog; the commits are the record."
+    fi
+    cat <<BODY
+## What this changes
+
+$(git log --reverse --format='- %s' "$remote/$trunk..HEAD")
+
+## Why
+
+$why
+
+${problem:-}
+
+## Verification
+
+- [x] \`make check\` passes
+BODY
+}
+
+wait_for_merge() {
+    local branch=$1 i=0
+    while [ "$i" -lt 120 ]; do
+        case $(gh pr view "$branch" --json state --jq .state 2>/dev/null) in
+            MERGED) return 0 ;;
+            CLOSED) die "the pull request was closed without merging" ;;
+        esac
+        sleep 10
+        i=$((i + 1))
+    done
+    die "gave up waiting for the merge"
+}
+
+# ─── land ────────────────────────────────────────────────────────────────────
+
+cmd_land() {
+    require_gh
+    local branch=${1:-} here=no
+    if [ -z "$branch" ]; then
+        branch=$(branch_of)
+        here=yes
+    fi
+    [ -n "$branch" ] || die "usage: git work land [branch]"
+    [ "$branch" = "$trunk" ] && die "$trunk does not land"
+
+    local state
+    state=$(gh pr view "$branch" --json state --jq .state 2>/dev/null || echo NONE)
+    if [ "$state" != MERGED ]; then
+        # A branch whose remote is gone and whose commits are in the trunk was
+        # merged by something other than this script, which still counts.
+        git fetch --prune --quiet "$remote"
+        git merge-base --is-ancestor "$branch" "$remote/$trunk" 2>/dev/null \
+            || die "$branch has not merged (pull request: $state)"
+    fi
+
+    local id; id=$(item_of "$branch")
+    if [ -n "$id" ]; then
+        cairn_try close "$id"
+        say "closed $(cairn_field "$id" ref)"
+    fi
+
+    local dir; dir=$(worktree_dir_for "$branch")
+    if [ -d "$dir" ]; then
+        step "removing $dir"
+        git -C "$root" worktree remove --force "$dir"
+    fi
+    git -C "$root" branch -q -D "$branch" 2>/dev/null || true
+    item_forget "$branch"
+    git -C "$root" worktree prune
+
+    say "landed $branch"
+    [ "$here" = yes ] && [ ! -d "$PWD" ] && say "" && say "  cd $root"
+    return 0
+}
+
+# ─── list ────────────────────────────────────────────────────────────────────
+
+cmd_list() {
+    local dir branch id title state
+    printf '%-24s %-8s %-10s %s\n' BRANCH ITEM PR WORKTREE
+    git worktree list --porcelain | awk '/^worktree /{d=$2} /^branch /{print d"\t"$2}' \
+    | while IFS=$'\t' read -r dir ref; do
+        branch=${ref#refs/heads/}
+        [ "$branch" = "$trunk" ] && continue
+        id=$(item_of "$branch")
+        state=""
+        if have gh; then
+            state=$(gh pr view "$branch" --json state --jq .state 2>/dev/null || true)
+        fi
+        printf '%-24s %-8s %-10s %s\n' \
+            "$branch" "${id:+$(cairn_field "$id" ref)}" "${state:--}" "${dir/#$HOME/\~}"
+    done
+}
+
+# ─── clean ───────────────────────────────────────────────────────────────────
+
+cmd_clean() {
+    step "fetching $remote"
+    git fetch --prune --quiet "$remote"
+
+    local branches landed=0
+    # Collected before the loop rather than piped into it: landing a branch
+    # removes a worktree, and rewriting the list being read is how a reaper
+    # skips half of what it was asked to reap.
+    branches=$(git worktree list --porcelain | awk '/^branch /{print $2}' | sed 's|^refs/heads/||')
+
+    for branch in $branches; do
+        [ "$branch" = "$trunk" ] && continue
+        if git merge-base --is-ancestor "$branch" "$remote/$trunk" 2>/dev/null; then
+            cmd_land "$branch" && landed=$((landed + 1))
+        fi
+    done
+
+    git -C "$root" worktree prune
+    [ "$landed" -eq 0 ] && say "nothing to reap"
+    return 0
+}
+
+# ─── release ─────────────────────────────────────────────────────────────────
+
+version_ok() { printf '%s' "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; }
+
+cmd_release() {
+    local version=${1:-}
+    version_ok "$version" || die "usage: git work release <MAJOR.MINOR.PATCH>"
+    git rev-parse --quiet --verify "refs/tags/v$version" >/dev/null \
+        && die "v$version is already tagged"
+
+    "$root/scripts/news" "$version" >/dev/null \
+        || die "NEWS has no section for $version; write it before releasing"
+
+    local branch="release-$version" dir
+    dir=$(worktree_dir_for "$branch")
+    [ -e "$dir" ] && die "$dir is already there"
+
+    step "fetching $remote"
+    git fetch --prune --quiet "$remote"
+    mkdir -p "$worktrees"
+    git worktree add --quiet -b "$branch" "$dir" "$remote/$trunk"
+
+    cd "$dir"
+    step "version $version"
+    perl -0pi -e "s/^version = \"[^\"]+\"/version = \"$version\"/m" Cargo.toml
+    cargo update --quiet --workspace >/dev/null 2>&1 || cargo check --quiet >/dev/null
+    git add Cargo.toml Cargo.lock
+    git commit --quiet -m "Release $version"
+
+    cmd_ship
+    say ""
+    say "  when it lands:  git work tag $version"
+}
+
+cmd_tag() {
+    local version=${1:-} yes=no
+    for a in "$@"; do [ "$a" = "-y" ] && yes=yes; done
+    version_ok "$version" || die "usage: git work tag <MAJOR.MINOR.PATCH> [-y]"
+
+    git -C "$root" fetch --prune --quiet "$remote"
+    local declared
+    declared=$(git -C "$root" show "$remote/$trunk:Cargo.toml" \
+               | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+    [ "$declared" = "$version" ] \
+        || die "$remote/$trunk declares $declared, not $version; land the release branch first"
+
+    if [ "$yes" != yes ]; then
+        printf 'tag %s/%s as v%s and push it? this cuts a public release [y/N] ' \
+            "$remote" "$trunk" "$version" >&2
+        read -r reply < /dev/tty || reply=n
+        case $reply in y|Y|yes) ;; *) die "stopped" ;; esac
+    fi
+
+    git -C "$root" tag -a "v$version" "$remote/$trunk" -m "dirk $version"
+    git -C "$root" push "$remote" "v$version"
+    say "pushed v$version — the release workflow takes it from here"
+}
+
+# ─── setup ───────────────────────────────────────────────────────────────────
+
+cmd_setup() {
+    git config core.hooksPath .githooks
+
+    # A conflict solved once should not have to be solved again on the next
+    # rebase of the same branch.
+    git config rerere.enabled true
+    git config rerere.autoupdate true
+
+    # zdiff3 shows the common ancestor, which is the difference between reading
+    # a conflict and guessing at one.
+    git config merge.conflictstyle zdiff3
+
+    git config push.default current
+    git config push.autoSetupRemote true
+    git config pull.rebase true
+    git config rebase.autosquash true
+    git config rebase.autostash true
+    git config rebase.updateRefs true
+
+    git config fetch.prune true
+    git config fetch.parallel 0
+
+    git config branch.sort -committerdate
+    git config tag.sort version:refname
+
+    git config diff.algorithm histogram
+    git config diff.colorMoved zebra
+    git config diff.colorMovedWS allow-indentation-change
+
+    git config commit.verbose true
+    git config worktree.guessRemote true
+
+    # Single-quoted on purpose: the alias resolves the root when it runs, so
+    # `git work` works from any worktree and any subdirectory of one.
+    # shellcheck disable=SC2016
+    git config alias.work '!"$(git rev-parse --show-toplevel)"/scripts/work'
+
+    say "configured. the loop:"
+    say ""
+    say "  git work start <ID>    git work ship    git work land"
+}
+
+# ─── ─────────────────────────────────────────────────────────────────────────
+
+usage() { sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case ${1:-} in
+    start)   shift; cmd_start   "$@" ;;
+    sync)    shift; cmd_sync    "$@" ;;
+    check)   shift; cmd_check   "$@" ;;
+    ship)    shift; cmd_ship    "$@" ;;
+    land)    shift; cmd_land    "$@" ;;
+    list|ls) shift; cmd_list    "$@" ;;
+    clean)   shift; cmd_clean   "$@" ;;
+    release) shift; cmd_release "$@" ;;
+    tag)     shift; cmd_tag     "$@" ;;
+    setup)   shift; cmd_setup   "$@" ;;
+    ''|-h|--help|help) usage ;;
+    *)       die "unknown command $1; try --help" ;;
+esac
