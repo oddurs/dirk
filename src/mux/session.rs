@@ -132,6 +132,12 @@ pub struct Workspace {
     /// rather than a layout.
     pub panes: Vec<Pane>,
     pub tree: Node,
+    /// One pane, filling the workspace.
+    ///
+    /// A view rather than a change: the tree is untouched, so leaving puts
+    /// every pane back exactly where it was and nothing running notices
+    /// anything beyond a resize.
+    pub zoomed: bool,
     /// Whether the nav shows this workspace's panes. Collapsed by default: the
     /// tree should stay the height of the space list until it is asked for
     /// more.
@@ -159,7 +165,52 @@ impl Workspace {
 
     /// Where every pane goes, in draw order.
     pub fn rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+        // Zoom draws one leaf and hides the rest without touching either. The
+        // tree still says where everything is, which is what makes leaving free.
+        if self.zoomed && self.panes.len() > 1 {
+            return vec![(self.focus, area)];
+        }
         self.tree.rects(area)
+    }
+
+    /// Whatever a pane closing means for the zoom.
+    ///
+    /// A workspace that is down to one pane has nothing to be zoomed past, and
+    /// leaving the flag set means the next split opens into a view that hides
+    /// it -- a pane you asked for that is not on screen.
+    fn settle_zoom(&mut self) {
+        if self.panes.len() < 2 {
+            self.zoomed = false;
+        }
+    }
+
+    /// One pane, or all of them again.
+    ///
+    /// Refuses when there is only one, because there is nothing to zoom past
+    /// and a workspace that says it is zoomed when it looks identical is a
+    /// state you cannot get out of by looking.
+    pub fn zoom(&mut self) -> bool {
+        if self.panes.len() < 2 {
+            return false;
+        }
+        self.zoomed = !self.zoomed;
+        true
+    }
+
+    /// Exchange the focused pane with its neighbour in draw order.
+    ///
+    /// Focus follows the pane rather than the position: you moved a thing, and
+    /// the thing is what you were looking at.
+    pub fn move_focused(&mut self, delta: isize) -> bool {
+        let order = self.tree.leaves();
+        if order.len() < 2 {
+            return false;
+        }
+        let Some(at) = order.iter().position(|&id| id == self.focus) else {
+            return false;
+        };
+        let to = (at as isize + delta).rem_euclid(order.len() as isize) as usize;
+        self.tree.swap(order[at], order[to])
     }
 
     /// Move focus to the next pane in draw order.
@@ -308,6 +359,7 @@ impl Session {
             asked: None,
             turns: 0,
             touched: Instant::now(),
+            zoomed: false,
             reported: None,
             source: crate::agent::Source::None,
             expanded: false,
@@ -489,6 +541,7 @@ impl Session {
                 touched: Instant::now(),
                 reported: None,
                 source: crate::agent::Source::None,
+                zoomed: false,
                 expanded: false,
                 panes,
                 tree,
@@ -526,6 +579,7 @@ impl Session {
                 ws.panes.remove(k);
                 let empty = ws.tree.remove(id);
                 ws.refocus();
+                ws.settle_zoom();
                 // A layout whose last pane is closed goes back to unbuilt
                 // rather than being removed: quitting lazygit should return you
                 // to the tree and leave the entry there to be opened again.
@@ -552,6 +606,7 @@ impl Session {
                     ws.panes.remove(k);
                     let empty = ws.tree.remove(id);
                     ws.refocus();
+                    ws.settle_zoom();
                     if empty || ws.panes.is_empty() {
                         self.projects[p].workspaces.remove(w);
                         if self.projects[p].workspaces.is_empty() {
@@ -1717,6 +1772,7 @@ mod tests {
             asked: None,
             turns: 0,
             touched: Instant::now(),
+            zoomed: false,
             reported: None,
             source: crate::agent::Source::None,
             panes: Vec::new(),

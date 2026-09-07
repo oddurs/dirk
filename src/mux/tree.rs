@@ -148,6 +148,38 @@ impl Node {
     ///
     /// A restarted panel comes back where it was rather than the layout
     /// rearranging around it.
+    /// Exchange two panes' places, leaving the shape of the tree alone.
+    ///
+    /// Which is the whole of what moving a pane is. Nothing is spawned, nothing
+    /// is closed, and neither program notices anything beyond a resize -- the
+    /// alternative, closing one and opening another, is a different operation
+    /// wearing the same name and the thing running inside would not survive it.
+    pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b {
+            return false;
+        }
+        // Both, or neither: half a swap leaves the same pane in two places and
+        // the other one nowhere, which draws as a workspace that lost a pane.
+        if !self.holds(a) || !self.holds(b) {
+            return false;
+        }
+        self.put(a, b);
+        true
+    }
+
+    fn holds(&self, id: PaneId) -> bool {
+        self.leaves().contains(&id)
+    }
+
+    fn put(&mut self, a: PaneId, b: PaneId) {
+        match self {
+            Node::Leaf(x) if *x == a => *x = b,
+            Node::Leaf(x) if *x == b => *x = a,
+            Node::Leaf(_) => {}
+            Node::Split { children, .. } => children.iter_mut().for_each(|(_, n)| n.put(a, b)),
+        }
+    }
+
     pub fn replace(&mut self, old: PaneId, new: PaneId) -> bool {
         match self {
             Node::Leaf(x) if *x == old => {
@@ -218,6 +250,31 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn swapping_two_panes_leaves_the_shape_alone() {
+        // Moving a pane is exchanging places, not rebuilding: the tree keeps
+        // its shape and neither program notices anything but a resize.
+        let mut tree = Node::Leaf(1);
+        tree.split(1, Dir::Cols, 2);
+        tree.split(2, Dir::Cols, 3);
+        assert_eq!(tree.leaves(), [1, 2, 3]);
+
+        assert!(tree.swap(1, 3));
+        assert_eq!(tree.leaves(), [3, 2, 1]);
+        assert_eq!(tree.rects(Rect::new(0, 0, 30, 10)).len(), 3);
+    }
+
+    #[test]
+    fn a_swap_with_a_pane_that_is_not_here_changes_nothing() {
+        // Half a swap leaves the same pane in two places and the other one
+        // nowhere, which draws as a workspace that lost a pane.
+        let mut tree = Node::Leaf(1);
+        tree.split(1, Dir::Cols, 2);
+        assert!(!tree.swap(1, 99), "it swapped with something imaginary");
+        assert_eq!(tree.leaves(), [1, 2]);
+        assert!(!tree.swap(1, 1), "swapping with itself is not a move");
+    }
+
     use super::*;
 
     fn leaf(id: PaneId) -> Node {
