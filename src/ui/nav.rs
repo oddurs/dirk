@@ -283,10 +283,10 @@ fn attention(session: &Session, sort: Sort) -> Vec<(usize, usize)> {
     let mut v: Vec<(usize, usize)> = Vec::new();
     for (p, proj) in session.projects.iter().enumerate() {
         for (w, ws) in proj.workspaces.iter().enumerate() {
-            if ws
-                .active_pane()
-                .is_some_and(|x| x.occupant.agent().is_some())
-            {
+            // The same field the glyph reads. Asking the occupant here and
+            // the state there was two answers to one question, and they
+            // disagreed on screen.
+            if ws.state != crate::agent::State::None {
                 v.push((p, w));
             }
         }
