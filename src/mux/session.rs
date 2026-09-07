@@ -730,9 +730,20 @@ fn viewport(pane: &Pane, lines: u16) -> Option<String> {
     let term = pane.term.lock().ok()?;
     let screen = term.screen();
     let (rows, cols) = screen.size();
+    let last = rows.saturating_sub(1);
     let (cursor, _) = screen.cursor_position();
-    let to = cursor.min(rows.saturating_sub(1));
-    let from = to.saturating_sub(lines);
+
+    // The lower of the two is not enough. A full-screen program that homes its
+    // cursor after a repaint -- `top`, `less`, `vim` on line one -- would give
+    // a row index near zero and answer with two rows of a full screen. The
+    // furthest down anything has been written is the other candidate.
+    let written = (0..rows)
+        .rev()
+        .find(|&r| (0..cols).any(|c| screen.cell(r, c).is_some_and(|x| x.has_contents())))
+        .unwrap_or(0);
+    let to = cursor.max(written).min(last);
+    // `contents_between` is inclusive, so `lines` rows means `lines - 1` back.
+    let from = to.saturating_sub(lines.saturating_sub(1));
     Some(screen.contents_between(from, 0, to, cols))
 }
 
@@ -1001,6 +1012,60 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Take a new list of layouts without disturbing the ones that are open.
+    ///
+    /// An open layout keeps its panes. Rebuilding a running dashboard because a
+    /// colour changed elsewhere in the file is not a reload, it is a restart.
+    pub fn merge_layouts(&mut self, next: &[crate::config::LayoutDef]) {
+        // Focus into a layout is an index into this vector, and the new file
+        // may order them differently. Remembered by name across the merge, or a
+        // reload could leave you looking at -- and typing into -- a different
+        // layout's panes.
+        let focused = match self.focus {
+            Focus::Layout(i) => self.layouts.get(i).map(|l| l.def.name.clone()),
+            Focus::Ws { .. } => None,
+        };
+        let mut kept: Vec<Layout> = Vec::new();
+        for def in next {
+            let open = self
+                .layouts
+                .iter_mut()
+                .find(|l| l.def.name == def.name && l.ws.is_some())
+                .and_then(|l| l.ws.take());
+            kept.push(Layout {
+                def: def.clone(),
+                ws: open,
+            });
+        }
+        // A layout that has gone from the file but is open stays until it is
+        // closed: its panes are running programs, and a reload should not kill
+        // them.
+        for old in self.layouts.drain(..) {
+            if old.ws.is_some() && !kept.iter().any(|l| l.def.name == old.def.name) {
+                kept.push(old);
+            }
+        }
+        self.layouts = kept;
+        if let Some(name) = focused {
+            match self.layouts.iter().position(|l| l.def.name == name) {
+                Some(i) => self.focus = Focus::Layout(i),
+                // Its definition has gone and it was not open, so there is
+                // nothing left to look at.
+                None => self.focus = self.first_workspace().unwrap_or(Focus::Layout(0)),
+            }
+        }
+        self.refocus();
+    }
+
+    /// Take the naming knobs that a running session reads directly.
+    pub fn set_naming(&mut self, cfg: &crate::config::Naming) {
+        self.stale_after = if cfg.show_stale {
+            cfg.stale_after_turns
+        } else {
+            0
+        };
     }
 
     /// Type into a pane, wherever it is.

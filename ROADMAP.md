@@ -86,7 +86,7 @@ second source that is consulted when a title says nothing.
 
 ## v0.4 — Sessions that outlive their terminal
 
-`###·······` 29% · 2 of 7 done · due 2027-01-15
+`########··` 71% · 5 of 7 done · due 2027-01-15
 
 A daemon, detach and reattach, persistence across restarts, and a socket API
 with a CLI so an agent inside a pane can drive dirk. The milestone that lets
@@ -95,15 +95,15 @@ dirk replace herdr rather than sit beside it.
 ### backlog
 
 - [ ] `0012` Session persistence across restarts <sup>feature · p1 · server</sup>
-- [ ] `0036` Agent skill file <sup>docs · p2 · docs</sup>
-- [ ] `0037` Named sessions <sup>feature · p2 · server</sup>
-- [ ] `0038` Reload configuration without restarting <sup>feature · p2 · config</sup>
 - [ ] `0039` Attach over ssh <sup>feature · p3 · server</sup>
 
 ### done
 
 - [x] `0007` Server lifecycle: detach and reattach <sup>feature · p0 · server</sup>
 - [x] `0035` Socket API and the dirk CLI <sup>feature · p0 · api</sup>
+- [x] `0036` Agent skill file <sup>docs · p2 · docs</sup>
+- [x] `0037` Named sessions <sup>feature · p2 · server</sup>
+- [x] `0038` Reload configuration without restarting <sup>feature · p2 · config</sup>
 
 ## v0.5 — A multiplexer you would not miss tmux from
 

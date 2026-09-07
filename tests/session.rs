@@ -32,6 +32,13 @@ const COLS: u16 = 80;
 const READY: &str = "+ workspace";
 const START: Duration = Duration::from_secs(30);
 
+/// One configuration directory for the whole run, away from the checkout.
+fn config_home() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("dirk-tests-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn unique(kind: &str) -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -71,7 +78,10 @@ impl Client {
         cmd.cwd(env!("CARGO_MANIFEST_DIR"));
         cmd.env("TERM", "xterm-256color");
         cmd.env("SHELL", "/bin/sh");
-        cmd.env("XDG_CONFIG_HOME", env!("CARGO_MANIFEST_DIR"));
+        // Its own configuration directory. Sessions are written down under it,
+        // and pointing this at the checkout would leave saved sessions in the
+        // repository.
+        cmd.env("XDG_CONFIG_HOME", config_home());
 
         let child = pair.slave.spawn_command(cmd).expect("spawn dirk");
         drop(pair.slave);
@@ -358,11 +368,24 @@ fn a_session_uses_the_whole_terminal_it_is_shown_on() {
     quit(&session);
 }
 
+/// The first `"id": "..."` in an answer.
+///
+/// Not "the first word starting with w": `worktree` is a key, and matching it
+/// meant renaming a workspace called `worktree` that does not exist.
+fn first_id(json: &str) -> String {
+    let at = json.find("\"id\"").expect("an id in the answer");
+    let rest = &json[at + 4..];
+    let open = rest.find('"').expect("a value");
+    let rest = &rest[open + 1..];
+    rest[..rest.find('"').expect("a closing quote")].to_string()
+}
+
 /// Ask a running session something, the way a shell or an agent would.
 fn ask(session: &str, args: &[&str]) -> (bool, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
         .args(["--session", session])
         .args(args)
+        .env("XDG_CONFIG_HOME", config_home())
         .output()
         .expect("run dirk");
     (
@@ -386,11 +409,7 @@ fn a_session_answers_for_itself() {
 
     let (ok, panes) = ask(&session, &["pane", "list"]);
     assert!(ok, "pane list failed");
-    let id = panes
-        .split('"')
-        .find(|s| s.starts_with('w') && s.contains(":p"))
-        .expect("a pane id in the answer")
-        .to_string();
+    let id = first_id(&panes);
 
     // Ids come back to dirk in the next command.
     let (ok, split) = ask(&session, &["pane", "split", &id, "rows"]);
@@ -431,4 +450,169 @@ fn a_command_does_not_conjure_a_session_to_answer_it() {
         .join(format!("dirk-{}", unsafe { libc::getuid() }))
         .join(format!("{session}.sock"));
     assert!(!socket.exists(), "a command left a session behind");
+}
+
+#[test]
+fn sessions_are_listed_with_whether_you_can_attach_to_one() {
+    // Answered by connecting, not by the directory listing: a socket outliving
+    // its server is the ordinary state after a crash, and listing those as
+    // sessions would be listing things you cannot attach to.
+    let session = unique("listed");
+    let client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["session", "list"])
+        .output()
+        .expect("run dirk");
+    let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+    // A client is attached, which is a stronger thing to know than that a
+    // server is up — and the only one of the two that needs asking.
+    assert!(
+        listed
+            .lines()
+            .any(|l| l.starts_with(&session) && l.contains("attached")),
+        "the session with a client attached was not listed as attached:\n{listed}"
+    );
+
+    drop(client);
+    quit(&session);
+
+    // And once it is gone it is not offered as something to attach to.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["session", "list"])
+        .output()
+        .expect("run dirk");
+    let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        !listed
+            .lines()
+            .any(|l| l.starts_with(&session) && (l.contains("running") || l.contains("attached"))),
+        "a session that has ended is still offered as one to attach to:\n{listed}"
+    );
+}
+
+#[test]
+fn a_reload_does_not_disturb_what_is_running() {
+    let session = unique("reload");
+    let mut client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    client.send(b"printf 'zz%s' BEFORE\r");
+    assert!(
+        client.wait_for("zzBEFORE", Duration::from_secs(10)),
+        "no echo\n{}",
+        client.drawn()
+    );
+
+    let (ok, _) = ask(&session, &["session", "reload"]);
+    assert!(ok, "reload failed");
+
+    // The shell is still there, and still the one that was there.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        client.rows().iter().any(|r| r.contains("zzBEFORE")),
+        "a reload took the session with it\n{}",
+        client.drawn()
+    );
+    client.send(b"printf 'zz%s' AFTER\r");
+    assert!(
+        client.wait_for("zzAFTER", Duration::from_secs(10)),
+        "the pane stopped taking input after a reload\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn a_command_from_inside_a_pane_reaches_the_session_holding_it() {
+    // Every pane is told which session it belongs to. Without reading that
+    // back, a command from inside one went to `default` -- and pane ids are
+    // per-session counters, so `--current` could name a live pane in another
+    // session and type into a stranger's shell.
+    let session = unique("routed");
+    let client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    // No `--session`: the environment is what a pane has.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["pane", "list"])
+        .env("DIRK_SESSION", &session)
+        .env("XDG_CONFIG_HOME", config_home())
+        .output()
+        .expect("run dirk");
+    assert!(
+        out.status.success(),
+        "a command from inside a pane did not reach its session: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(":p"),
+        "no panes in the answer"
+    );
+
+    drop(client);
+    quit(&session);
+}
+
+#[test]
+fn the_shape_of_a_session_comes_back_after_it_has_ended() {
+    // Not the panes: a pane is a process, and a screenful of text with nothing
+    // behind it is worse than an empty pane because it looks like something you
+    // can type into. What comes back is what a human arranged.
+    let session = unique("shape");
+
+    let client = Client::attach(&session);
+    assert!(
+        client.wait_for(READY, START),
+        "never started\n{}",
+        client.drawn()
+    );
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let id = first_id(&list);
+    let (ok, _) = ask(
+        &session,
+        &["workspace", "rename", &id, "Named", "by", "hand"],
+    );
+    assert!(ok, "rename failed");
+    assert!(
+        client.wait_for("Named by hand", Duration::from_secs(10)),
+        "the rename never showed\n{}",
+        client.drawn()
+    );
+
+    // End the session entirely, server and all.
+    drop(client);
+    quit(&session);
+
+    // And start it again from nothing.
+    let second = Client::attach(&session);
+    assert!(
+        second.wait_for(READY, START),
+        "did not come back\n{}",
+        second.drawn()
+    );
+    assert!(
+        second.wait_for("Named by hand", START),
+        "the name did not survive the session ending\n{}",
+        second.drawn()
+    );
+    drop(second);
+    quit(&session);
 }

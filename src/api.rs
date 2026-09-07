@@ -115,7 +115,16 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
         }
 
         "pane.list" => {
-            let want = args.first().and_then(|a| parse_workspace(a));
+            // An argument that is present but unreadable is a mistake, not an
+            // absent filter -- the caller asked about one workspace and would
+            // otherwise be handed every pane in the session, successfully.
+            let want = match args.first() {
+                None => None,
+                Some(a) => match parse_workspace(a) {
+                    Some(id) => Some(id),
+                    None => return Some(Reply::err("not a workspace id")),
+                },
+            };
             let mut list = Vec::new();
             for (p, w) in session.flat() {
                 let Some(ws) = session.workspace(p, w) else {
@@ -203,8 +212,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("layout.list", ""),
     ("layout.open", "<name>"),
     ("agent.list", ""),
+    ("session.list", ""),
     ("session.info", ""),
     ("session.commands", ""),
+    ("session.reload", ""),
 ];
 
 /// Look a pane up wherever it is, with the workspace that holds it.

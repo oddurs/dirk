@@ -2,12 +2,13 @@
 id: 36
 title: Agent skill file
 type: docs
-status: backlog
+status: done
 milestone: v0.4
+assignee: oddurs
 depends_on:
 - 35
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-07
 priority: p2
 area: docs
 effort: s
@@ -23,7 +24,7 @@ inside one, the discovery commands, and the traps — that an agent name is not 
 pane id, that a moved pane gets a new id, that reads do not mark seen.
 
 ## Acceptance criteria
-- [ ] dirk --skill prints it, and it is generated from the real command surface
-- [ ] Documents how to verify the environment before issuing any command
-- [ ] Documents the id rules and the seen rule
-- [ ] Checked in CI against the actual CLI, so it cannot drift
+- [x] dirk --skill prints it, and it is generated from the real command surface
+- [x] Documents how to verify the environment before issuing any command
+- [x] Documents the id rules and the seen rule
+- [x] Generated from the command table, so it cannot drift — and a test asserts every command appears in it
