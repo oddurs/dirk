@@ -49,7 +49,7 @@ fn main() {
     // and diffed is the difference between a render and a photograph of a
     // moment.
     cmd.arg("--no-session");
-    cmd.cwd(env!("CARGO_MANIFEST_DIR"));
+    cmd.cwd(stage());
     cmd.env("TERM", "xterm-256color");
     cmd.env("SHELL", "/bin/sh");
     // `DIRK_SHOT_CONFIG=<dir> cargo run --example shot` points dirk at a
@@ -142,6 +142,59 @@ fn main() {
     writer.write_all(b"q").unwrap();
     std::thread::sleep(Duration::from_millis(300));
     let _ = child.kill();
+}
+
+// ─── Where the shot is taken ────────────────────────────────────────────────
+
+/// A scratch repository to run in, named `dirk` and on `main`.
+///
+/// dirk takes the project name from the directory and the branch from git, so
+/// a shot taken in the checkout is a shot of whatever that checkout happens to
+/// be called. Mine said `worktree-green-meadow-52eb`, which is true and is not
+/// what the front page of a website should say.
+///
+/// The point of a committed render is that two people regenerating it get the
+/// same bytes. That needs somewhere fixed to stand, not the place the person
+/// running it happens to be.
+///
+/// If git is not available the checkout is used instead: a shot that says the
+/// wrong project name is worth more than no shot.
+fn stage() -> std::path::PathBuf {
+    let fallback = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let stage = std::env::temp_dir().join("dirk-shot").join("dirk");
+
+    let _ = std::fs::remove_dir_all(stage.parent().expect("dirk-shot has a parent"));
+    if std::fs::create_dir_all(&stage).is_err() {
+        return fallback;
+    }
+
+    // An empty repository on an unborn branch reports no branch at all, and
+    // the row the shot exists to show would lose its second line.
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&stage)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+
+    let ready = git(&["init", "-q", "-b", "main"])
+        && git(&[
+            "-c",
+            "user.name=shot",
+            "-c",
+            "user.email=shot@localhost",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "the scratch repository a shot is taken in",
+        ]);
+
+    if ready { stage } else { fallback }
 }
 
 // ─── The same screen, with its colours ──────────────────────────────────────
