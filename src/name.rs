@@ -328,6 +328,8 @@ pub fn unique(desired: &str, taken: &std::collections::HashSet<String>) -> Strin
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Skip {
     Disabled,
+    /// Held: a human named this one.
+    Held,
     /// The title is the question it is asking, not the work it is doing.
     Blocked,
     NoIntent,
@@ -400,9 +402,24 @@ pub fn decide(
     // the one dirk last wrote, a human changed it. Back off permanently. A
     // label dirk generated itself is nobody's choice, so it stays adoptable.
     let cur = normalize(current);
+
+    // A hold is permanent and deliberately hard to undo, because it protects a
+    // name a human wrote. But an empty label is not a name — it is the
+    // clearest possible statement that the previous one was unwanted. Requiring
+    // a command after clearing a field leaves the workspace blank for ever,
+    // because nobody knows the command is what clearing was supposed to mean.
+    if state.held {
+        if !cur.is_empty() {
+            return Decision::Skip(Skip::Held);
+        }
+        state.held = false;
+        state.applied = None;
+    }
+
     if cfg.respect_manual_names && !cur.is_empty() && !looks_auto_generated(&cur, repo, branch) {
         let ours = state.applied.as_deref().map(normalize);
         if ours.as_deref() != Some(cur.as_str()) {
+            state.held = true;
             return Decision::Skip(Skip::Manual);
         }
     }
@@ -490,15 +507,38 @@ mod tests {
     #[test]
     fn a_hand_written_name_is_never_touched() {
         let mut st = NameState::default();
-        // dirk never wrote this label, and it is not a default shape.
+        let now = Instant::now();
+        // dirk never wrote this label, and it is not a default shape. The first
+        // pass works that out and records it; every later pass is answered from
+        // the record rather than re-derived.
+        let title = Some("Open source wifi e-reader");
         assert_eq!(
-            decide_once(
+            decide(
+                &cfg(),
                 &mut st,
                 "my careful name",
-                "Open source wifi e-reader",
-                "bedreader"
+                title,
+                "bedreader",
+                "",
+                1,
+                false,
+                now
             ),
             Decision::Skip(Skip::Manual)
+        );
+        assert_eq!(
+            decide(
+                &cfg(),
+                &mut st,
+                "my careful name",
+                title,
+                "bedreader",
+                "",
+                1,
+                false,
+                now
+            ),
+            Decision::Skip(Skip::Held)
         );
     }
 
@@ -742,6 +782,60 @@ mod tests {
             ),
             Decision::Skip(Skip::MultiPane)
         );
+    }
+
+    #[test]
+    fn a_hold_is_recorded_rather_than_re_derived() {
+        let mut st = NameState::default();
+        let now = Instant::now();
+        decide(
+            &cfg(),
+            &mut st,
+            "my careful name",
+            Some("An intent"),
+            "dirk",
+            "",
+            1,
+            false,
+            now,
+        );
+        assert!(
+            st.held,
+            "the hold should be recorded, not worked out afresh each pass"
+        );
+
+        // Held short-circuits before the rest of the policy runs, so a title
+        // that would otherwise pass changes nothing.
+        assert_eq!(
+            decide(
+                &cfg(),
+                &mut st,
+                "my careful name",
+                Some("Quite different"),
+                "dirk",
+                "",
+                1,
+                false,
+                now
+            ),
+            Decision::Skip(Skip::Held)
+        );
+    }
+
+    #[test]
+    fn clearing_a_name_by_hand_hands_the_workspace_back() {
+        // A hold with no visible release leaves a workspace blank for ever,
+        // because nobody knows the command that clearing was supposed to mean.
+        let mut st = NameState {
+            held: true,
+            applied: Some("gone".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            decide_once(&mut st, "", "Open source wifi e-reader", "bedreader"),
+            Decision::Rename(_)
+        ));
+        assert!(!st.held, "clearing it should release the hold");
     }
 
     #[test]

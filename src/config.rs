@@ -187,6 +187,11 @@ pub struct Naming {
     /// Titles that are programs rather than intents. Compared case-insensitively
     /// against the whole title.
     pub ignore_titles: Vec<String>,
+    /// Mark an agent that has stopped revising its title. A signal for a
+    /// human, never acted on.
+    pub show_stale: bool,
+    /// How many state transitions with no new intent count as stale.
+    pub stale_after_turns: u32,
     pub targets: Targets,
     pub templates: Templates,
     pub sources: Sources,
@@ -326,6 +331,8 @@ impl Default for Naming {
             skip_while_blocked: true,
             strip_project_prefix: true,
             ignore_titles: default_ignore_titles(),
+            show_stale: true,
+            stale_after_turns: 6,
             targets: Targets::default(),
             templates: Templates::default(),
             sources: Sources::default(),

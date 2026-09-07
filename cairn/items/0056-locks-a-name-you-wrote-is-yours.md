@@ -2,8 +2,9 @@
 id: 56
 title: 'Locks: a name you wrote is yours'
 type: feature
-status: backlog
+status: done
 milestone: v0.3.1
+assignee: oddurs
 created: 2026-09-06
 updated: 2026-09-06
 priority: p1
@@ -23,8 +24,8 @@ blank for ever, because nobody knows the command that clearing was supposed to
 mean.
 
 ## Acceptance criteria
-- [ ] A hand-written name is held explicitly, not inferred each pass
-- [ ] The `locked` token, and a mark in the nav
-- [ ] An action to release one, reachable without knowing a command
-- [ ] Clearing a name by hand releases the hold rather than freezing it blank
-- [ ] Releasing a hold renames on the next intent, not immediately
+- [x] A hand-written name is held explicitly, not inferred each pass
+- [x] The `locked` token, and a mark in the nav
+- [x] An action to release one, reachable without knowing a command
+- [x] Clearing a name by hand releases the hold rather than freezing it blank
+- [x] Releasing a hold renames on the next intent, not immediately

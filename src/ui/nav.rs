@@ -941,7 +941,12 @@ fn space_row(
         .saturating_sub(age_w + 1 + mark) as usize;
     x += write_str(buf, x, y, &elide(&ws.label, left), style, w);
     if worktree {
-        write_str(buf, x + 1, y, "⑂", THEME.worktree(), w);
+        x += write_str(buf, x + 1, y, "⑂", THEME.worktree(), w) + 1;
+    }
+    // A held name is one dirk has stood down from. Worth saying, because the
+    // alternative is a workspace that mysteriously stops being renamed.
+    if ws.naming.held {
+        write_str(buf, x + 1, y, "·", THEME.faint(), w);
     }
 }
 

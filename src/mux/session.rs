@@ -49,8 +49,14 @@ pub struct NameState {
     pub pending: Option<(String, Instant)>,
     pub last_rename: Option<Instant>,
     /// The last label dirk itself wrote. If the label differs from this, a
-    /// human renamed it and dirk must not touch it again.
+    /// human renamed it.
     pub applied: Option<String>,
+    /// A human named this one and dirk has stood down.
+    ///
+    /// Held explicitly rather than worked out afresh each pass, so it can be
+    /// shown in the interface and taken back. An inferred hold is one nobody
+    /// can see or release.
+    pub held: bool,
 }
 
 pub struct Workspace {
@@ -85,6 +91,13 @@ pub struct Workspace {
     pub suggested: Option<String>,
     /// When the second source was last asked about this workspace.
     pub asked: Option<Instant>,
+    /// State transitions since the intent last changed.
+    ///
+    /// Counted in transitions rather than in wall-clock time: an agent that has
+    /// started and finished six times without revising what it says it is doing
+    /// has either finished or is stuck, and how long that took is not the
+    /// signal.
+    pub turns: u32,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -183,6 +196,8 @@ pub struct Session {
     /// into the slot — exactly what "exactly where you were" promised not to do.
     previous: Option<PaneId>,
     pub shell: String,
+    /// Transitions with no new intent that count as stale. Zero is off.
+    stale_after: u32,
     scrollback: usize,
     next_id: u64,
     tx: Sender<Ev>,
@@ -201,6 +216,11 @@ impl Session {
             focus: Focus::Ws { p: 0, w: 0 },
             previous: None,
             shell: cfg.shell(),
+            stale_after: if cfg.naming.show_stale {
+                cfg.naming.stale_after_turns
+            } else {
+                0
+            },
             scrollback: cfg.scrollback,
             next_id: 1,
             tx,
@@ -257,6 +277,7 @@ impl Session {
             intent: None,
             suggested: None,
             asked: None,
+            turns: 0,
             touched: Instant::now(),
             expanded: false,
             panes: vec![pane],
@@ -431,6 +452,7 @@ impl Session {
                 intent: None,
                 suggested: None,
                 asked: None,
+                turns: 0,
                 touched: Instant::now(),
                 expanded: false,
                 panes,
@@ -885,6 +907,7 @@ impl Session {
                     // long that has been true.
                     ws.intent_since = Instant::now();
                     ws.intent = now;
+                    ws.turns = 0;
                 }
             }
         }
@@ -990,7 +1013,34 @@ impl Session {
         if agents > 1 {
             t.set("agents", agents.to_string());
         }
+
+        t.flag("locked", "held", ws.naming.held);
+        t.flag("stale", "stale", self.is_stale(ws));
         t
+    }
+
+    /// Has this agent stopped saying anything new?
+    ///
+    /// A signal for a human and never acted on: nothing is renamed, skipped or
+    /// notified because of it.
+    pub fn is_stale(&self, ws: &Workspace) -> bool {
+        self.stale_after > 0 && ws.intent.is_some() && ws.turns >= self.stale_after
+    }
+
+    /// Release the hold on the focused workspace, so naming may claim it again.
+    ///
+    /// Reachable without knowing a command, because a hold nobody can release
+    /// is a workspace stuck with a name for ever.
+    pub fn release_hold(&mut self) -> bool {
+        let Some(ws) = self.focused_workspace_mut() else {
+            return false;
+        };
+        if !ws.naming.held {
+            return false;
+        }
+        ws.naming.held = false;
+        ws.naming.applied = None;
+        true
     }
 
     /// Give every agent a name, and take it back when the agent goes.
@@ -1168,6 +1218,7 @@ fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
 
     if ws.state != next_state(observed, ws.seen) {
         ws.state_since = Instant::now();
+        ws.turns = ws.turns.saturating_add(1);
     }
     ws.state = match observed {
         Observed::NoAgent => State::None,
@@ -1272,6 +1323,7 @@ mod tests {
             intent: None,
             suggested: None,
             asked: None,
+            turns: 0,
             touched: Instant::now(),
             panes: Vec::new(),
             tree: Node::Leaf(0),

@@ -819,6 +819,13 @@ impl App {
             }
             KeyCode::Char('o') => self.open_picker(),
             KeyCode::Char('x') => self.session.close_focused(),
+            KeyCode::Char('u') => {
+                if self.session.release_hold() {
+                    self.note("naming released");
+                } else {
+                    self.note("not held");
+                }
+            }
             KeyCode::Char('r') => {
                 if !self.session.restart_focused(self.content) {
                     self.note("nothing to restart");

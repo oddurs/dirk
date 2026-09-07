@@ -93,6 +93,7 @@ literal one through.
 | <kbd>Tab</kbd> `j` `k` | next / previous workspace |
 | `1` `2` `3` | jump to a page |
 | `d` | hide the nav |
+| `u` | release a held name, so naming may claim the workspace again |
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `q` | quit |
@@ -161,6 +162,8 @@ strip_project_prefix = true   # "ptop-adopt-lessons" under "ptop" reads "Adopt-l
 # Titles that are programs rather than intents. Ships with a list; setting this
 # replaces it.
 ignore_titles        = ["nvim", "lazygit", "claude", "htop"]
+show_stale           = true   # mark an agent that has stopped saying anything new
+stale_after_turns    = 6      # counted in state changes, not in minutes
 
 # A second source of intent, for panes whose title says nothing. Off unless
 # asked for. The name of the variable holding your key, never the key.
@@ -218,7 +221,8 @@ state store and sinks all disappear. The policy is unchanged:
 
 | Rule | Behaviour |
 | --- | --- |
-| Hand-written names win | If a label is not the one dirk last wrote, a human wrote it. Never touched again. |
+| Hand-written names win | If a label is not the one dirk last wrote, a human wrote it. The hold is recorded, marked in the nav, and released with `u`. |
+| Clearing a name hands it back | An empty label is not a name — it is the clearest statement that the last one was unwanted, so it releases the hold rather than freezing the workspace blank. |
 | Defaults are adoptable | `w3`, `tab 2`, the bare repo name — nobody chose these, so they get claimed. |
 | Rewordings are not new intent | "naming plugin" → "naming plugins" scores 1.0 on stemmed token overlap and is skipped. |
 | Settle before committing | Titles churn early in a turn; a rename waits for the intent to hold still. |
