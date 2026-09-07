@@ -275,11 +275,45 @@ decision the rest follows from. Shipping session state and letting each client
 compose it sounds more principled and costs more: two renderers drift, the local
 one gets a fix, the remote one does not, and the difference is a rendering bug
 nobody can reproduce. There is one renderer, it lives in the session, and a
-client is a terminal with a socket — which is also why attaching over `ssh` will
-be a small change rather than a second implementation.
+client is a terminal with a socket — which is why attaching over `ssh` is a
+transport and not a second implementation.
 
 One client at a time. A second `dirk` takes the session over and the first is
 told why.
+
+**A session on another machine is the same session.** `dirk --remote host`
+runs `ssh -T host dirk relay` and drives the ordinary client over the pipe pair
+ssh hands back — no pty on the far side, because both ends speak a
+length-prefixed binary protocol and a line discipline in the middle rewrites
+it. Nothing local is started, nothing is rendered twice, and the far side is a
+program that copies bytes between a socket and its own stdin and stdout. That
+is what "attaching over ssh is a transport change" meant.
+
+```console
+$ dirk --remote build-box --session api
+```
+
+ssh is the whole authentication story; dirk has no transport of its own and no
+business inventing one. The first attempt gets the terminal, so a host key to
+confirm or a passphrase to type is asked for where you can see it and answer
+it. `DIRK_SSH` names the program that gets you there when a wrapper does, and
+`DIRK_REMOTE` the far-side dirk when it is not on `PATH`. `--remote` attaches
+and does not carry a command: `ssh host dirk pane list` already works and means
+what it says.
+
+A dropped link is not a lost session. The client keeps the terminal, says so at
+the top of the screen, and spends two minutes trying to make another, waiting
+longer between each — a closed lid is measured in minutes, and the session was
+never in the link. A link that comes back and dies again without ever painting
+does not reset that patience, which is what stops a host that has gone for good
+from being dialled once a second for ever. Ctrl-C leaves while it waits.
+
+Keys pressed while there is nowhere to send them are dropped rather than
+replayed: they belonged to the screen that was there when you pressed them.
+
+Local keybindings win, which is what you want when the ssh is running inside a
+pane: the outer dirk sees `Ctrl-Space` first, and pressing it twice sends a
+literal one through to whatever is inside — including another dirk.
 
 **What comes back is what you arranged, not what was on screen.** A session
 writes down its projects, its workspaces and their names, and which projects

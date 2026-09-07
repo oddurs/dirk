@@ -300,7 +300,7 @@ fn mouse_kind(name: &str, button: u8) -> Option<MouseEventKind> {
 
 // ── Framing ─────────────────────────────────────────────────────────────
 
-pub fn send(w: &mut impl Write, kind: Kind, payload: &[u8]) -> io::Result<()> {
+pub fn send<W: Write + ?Sized>(w: &mut W, kind: Kind, payload: &[u8]) -> io::Result<()> {
     let len = u32::try_from(payload.len())
         .ok()
         .filter(|n| *n <= MAX_MESSAGE)
@@ -311,13 +311,17 @@ pub fn send(w: &mut impl Write, kind: Kind, payload: &[u8]) -> io::Result<()> {
     w.flush()
 }
 
-pub fn send_json<T: Serialize>(w: &mut impl Write, kind: Kind, value: &T) -> io::Result<()> {
+pub fn send_json<W: Write + ?Sized, T: Serialize>(
+    w: &mut W,
+    kind: Kind,
+    value: &T,
+) -> io::Result<()> {
     let body = serde_json::to_vec(value).map_err(io::Error::other)?;
     send(w, kind, &body)
 }
 
 /// Read one message, or `None` at a clean end of stream.
-pub fn recv(r: &mut impl Read) -> io::Result<Option<(Kind, Vec<u8>)>> {
+pub fn recv<R: Read + ?Sized>(r: &mut R) -> io::Result<Option<(Kind, Vec<u8>)>> {
     let mut header = [0u8; 5];
     match r.read_exact(&mut header) {
         Ok(()) => {}
