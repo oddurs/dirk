@@ -92,7 +92,9 @@ fn main() {
     std::thread::sleep(Duration::from_millis(2000));
 
     writer.write_all(&prefix(b"|")).unwrap();
-    std::thread::sleep(Duration::from_millis(700));
+    // Longer than a tick, so what is running in the new pane has been sampled
+    // and its state glyph is settled rather than still unknown.
+    std::thread::sleep(Duration::from_millis(1800));
 
     if std::env::var("DIRK_SHOT_LAYOUT").is_ok() {
         writer.write_all(&prefix(b"1")).unwrap();

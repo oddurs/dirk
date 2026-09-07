@@ -42,6 +42,7 @@
 //! frame rather than one frame per write, and an idle dirk costs nothing at
 //! all. There is no polling anywhere in this file.
 
+mod agent;
 mod config;
 mod git;
 mod hit;
@@ -297,11 +298,13 @@ impl App {
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
+            Ev::Agents(reading) => self.session.apply_agents(reading),
             Ev::Exited(id) => {
                 self.session.reap(id);
                 self.session.refocus();
             }
             Ev::Tick => {
+                self.read_agents();
                 self.read_repos();
                 self.rename_pass();
                 if !self.status.is_empty()
@@ -320,6 +323,34 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Ask what is running in each pane.
+    ///
+    /// The foreground process groups are read here — a `tcgetpgrp` each, too
+    /// cheap to be worth a thread. Turning them into names needs the process
+    /// table, which does not belong on the drawing thread: `ps` on a loaded
+    /// machine is slow, and a slow `ps` must not be able to stop dirk redrawing.
+    fn read_agents(&mut self) {
+        let panes = self.session.foregrounds();
+        if panes.is_empty() {
+            return;
+        }
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let table = crate::agent::table();
+            let panes = panes
+                .into_iter()
+                .map(|(id, pgid)| {
+                    let occupant = table
+                        .get(&pgid)
+                        .map(|comm| crate::agent::classify(comm))
+                        .unwrap_or_default();
+                    (id, occupant)
+                })
+                .collect();
+            let _ = tx.send(Ev::Agents(crate::agent::Reading { panes }));
+        });
     }
 
     /// Ask git about any project whose answer has gone stale.

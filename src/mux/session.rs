@@ -709,6 +709,54 @@ pub fn since(d: Duration) -> String {
     format!("{}d", hours / 24)
 }
 
+impl Session {
+    /// Every live pane and the process group it currently has in the
+    /// foreground, for a sample that will happen elsewhere.
+    pub fn foregrounds(&self) -> Vec<(PaneId, i32)> {
+        let mut out = Vec::new();
+        let mut take = |ws: &Workspace| {
+            for p in &ws.panes {
+                if let Some(pgid) = p.foreground() {
+                    out.push((p.id, pgid));
+                }
+            }
+        };
+        for l in &self.layouts {
+            if let Some(ws) = &l.ws {
+                take(ws);
+            }
+        }
+        for proj in &self.projects {
+            for ws in &proj.workspaces {
+                take(ws);
+            }
+        }
+        out
+    }
+
+    pub fn apply_agents(&mut self, reading: crate::agent::Reading) {
+        let found: std::collections::HashMap<PaneId, crate::agent::Occupant> =
+            reading.panes.into_iter().collect();
+        let set = |ws: &mut Workspace| {
+            for p in &mut ws.panes {
+                if let Some(o) = found.get(&p.id) {
+                    p.occupant = o.clone();
+                }
+            }
+        };
+        for i in 0..self.layouts.len() {
+            if let Some(ws) = self.layouts[i].ws.as_mut() {
+                set(ws);
+            }
+        }
+        for p in 0..self.projects.len() {
+            for w in 0..self.projects[p].workspaces.len() {
+                set(&mut self.projects[p].workspaces[w]);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

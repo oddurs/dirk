@@ -677,3 +677,29 @@ fn the_quit_button_takes_two_clicks() {
     }
     panic!("the second click did not quit\n{}", h.drawn());
 }
+
+#[test]
+fn a_shell_that_sets_a_title_is_not_mistaken_for_an_agent() {
+    // Shells set terminal titles, usually to the working directory, and the
+    // first version of the agents list was "anything that has published a
+    // title" -- so every plain shell was listed as something wanting attention.
+    // What is running is now read from the pane's foreground process group.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;Looks like an intent\\007'\r");
+    assert!(
+        h.wait_for("Looks like an intent", Duration::from_secs(10)),
+        "the workspace was never named\n{}",
+        h.drawn()
+    );
+
+    // The name is adopted -- that part is right, the title is all dirk has to
+    // go on. What must not happen is the shell appearing under `agents`.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !h.rows().iter().any(|r| r.contains("agents")),
+        "a shell was listed as an agent\n{}",
+        h.drawn()
+    );
+}
