@@ -420,6 +420,55 @@ pub fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// What is wrong with a configuration that still loads.
+///
+/// Separate from reading it because the same complaints are owed to whoever
+/// asked, whether that is a terminal at startup or a client that said `reload`.
+pub fn complaints(cfg: &Config) -> Vec<String> {
+    let mut out = Vec::new();
+    for l in &cfg.layouts {
+        for bad in crate::mux::layout::bad_sizes(l) {
+            out.push(format!(
+                "layout {}: bad size {bad:?}; using an even share",
+                l.name
+            ));
+        }
+        // Command keys win, so a layout bound to one is unreachable. Silently
+        // is the problem: the entry is listed with a key that does nothing.
+        const RESERVED: &[char] = &['n', 'o', 'x', 'r', 'v', 's', 'd', 'w', 'q', 'j', 'k', ';'];
+        if let Some(k) = l.key.filter(|k| RESERVED.contains(k)) {
+            out.push(format!(
+                "layout {}: key {k:?} is a command key and will not reach it",
+                l.name
+            ));
+        }
+        if !l.runnable() {
+            out.push(format!("layout {}: nothing to run; dropped", l.name));
+        }
+    }
+    // Layouts are matched to what is open by name, so a name used twice is one
+    // layout you can open and one you cannot -- and nothing to say which.
+    for (i, l) in cfg.layouts.iter().enumerate() {
+        if cfg.layouts[..i].iter().any(|e| e.name == l.name) {
+            out.push(format!(
+                "layout {}: defined twice; only the first is reachable",
+                l.name
+            ));
+        }
+    }
+    // A mistyped token renders as silence otherwise: a label simply shorter
+    // than intended, with nothing to say why.
+    for (what, template) in [
+        ("workspace", &cfg.naming.templates.workspace),
+        ("agent", &cfg.naming.templates.agent),
+    ] {
+        for token in crate::tokens::unknown(template) {
+            out.push(format!("{what} template: no such token {{{token}}}"));
+        }
+    }
+    out
+}
+
 pub fn config_home() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -439,39 +488,52 @@ impl Config {
         // Reported here, before the terminal is taken over, because a message
         // printed after that is written onto the alternate screen and vanishes
         // with it.
-        for l in &cfg.layouts {
-            for bad in crate::mux::layout::bad_sizes(l) {
-                eprintln!(
-                    "dirk: layout {}: bad size {bad:?}; using an even share",
-                    l.name
-                );
-            }
-        }
-        // Command keys win, so a layout bound to one is unreachable. Silently
-        // is the problem: the entry is listed with a key that does nothing.
-        const RESERVED: &[char] = &['n', 'o', 'x', 'r', 'v', 's', 'd', 'w', 'q', 'j', 'k', ';'];
-        for l in &cfg.layouts {
-            if l.key.is_some_and(|k| RESERVED.contains(&k)) {
-                eprintln!(
-                    "dirk: layout {}: key {:?} is a command key and will not reach it",
-                    l.name,
-                    l.key.unwrap_or(' ')
-                );
-            }
-        }
-        // Reported before the terminal is taken over, where it can be read. A
-        // mistyped token renders as silence otherwise: a label simply shorter
-        // than intended, with nothing to say why.
-        for (what, template) in [
-            ("workspace", &cfg.naming.templates.workspace),
-            ("agent", &cfg.naming.templates.agent),
-        ] {
-            for token in crate::tokens::unknown(template) {
-                eprintln!("dirk: {what} template: no such token {{{token}}}");
-            }
+        for line in complaints(&cfg) {
+            eprintln!("dirk: {line}");
         }
         cfg.layouts.retain(|l| l.runnable());
         cfg
+    }
+
+    /// Read the file again and apply what can be applied to a running session.
+    ///
+    /// A file that does not parse is reported and the running configuration is
+    /// kept: a typo should not cost you the session you were working in.
+    ///
+    /// Answers with whatever it had to say about the file. At startup those go
+    /// to stderr, where there is a terminal to read them; here there is not,
+    /// and a reload that quietly dropped a layout would be a reload that
+    /// reported success for removing something.
+    pub fn reload(
+        current: &mut Config,
+        session: &mut crate::mux::Session,
+    ) -> Result<Vec<String>, String> {
+        let path = config_home().join("dirk").join("config.toml");
+        let next = match std::fs::read_to_string(&path) {
+            Ok(text) => toml::from_str::<Config>(&text).map_err(|e| e.to_string())?,
+            // No file is a valid configuration: the defaults. Anything else is
+            // a failure to read one that exists, and quietly installing the
+            // defaults there would replace the layouts of somebody whose home
+            // directory blinked.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config::default(),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let mut next = next;
+        let said = complaints(&next);
+        next.layouts.retain(|l| l.runnable());
+
+        // Layouts that are open keep the panes they already have; the rest of
+        // the list is replaced. Rebuilding an open dashboard because a colour
+        // changed is not a reload, it is a restart.
+        session.merge_layouts(&next.layouts);
+        session.set_naming(&next.naming);
+        // Cached at construction, so a reload that left them alone would report
+        // success for a change that never reached anything. They take effect on
+        // the next pane, which is what changing a shell means.
+        session.shell = next.shell();
+        session.set_scrollback(next.scrollback);
+        *current = next;
+        Ok(said)
     }
 
     pub fn shell(&self) -> String {

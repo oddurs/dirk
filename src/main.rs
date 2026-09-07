@@ -54,6 +54,8 @@ mod mux;
 mod name;
 mod notify;
 mod server;
+mod skill;
+mod state;
 mod theme;
 mod tokens;
 mod ui;
@@ -134,7 +136,11 @@ fn main() -> io::Result<()> {
     // in a pipe behaves like any other program rather than briefly taking over
     // the screen. dirk takes at most one, and every one of them exits.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut session = "default".to_string();
+    // The session a pane belongs to, which every pane is told. Without reading
+    // it back, a command from inside one goes to `default` -- and pane ids are
+    // per-session counters, so `--current` in one session can name a live pane
+    // in another and type into a stranger's shell.
+    let mut session = std::env::var("DIRK_SESSION").unwrap_or_else(|_| "default".to_string());
     let mut mode = Mode::Attach;
 
     // `--session` may come before a command, so the flags are read first and
@@ -148,6 +154,10 @@ fn main() -> io::Result<()> {
             }
             "-V" | "--version" => {
                 print!("{VERSION}");
+                return Ok(());
+            }
+            "--skill" => {
+                print!("{}", skill::text());
                 return Ok(());
             }
             "server" => mode = Mode::Server,
@@ -178,6 +188,40 @@ fn main() -> io::Result<()> {
     // A command is a noun and a verb. Answered by a running session, and never
     // by starting one: `dirk pane list` should say there is nothing to list
     // rather than conjure a session to list.
+    // Answered without a running session, because they are about which ones
+    // there are rather than about one of them.
+    if command_args_are(&args, "session", "list") {
+        for (name, running) in server::sessions() {
+            if !running {
+                // The socket outlived its server, which is the ordinary state
+                // after a crash. Said plainly rather than hidden, because it is
+                // the answer to "why can I not attach to that".
+                println!("{name}\tstale");
+                continue;
+            }
+            // Whether anyone is looking needs asking; only the session knows.
+            // Once, not once per field: two questions can be answered either
+            // side of a client attaching, and a line that says "running" with
+            // the workspace count of an attached session is a line about two
+            // different moments.
+            let path = server::socket_path(&name);
+            let req = wire::Request {
+                cmd: "session.info".into(),
+                args: Vec::new(),
+            };
+            let said = server::ask(&path, &req).ok();
+            let field = |k: &str| said.as_ref().and_then(|r| r.result.get(k));
+            let attached = field("attached").and_then(|v| v.as_bool()).unwrap_or(false);
+            let spaces = field("workspaces").and_then(|v| v.as_u64()).unwrap_or(0);
+            println!(
+                "{name}\t{}\t{spaces} {}",
+                if attached { "attached" } else { "running" },
+                if spaces == 1 { "space" } else { "spaces" }
+            );
+        }
+        return Ok(());
+    }
+
     let command_args: Vec<String> = args
         .iter()
         .skip_while(|a| !NOUNS.contains(&a.as_str()))
@@ -214,6 +258,34 @@ fn main() -> io::Result<()> {
         }
         Mode::Alone => alone(),
     }
+}
+
+/// Is this `dirk <noun> <verb>`?
+fn command_args_are(args: &[String], noun: &str, verb: &str) -> bool {
+    let words = words(args);
+    words.first() == Some(&noun) && words.get(1) == Some(&verb)
+}
+
+/// The command in `args`, with the options and their values taken out.
+///
+/// Dropping only the `-` words is not enough: `--session foo session list`
+/// would leave `foo` in front of the command and match nothing.
+fn words(args: &[String]) -> Vec<&str> {
+    const TAKES_A_VALUE: &[&str] = &["--session", "--remote"];
+    let mut out = Vec::new();
+    let mut skip = false;
+    for arg in args {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if arg.starts_with('-') {
+            skip = TAKES_A_VALUE.contains(&arg.as_str());
+            continue;
+        }
+        out.push(arg.as_str());
+    }
+    out
 }
 
 /// The nouns a session answers to.
@@ -276,10 +348,25 @@ fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
     let mut app = App::new(cfg, session_state, size, tx);
     app.socket = Some(path.to_path_buf());
     app.socket_inode = server::inode(path).ok();
-    app.bootstrap();
+    app.session_name = Some(session.to_string());
+    // What was here before, if anything was.
+    if !app.restore() {
+        app.bootstrap();
+    }
 
     let ours = app.socket_inode;
     let result = app.serve(rx);
+
+    // On the way out as well as on the tick. The shape is written a second at
+    // a time, and ending the session is exactly when the last second has not
+    // elapsed -- quitting promptly after a rename would otherwise lose it.
+    //
+    // Not when the session is empty: it ended because its last pane exited,
+    // and writing that emptiness down would throw away the arrangement rather
+    // than record one.
+    if !app.session.is_empty() {
+        app.persist();
+    }
     // Only if it is still ours: another server may have bound this name while
     // we were shutting down, and removing its socket would orphan it.
     if ours.is_some_and(|i| server::reachable(path, i)) {
@@ -385,6 +472,13 @@ struct App {
     /// the session, and the button sits at the edge of the screen where a stray
     /// click is most likely, so it takes two.
     quit_armed: Option<Instant>,
+    /// Which session this is, and what was last written down for it.
+    session_name: Option<String>,
+    written: Option<state::Saved>,
+    /// A saved session is there and unreadable, so this one does not write.
+    readonly: bool,
+    /// Whether the failure to save has been mentioned. Once is enough.
+    complained: bool,
     /// Where this session's socket is, when it has one. Checked on the tick:
     /// a server whose socket has gone cannot be reached by anyone and should
     /// not keep holding a shell.
@@ -420,6 +514,10 @@ impl App {
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
+            session_name: None,
+            written: None,
+            readonly: false,
+            complained: false,
             socket: None,
             socket_inode: None,
             view: None,
@@ -433,6 +531,107 @@ impl App {
                 height: height.saturating_sub(1),
             },
             quit: false,
+        }
+    }
+
+    /// Bring back the shape of a session that was here before.
+    ///
+    /// Not the panes: a pane is a process, and restoring a screenful of text
+    /// with nothing behind it would be worse than an empty one, because it
+    /// looks like something you can type into. What comes back is which
+    /// projects were open, which workspaces were in them, and what they were
+    /// called — the parts a human arranged.
+    ///
+    /// Returns false when there was nothing to bring back.
+    fn restore(&mut self) -> bool {
+        let Some(name) = self.session_name.clone() else {
+            return false;
+        };
+        let saved = match state::read(&state::base(), &name) {
+            state::Stored::Saved(saved) => saved,
+            state::Stored::Fresh => return false,
+            // Something is there that this dirk cannot read -- a newer format,
+            // or a file it cannot open at all. Starting empty is right; writing
+            // over it is not, because that file may be the only record of the
+            // arrangement and the dirk that wrote it will want it back.
+            state::Stored::Unreadable => {
+                self.readonly = true;
+                self.note("saved session not readable; it will not be written over");
+                return false;
+            }
+        };
+        let saved = state::prune(saved);
+        if saved.projects.is_empty() {
+            return false;
+        }
+
+        let (rows, cols) = (self.content.height, self.content.width);
+        for project in &saved.projects {
+            let p = self.session.open_project(&project.path);
+            for want in &project.workspaces {
+                if self.session.new_workspace(p, rows, cols).is_none() {
+                    continue;
+                }
+                let Some(proj) = self.session.projects.get_mut(p) else {
+                    continue;
+                };
+                let Some(ws) = proj.workspaces.last_mut() else {
+                    continue;
+                };
+                // A name you wrote is still yours after a restart, and one
+                // naming worked out is kept so the session reads as it read.
+                ws.label = want.label.clone();
+                ws.naming.held = want.held;
+                ws.naming.applied = Some(want.label.clone());
+            }
+            // After the workspaces, not before: opening one expands the project
+            // that holds it, so a collapsed project set up first is expanded
+            // again on the way past.
+            if let Some(proj) = self.session.projects.get_mut(p) {
+                proj.expanded = project.expanded;
+            }
+        }
+        // The top of the tree, which is where a session reads from. `refocus`
+        // only guarantees somewhere valid, and somewhere valid after building a
+        // tree bottom-up is the last workspace of the last project.
+        if let Some(first) = self.session.first_workspace() {
+            self.session.focus = first;
+        }
+        self.session.refocus();
+        self.written = Some(state::current(&self.session));
+        true
+    }
+
+    /// Write the shape down, when it has changed.
+    ///
+    /// On the tick rather than on every edit: the thing being saved changes a
+    /// few times an hour and a write per keystroke would be a write per
+    /// keystroke.
+    fn persist(&mut self) {
+        let Some(name) = self.session_name.clone() else {
+            return;
+        };
+        if self.readonly {
+            return;
+        }
+        let now = state::current(&self.session);
+        if self
+            .written
+            .as_ref()
+            .is_some_and(|was| !state::differs(was, &now))
+        {
+            return;
+        }
+        match state::save(&state::base(), &name, &now) {
+            Ok(()) => self.written = Some(now),
+            // Once, not once a second: the usual causes -- a full disk, a
+            // read-only home -- do not clear up on their own, and a status line
+            // repeating itself every tick is one you stop reading.
+            Err(e) if !self.complained => {
+                self.complained = true;
+                self.note(&format!("cannot save this session: {e}"));
+            }
+            Err(_) => {}
         }
     }
 
@@ -575,6 +774,7 @@ impl App {
                     self.quit = true;
                     return;
                 }
+                self.persist();
                 self.read_agents();
                 self.read_repos();
                 self.session.track_intents(&self.cfg.naming);
@@ -642,6 +842,16 @@ impl App {
         let arg = |n: usize| req.args.get(n).cloned().unwrap_or_default();
 
         match req.cmd.as_str() {
+            "session.reload" => match Config::reload(&mut self.cfg, &mut self.session) {
+                Ok(said) => Reply::ok(serde_json::json!({
+                    "reloaded": true,
+                    // Whatever the file was wrong about. Empty is the usual
+                    // answer and the only one worth not reading.
+                    "notes": said,
+                })),
+                Err(e) => Reply::err(e),
+            },
+
             "session.info" => Reply::ok(serde_json::json!({
                 "workspaces": self.session.flat().len(),
                 "layouts": self.session.layouts.len(),
@@ -667,7 +877,14 @@ impl App {
                     return Reply::err("no such directory");
                 }
                 let p = self.session.open_project(&path);
-                match self.session.new_workspace(p, area.height, area.width) {
+                // Saved and put back, as `pane.split` does: a background
+                // command should not pull the attached human away from what
+                // they were doing, nor resize their panes doing it.
+                let was = self.session.focus;
+                let made = self.session.new_workspace(p, area.height, area.width);
+                self.session.focus = was;
+                self.session.refocus();
+                match made {
                     Some(()) => {
                         let w = self.session.projects[p].workspaces.len() - 1;
                         let id = self.session.projects[p].workspaces[w].id;
@@ -1553,6 +1770,29 @@ fn empty(buf: &mut Buffer, area: Rect, msg: &str) {
             msg,
             THEME.faint(),
             area.width,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_name_is_not_mistaken_for_the_command() {
+        // Dropping only the `-` words leaves the value behind, and
+        // `--session foo session list` then reads as a command called "foo".
+        let args = |s: &str| -> Vec<String> { s.split(' ').map(String::from).collect() };
+        assert!(command_args_are(&args("session list"), "session", "list"));
+        assert!(command_args_are(
+            &args("--session foo session list"),
+            "session",
+            "list"
+        ));
+        assert!(!command_args_are(&args("--session foo"), "session", "list"));
+        assert_eq!(
+            words(&args("--session foo pane read w1:p2")),
+            ["pane", "read", "w1:p2"]
         );
     }
 }

@@ -2,12 +2,13 @@
 id: 12
 title: Session persistence across restarts
 type: feature
-status: backlog
+status: done
 milestone: v0.4
+assignee: oddurs
 depends_on:
 - 7
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-07
 priority: p1
 area: server
 ---

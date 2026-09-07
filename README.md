@@ -281,6 +281,19 @@ be a small change rather than a second implementation.
 One client at a time. A second `dirk` takes the session over and the first is
 told why.
 
+**What comes back is what you arranged, not what was on screen.** A session
+writes down its projects, its workspaces and their names, and which projects
+were open; it does not write down pane contents. A screenful of text with no
+process behind it is worse than an empty pane, because it looks like something
+you can type into. Names you wrote by hand come back as yours — still held, so
+naming leaves them alone — and a project whose directory has gone is dropped
+rather than restored as a row that cannot open anything.
+
+The shape is written on a tick and again on the way out, because ending a
+session is exactly when the last second has not elapsed. A session that ended
+because its last pane exited writes nothing: that is you closing things, and
+recording the emptiness would throw the arrangement away rather than save one.
+
 ## Asking a session things
 
 A session answers for itself, which is the difference between a multiplexer
@@ -302,6 +315,22 @@ number the nav shows beside a workspace is positional and changes when spaces
 are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
 `--current` resolves from them — so a command from inside a pane reaches the
 session holding it without the caller looking anything up first.
+
+`dirk --skill` prints what an agent needs to know to drive a session — generated
+from the command table, so it cannot describe a surface that no longer exists.
+Most of its value is the traps: each one is something that would otherwise be
+found out by getting it wrong.
+
+```console
+$ dirk session list          # every session, and whether anyone is watching
+$ dirk session reload        # re-read config.toml without restarting
+```
+
+A reload keeps what is running. An open layout keeps its panes — rebuilding a
+dashboard because a colour changed elsewhere in the file is not a reload, it is
+a restart — and a file that does not parse is reported with the running
+configuration kept, because a typo should not cost you the session you were
+working in.
 
 **Reads do not mark an agent seen.** Focusing a workspace is what says you have
 looked at it; asking about one over a socket is not looking. Without that rule a
