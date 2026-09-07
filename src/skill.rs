@@ -33,7 +33,14 @@ pub fn text() -> String {
     out.push_str("\n## Commands\n\n```\n");
     for (name, args) in crate::api::COMMANDS {
         let (noun, verb) = name.split_once('.').unwrap_or((name, ""));
-        out.push_str(&format!("dirk {noun} {verb} {args}\n"));
+        // Trimmed: most commands take nothing, and a line ending in a space is
+        // a line somebody will copy with the space in it.
+        out.push_str(
+            format!("dirk {noun} {verb} {args}\n")
+                .trim_start()
+                .trim_end(),
+        );
+        out.push('\n');
     }
     out.push_str("```\n");
 

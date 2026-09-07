@@ -212,7 +212,6 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("layout.list", ""),
     ("layout.open", "<name>"),
     ("agent.list", ""),
-    ("session.list", ""),
     ("session.info", ""),
     ("session.commands", ""),
     ("session.reload", ""),

@@ -200,19 +200,19 @@ fn main() -> io::Result<()> {
                 continue;
             }
             // Whether anyone is looking needs asking; only the session knows.
+            // Once, not once per field: two questions can be answered either
+            // side of a client attaching, and a line that says "running" with
+            // the workspace count of an attached session is a line about two
+            // different moments.
             let path = server::socket_path(&name);
             let req = wire::Request {
                 cmd: "session.info".into(),
                 args: Vec::new(),
             };
-            let attached = server::ask(&path, &req)
-                .ok()
-                .and_then(|r| r.result.get("attached").and_then(|v| v.as_bool()))
-                .unwrap_or(false);
-            let spaces = server::ask(&path, &req)
-                .ok()
-                .and_then(|r| r.result.get("workspaces").and_then(|v| v.as_u64()))
-                .unwrap_or(0);
+            let said = server::ask(&path, &req).ok();
+            let field = |k: &str| said.as_ref().and_then(|r| r.result.get(k));
+            let attached = field("attached").and_then(|v| v.as_bool()).unwrap_or(false);
+            let spaces = field("workspaces").and_then(|v| v.as_u64()).unwrap_or(0);
             println!(
                 "{name}\t{}\t{spaces} {}",
                 if attached { "attached" } else { "running" },
@@ -262,12 +262,30 @@ fn main() -> io::Result<()> {
 
 /// Is this `dirk <noun> <verb>`?
 fn command_args_are(args: &[String], noun: &str, verb: &str) -> bool {
-    let words: Vec<&str> = args
-        .iter()
-        .map(String::as_str)
-        .filter(|a| !a.starts_with('-'))
-        .collect();
+    let words = words(args);
     words.first() == Some(&noun) && words.get(1) == Some(&verb)
+}
+
+/// The command in `args`, with the options and their values taken out.
+///
+/// Dropping only the `-` words is not enough: `--session foo session list`
+/// would leave `foo` in front of the command and match nothing.
+fn words(args: &[String]) -> Vec<&str> {
+    const TAKES_A_VALUE: &[&str] = &["--session", "--remote"];
+    let mut out = Vec::new();
+    let mut skip = false;
+    for arg in args {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if arg.starts_with('-') {
+            skip = TAKES_A_VALUE.contains(&arg.as_str());
+            continue;
+        }
+        out.push(arg.as_str());
+    }
+    out
 }
 
 /// The nouns a session answers to.
@@ -457,6 +475,10 @@ struct App {
     /// Which session this is, and what was last written down for it.
     session_name: Option<String>,
     written: Option<state::Saved>,
+    /// A saved session is there and unreadable, so this one does not write.
+    readonly: bool,
+    /// Whether the failure to save has been mentioned. Once is enough.
+    complained: bool,
     /// Where this session's socket is, when it has one. Checked on the tick:
     /// a server whose socket has gone cannot be reached by anyone and should
     /// not keep holding a shell.
@@ -494,6 +516,8 @@ impl App {
             side: Rect::ZERO,
             session_name: None,
             written: None,
+            readonly: false,
+            complained: false,
             socket: None,
             socket_inode: None,
             view: None,
@@ -523,8 +547,18 @@ impl App {
         let Some(name) = self.session_name.clone() else {
             return false;
         };
-        let Some(saved) = state::load(&state::base(), &name) else {
-            return false;
+        let saved = match state::read(&state::base(), &name) {
+            state::Stored::Saved(saved) => saved,
+            state::Stored::Fresh => return false,
+            // Something is there that this dirk cannot read -- a newer format,
+            // or a file it cannot open at all. Starting empty is right; writing
+            // over it is not, because that file may be the only record of the
+            // arrangement and the dirk that wrote it will want it back.
+            state::Stored::Unreadable => {
+                self.readonly = true;
+                self.note("saved session not readable; it will not be written over");
+                return false;
+            }
         };
         let saved = state::prune(saved);
         if saved.projects.is_empty() {
@@ -534,9 +568,6 @@ impl App {
         let (rows, cols) = (self.content.height, self.content.width);
         for project in &saved.projects {
             let p = self.session.open_project(&project.path);
-            if let Some(proj) = self.session.projects.get_mut(p) {
-                proj.expanded = project.expanded;
-            }
             for want in &project.workspaces {
                 if self.session.new_workspace(p, rows, cols).is_none() {
                     continue;
@@ -553,6 +584,18 @@ impl App {
                 ws.naming.held = want.held;
                 ws.naming.applied = Some(want.label.clone());
             }
+            // After the workspaces, not before: opening one expands the project
+            // that holds it, so a collapsed project set up first is expanded
+            // again on the way past.
+            if let Some(proj) = self.session.projects.get_mut(p) {
+                proj.expanded = project.expanded;
+            }
+        }
+        // The top of the tree, which is where a session reads from. `refocus`
+        // only guarantees somewhere valid, and somewhere valid after building a
+        // tree bottom-up is the last workspace of the last project.
+        if let Some(first) = self.session.first_workspace() {
+            self.session.focus = first;
         }
         self.session.refocus();
         self.written = Some(state::current(&self.session));
@@ -568,6 +611,9 @@ impl App {
         let Some(name) = self.session_name.clone() else {
             return;
         };
+        if self.readonly {
+            return;
+        }
         let now = state::current(&self.session);
         if self
             .written
@@ -576,8 +622,16 @@ impl App {
         {
             return;
         }
-        if state::save(&state::base(), &name, &now).is_ok() {
-            self.written = Some(now);
+        match state::save(&state::base(), &name, &now) {
+            Ok(()) => self.written = Some(now),
+            // Once, not once a second: the usual causes -- a full disk, a
+            // read-only home -- do not clear up on their own, and a status line
+            // repeating itself every tick is one you stop reading.
+            Err(e) if !self.complained => {
+                self.complained = true;
+                self.note(&format!("cannot save this session: {e}"));
+            }
+            Err(_) => {}
         }
     }
 
@@ -789,7 +843,12 @@ impl App {
 
         match req.cmd.as_str() {
             "session.reload" => match Config::reload(&mut self.cfg, &mut self.session) {
-                Ok(()) => Reply::ok(serde_json::json!({ "reloaded": true })),
+                Ok(said) => Reply::ok(serde_json::json!({
+                    "reloaded": true,
+                    // Whatever the file was wrong about. Empty is the usual
+                    // answer and the only one worth not reading.
+                    "notes": said,
+                })),
                 Err(e) => Reply::err(e),
             },
 
@@ -1711,6 +1770,29 @@ fn empty(buf: &mut Buffer, area: Rect, msg: &str) {
             msg,
             THEME.faint(),
             area.width,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_name_is_not_mistaken_for_the_command() {
+        // Dropping only the `-` words leaves the value behind, and
+        // `--session foo session list` then reads as a command called "foo".
+        let args = |s: &str| -> Vec<String> { s.split(' ').map(String::from).collect() };
+        assert!(command_args_are(&args("session list"), "session", "list"));
+        assert!(command_args_are(
+            &args("--session foo session list"),
+            "session",
+            "list"
+        ));
+        assert!(!command_args_are(&args("--session foo"), "session", "list"));
+        assert_eq!(
+            words(&args("--session foo pane read w1:p2")),
+            ["pane", "read", "w1:p2"]
         );
     }
 }

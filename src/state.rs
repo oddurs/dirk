@@ -31,6 +31,7 @@
 //! still yours after a restart.
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// On-disk format. A session written by a version that knew more than this one
@@ -82,24 +83,68 @@ pub fn base() -> PathBuf {
 /// to prevent.
 pub fn save(base: &Path, session: &str, state: &Saved) -> std::io::Result<()> {
     let target = path(base, session);
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
+    let Some(dir) = target.parent() else {
+        return Err(std::io::Error::other("nowhere to write"));
+    };
+    std::fs::create_dir_all(dir)?;
+
     let body = serde_json::to_vec_pretty(state)?;
     let temp = target.with_extension("json.new");
-    std::fs::write(&temp, body)?;
-    std::fs::rename(&temp, &target)
+    // On disk before the rename, not just in the page cache. A rename is atomic
+    // for anything reading it, but a machine that loses power between the two
+    // can come back to a name pointing at a file with nothing in it -- which is
+    // the empty dirk this is here to prevent, arrived at the long way round.
+    let written = (|| {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(&body)?;
+        file.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&temp, &target) {
+        // Otherwise a directory that cannot be renamed into slowly fills with
+        // the sessions that could not be written.
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    // The rename itself, so the entry survives the same power loss the contents
+    // now do. Best effort: not every filesystem lets you open a directory.
+    if let Ok(dir) = std::fs::File::open(dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
-/// Read it back, or nothing at all.
+/// What was on disk.
+pub enum Stored {
+    /// Nothing has been written for this session yet.
+    Fresh,
+    /// Something is there and could not be used. Kept, deliberately: the file
+    /// may be the only record of an arrangement, and a newer dirk that wrote it
+    /// will want it back when you next run that one.
+    Unreadable,
+    Saved(Saved),
+}
+
+/// Read it back.
 ///
-/// Every failure is nothing: no file, unreadable, malformed, or written by a
-/// version that knew more. A session that will not load is a session you start
-/// empty, not one that refuses to start.
-pub fn load(base: &Path, session: &str) -> Option<Saved> {
-    let text = std::fs::read_to_string(path(base, session)).ok()?;
-    let saved: Saved = serde_json::from_str(&text).ok()?;
-    (saved.version <= VERSION).then_some(saved)
+/// A session that will not load is a session you start empty, not one that
+/// refuses to start -- but "there is nothing here" and "there is something here
+/// I cannot read" are different answers, and treating them alike is how a file
+/// written by a newer dirk gets replaced by an older one a second after it
+/// starts.
+pub fn read(base: &Path, session: &str) -> Stored {
+    let text = match std::fs::read_to_string(path(base, session)) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Stored::Fresh,
+        Err(_) => return Stored::Unreadable,
+    };
+    match serde_json::from_str::<Saved>(&text) {
+        Ok(saved) if saved.version <= VERSION => Stored::Saved(saved),
+        _ => Stored::Unreadable,
+    }
 }
 
 /// Drop projects whose directory has gone.
@@ -107,8 +152,16 @@ pub fn load(base: &Path, session: &str) -> Option<Saved> {
 /// A path can move or be deleted between one run and the next, and a session
 /// that refused to open because one of six projects was gone would be a session
 /// you had to repair by hand before you could use it.
+///
+/// Gone means the filesystem said so. Anything else -- a mount that has not
+/// come up, a server that is not answering, a directory you cannot look in
+/// right now -- keeps the project, because those all come back and a project
+/// dropped here is a project erased by the next write.
 pub fn prune(mut saved: Saved) -> Saved {
-    saved.projects.retain(|p| p.path.is_dir());
+    saved.projects.retain(|p| match std::fs::metadata(&p.path) {
+        Ok(m) => m.is_dir(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    });
     saved
 }
 
@@ -135,6 +188,11 @@ pub fn current(session: &crate::mux::Session) -> Saved {
 }
 
 /// Has anything worth writing down changed?
+///
+/// Everything that is written, not only what is visible. Releasing a hold
+/// leaves the label alone and changes only `held`, and a comparison that
+/// ignored it would decline to write -- so the release would last exactly as
+/// long as the session did.
 pub fn differs(a: &Saved, b: &Saved) -> bool {
     let shape = |s: &Saved| {
         s.projects
@@ -142,9 +200,10 @@ pub fn differs(a: &Saved, b: &Saved) -> bool {
             .map(|p| {
                 (
                     p.path.clone(),
+                    p.expanded,
                     p.workspaces
                         .iter()
-                        .map(|w| w.label.clone())
+                        .map(|w| (w.label.clone(), w.held))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -211,25 +270,55 @@ mod tests {
         state.version = VERSION + 1;
         save(&dir, "s", &state).unwrap();
         assert!(
-            load(&dir, "s").is_none(),
+            matches!(read(&dir, "s"), Stored::Unreadable),
             "a format we do not know was read anyway"
         );
 
         state.version = VERSION;
         save(&dir, "s", &state).unwrap();
-        assert!(load(&dir, "s").is_some());
+        assert!(matches!(read(&dir, "s"), Stored::Saved(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn nothing_that_will_not_load_stops_a_session_starting() {
-        // Every failure is nothing: no file, unreadable, or malformed. A
-        // session that will not load is one you start empty, not one that
-        // refuses to start.
+        // A session that will not load is one you start empty, not one that
+        // refuses to start -- but the two reasons for starting empty are not
+        // the same, and only one of them means the file is ours to replace.
         let dir = scratch("broken");
         std::fs::write(path(&dir, "broken"), b"{ not json").unwrap();
-        assert!(load(&dir, "broken").is_none());
-        assert!(load(&dir, "never-written").is_none());
+        assert!(
+            matches!(read(&dir, "broken"), Stored::Unreadable),
+            "a file we cannot read is not a file that is not there"
+        );
+        assert!(matches!(read(&dir, "never-written"), Stored::Fresh));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_that_is_only_unreachable_is_kept() {
+        // Deleted and "not mounted this minute" look alike from here, and a
+        // project dropped for the second reason is erased by the next write.
+        let dir = scratch("prune");
+        let there = dir.join("here");
+        std::fs::create_dir_all(&there).unwrap();
+        let kept = prune(Saved {
+            version: VERSION,
+            projects: vec![
+                Project {
+                    path: there.clone(),
+                    expanded: true,
+                    workspaces: Vec::new(),
+                },
+                Project {
+                    path: dir.join("gone"),
+                    expanded: true,
+                    workspaces: Vec::new(),
+                },
+            ],
+        });
+        assert_eq!(kept.projects.len(), 1, "the one that is there was dropped");
+        assert_eq!(kept.projects[0].path, there);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -241,10 +330,10 @@ mod tests {
         let dir = scratch("atomic");
         save(&dir, "s", &saved(&[("/tmp", &["first"])])).unwrap();
         save(&dir, "s", &saved(&[("/tmp", &["second"])])).unwrap();
-        assert_eq!(
-            load(&dir, "s").unwrap().projects[0].workspaces[0].label,
-            "second"
-        );
+        let Stored::Saved(back) = read(&dir, "s") else {
+            panic!("the second write did not land")
+        };
+        assert_eq!(back.projects[0].workspaces[0].label, "second");
         // And nothing is left beside it.
         assert!(!path(&dir, "s").with_extension("json.new").exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -258,6 +347,17 @@ mod tests {
             differs(&a, &saved(&[("/tmp", &["two"])])),
             "a rename is a change"
         );
+
+        // Releasing a hold leaves the label alone and changes only `held`. A
+        // comparison that missed it would decline to write, and the release
+        // would last exactly as long as the session did.
+        let mut released = a.clone();
+        released.projects[0].workspaces[0].held = !a.projects[0].workspaces[0].held;
+        assert!(differs(&a, &released), "a released hold is a change");
+
+        let mut collapsed = a.clone();
+        collapsed.projects[0].expanded = !a.projects[0].expanded;
+        assert!(differs(&a, &collapsed), "a collapsed project is a change");
         assert!(
             differs(&a, &saved(&[("/tmp", &["one", "two"])])),
             "a new workspace is a change"

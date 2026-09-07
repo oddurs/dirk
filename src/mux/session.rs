@@ -562,7 +562,7 @@ impl Session {
         None
     }
 
-    fn first_workspace(&self) -> Option<Focus> {
+    pub fn first_workspace(&self) -> Option<Focus> {
         for (p, proj) in self.projects.iter().enumerate() {
             if !proj.workspaces.is_empty() {
                 return Some(Focus::Ws { p, w: 0 });
@@ -1060,6 +1060,13 @@ impl Session {
     }
 
     /// Take the naming knobs that a running session reads directly.
+    /// How much history a new pane keeps. Existing panes keep what they have:
+    /// a scrollback is what has already been said, and shortening it would
+    /// throw away the part of the session you kept it for.
+    pub fn set_scrollback(&mut self, lines: usize) {
+        self.scrollback = lines;
+    }
+
     pub fn set_naming(&mut self, cfg: &crate::config::Naming) {
         self.stale_after = if cfg.show_stale {
             cfg.stale_after_turns
