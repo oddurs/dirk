@@ -86,7 +86,7 @@ second source that is consulted when a title says nothing.
 
 ## v0.4 — Sessions that outlive their terminal
 
-`··········` 0% · 0 of 7 done · due 2027-01-15
+`###·······` 29% · 2 of 7 done · due 2027-01-15
 
 A daemon, detach and reattach, persistence across restarts, and a socket API
 with a CLI so an agent inside a pane can drive dirk. The milestone that lets
@@ -94,17 +94,20 @@ dirk replace herdr rather than sit beside it.
 
 ### backlog
 
-- [ ] `0007` Server lifecycle: detach and reattach <sup>feature · p0 · server</sup>
 - [ ] `0012` Session persistence across restarts <sup>feature · p1 · server</sup>
-- [ ] `0035` Socket API and the dirk CLI <sup>feature · p0 · api</sup>
 - [ ] `0036` Agent skill file <sup>docs · p2 · docs</sup>
 - [ ] `0037` Named sessions <sup>feature · p2 · server</sup>
 - [ ] `0038` Reload configuration without restarting <sup>feature · p2 · config</sup>
 - [ ] `0039` Attach over ssh <sup>feature · p3 · server</sup>
 
+### done
+
+- [x] `0007` Server lifecycle: detach and reattach <sup>feature · p0 · server</sup>
+- [x] `0035` Socket API and the dirk CLI <sup>feature · p0 · api</sup>
+
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`··········` 0% · 0 of 7 done · due 2027-02-15
+`··········` 0% · 0 of 9 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 and configurable keys. The unglamorous half, and the half that decides whether
@@ -119,6 +122,8 @@ this is usable all day.
 - [ ] `0042` Command palette <sup>feature · p1 · nav</sup>
 - [ ] `0043` Pane zoom, move and swap <sup>feature · p2 · mux</sup>
 - [ ] `0044` Create and manage worktrees from the nav <sup>feature · p1 · git</sup>
+- [ ] `0060` A view per client, rather than one client at a time <sup>feature · p2 · server</sup>
+- [ ] `0061` agent start: launch an agent, not just recognise one <sup>feature · p1 · agents</sup>
 
 ## v1.0 — Production
 

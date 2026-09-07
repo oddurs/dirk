@@ -43,6 +43,8 @@
 //! all. There is no polling anywhere in this file.
 
 mod agent;
+mod api;
+mod client;
 mod config;
 mod git;
 mod hit;
@@ -51,9 +53,11 @@ mod llm;
 mod mux;
 mod name;
 mod notify;
+mod server;
 mod theme;
 mod tokens;
 mod ui;
+mod wire;
 
 use config::Config;
 use crossterm::event::{
@@ -79,12 +83,32 @@ use ui::nav::{Nav, Row};
 use ui::picker::Picker;
 
 const USAGE: &str = "\
-Usage: dirk [OPTION]...
+Usage: dirk [OPTION]... [COMMAND]
 Run a terminal multiplexer with a clickable project tree, static layouts, and
 workspaces named from what the program inside them says it is doing.
 
-  -h, --help     display this help and exit
-  -V, --version  output version information and exit
+With no command, attach to the session, starting it if it is not running.  The
+session outlives the terminal it was started from: close this one and everything
+in it keeps going.
+
+Commands:
+  attach                 attach to the session (the default)
+  server                 be the session; started for you, not usually typed
+
+Asking a running session, from a shell or from inside a pane.  Answers are
+JSON; `--current` means the pane you are in.
+
+  workspace list|focus|create|rename|close
+  pane      list|focus|split|read|send-keys|close
+  layout    list|open
+  agent     list
+  session   info
+
+Options:
+      --session NAME     which session, default \"default\"
+      --no-session       one process, no session, ends with this terminal
+  -h, --help             display this help and exit
+  -V, --version          output version information and exit
 
 dirk reads ~/.config/dirk/config.toml when it exists, and runs on built-in
 defaults when it does not.  The prefix key is Ctrl-Space; press it and then 'q'
@@ -109,7 +133,14 @@ fn main() -> io::Result<()> {
     // Options are answered before the terminal is touched, so `dirk --version`
     // in a pipe behaves like any other program rather than briefly taking over
     // the screen. dirk takes at most one, and every one of them exits.
-    if let Some(arg) = std::env::args().nth(1) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut session = "default".to_string();
+    let mut mode = Mode::Attach;
+
+    // `--session` may come before a command, so the flags are read first and
+    // whatever is left is the command.
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -119,6 +150,17 @@ fn main() -> io::Result<()> {
                 print!("{VERSION}");
                 return Ok(());
             }
+            "server" => mode = Mode::Server,
+            "attach" => mode = Mode::Attach,
+            "--no-session" => mode = Mode::Alone,
+            "--session" => match rest.next() {
+                Some(name) => session = name.clone(),
+                None => {
+                    eprintln!("dirk: --session needs a name");
+                    std::process::exit(1);
+                }
+            },
+            other if NOUNS.contains(&other) => break,
             other => {
                 eprintln!("dirk: unrecognized option '{other}'");
                 eprintln!("Try 'dirk --help' for more information.");
@@ -127,8 +169,128 @@ fn main() -> io::Result<()> {
         }
     }
 
+    if !server::valid_name(&session) {
+        eprintln!("dirk: {session:?} is not a session name");
+        std::process::exit(1);
+    }
+    let path = server::socket_path(&session);
+
+    // A command is a noun and a verb. Answered by a running session, and never
+    // by starting one: `dirk pane list` should say there is nothing to list
+    // rather than conjure a session to list.
+    let command_args: Vec<String> = args
+        .iter()
+        .skip_while(|a| !NOUNS.contains(&a.as_str()))
+        .cloned()
+        .collect();
+    if let Some(req) = as_request(&command_args) {
+        if !server::is_running(&path) {
+            eprintln!("dirk: no session {session:?} is running");
+            std::process::exit(1);
+        }
+        let reply = server::ask(&path, &req)?;
+        match reply.ok {
+            true => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&reply.result).unwrap_or_default()
+                );
+                return Ok(());
+            }
+            false => {
+                eprintln!("dirk: {}", reply.error.unwrap_or_default());
+                std::process::exit(1);
+            }
+        }
+    }
+
+    match mode {
+        Mode::Server => serve(&session, &path),
+        Mode::Attach => {
+            if !server::is_running(&path) {
+                server::spawn(&session, &path)?;
+            }
+            client::attach(&path)
+        }
+        Mode::Alone => alone(),
+    }
+}
+
+/// The nouns a session answers to.
+const NOUNS: &[&str] = &["workspace", "pane", "layout", "agent", "session"];
+
+/// Read `dirk pane split w1:p2 rows` as a request, or `None` if this is not one.
+///
+/// `--current` becomes the pane the caller is in, which is what makes the
+/// surface usable from inside one without every caller having to look up its
+/// own id first.
+fn as_request(args: &[String]) -> Option<wire::Request> {
+    let noun = args.first()?;
+    if !NOUNS.contains(&noun.as_str()) {
+        return None;
+    }
+    let verb = args.get(1)?;
+    let rest = args
+        .get(2..)
+        .unwrap_or_default()
+        .iter()
+        .map(|a| match a.as_str() {
+            "--current" => std::env::var("DIRK_PANE_ID").unwrap_or_else(|_| a.clone()),
+            _ => a.clone(),
+        })
+        .collect();
+    Some(wire::Request {
+        cmd: format!("{noun}.{verb}"),
+        args: rest,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Attach to the session, starting it if it is not there.
+    Attach,
+    /// Be the session. Started by the above; not usually typed.
+    Server,
+    /// One process, no session, dies with the terminal.
+    Alone,
+}
+
+/// Be the session.
+fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
+    let listener = server::bind(path)?;
+    // Inherited by every pane, so a command from inside one reaches the session
+    // that holds it rather than the default.
+    unsafe { std::env::set_var("DIRK_SESSION", session) };
     let cfg = Config::load();
 
+    let (tx, rx) = mpsc::channel::<Ev>();
+    spawn_ticker(tx.clone());
+    server::listen(listener, tx.clone());
+
+    // No terminal to ask, so a size until a client says otherwise.
+    let size = ratatui::layout::Size {
+        width: 80,
+        height: 24,
+    };
+    let session_state = Session::new(&cfg, tx.clone());
+    let mut app = App::new(cfg, session_state, size, tx);
+    app.socket = Some(path.to_path_buf());
+    app.socket_inode = server::inode(path).ok();
+    app.bootstrap();
+
+    let ours = app.socket_inode;
+    let result = app.serve(rx);
+    // Only if it is still ours: another server may have bound this name while
+    // we were shutting down, and removing its socket would orphan it.
+    if ours.is_some_and(|i| server::reachable(path, i)) {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+/// One process, no session. What dirk was before it had one.
+fn alone() -> io::Result<()> {
+    let cfg = Config::load();
     let (tx, rx) = mpsc::channel::<Ev>();
     spawn_input(tx.clone());
     spawn_ticker(tx.clone());
@@ -223,6 +385,15 @@ struct App {
     /// the session, and the button sits at the edge of the screen where a stray
     /// click is most likely, so it takes two.
     quit_armed: Option<Instant>,
+    /// Where this session's socket is, when it has one. Checked on the tick:
+    /// a server whose socket has gone cannot be reached by anyone and should
+    /// not keep holding a shell.
+    socket: Option<std::path::PathBuf>,
+    /// Which socket, by inode. A path can be reused by somebody else.
+    socket_inode: Option<u64>,
+    /// The client being drawn for, if one is attached. A session with nobody
+    /// looking at it keeps running; that is the point of the whole milestone.
+    view: Option<server::View>,
     /// True while a process-table sample is in flight.
     sampling: bool,
     /// True while the pointer is dragging the divider. Held as state because a
@@ -249,6 +420,9 @@ impl App {
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
+            socket: None,
+            socket_inode: None,
+            view: None,
             sampling: false,
             quit_armed: None,
             dragging: false,
@@ -274,6 +448,40 @@ impl App {
     fn note(&mut self, msg: &str) {
         self.status = msg.to_string();
         self.status_at = Instant::now();
+    }
+
+    /// One turn of the loop: take everything queued, then settle the state.
+    ///
+    /// Returns false when there is nothing left to run for.
+    fn turn(&mut self, rx: &Receiver<Ev>) -> bool {
+        let Ok(ev) = rx.recv() else { return false };
+        self.handle(ev);
+        // Coalesce whatever else has already queued. A pane writing fast
+        // produces one redraw, not one per write.
+        while let Ok(next) = rx.try_recv() {
+            self.handle(next);
+        }
+        let changes = self.session.update_states(Instant::now());
+        self.announce(changes);
+        !(self.quit || self.session.is_empty())
+    }
+
+    /// Serve whichever client is attached, for as long as the session lasts.
+    fn serve(&mut self, rx: Receiver<Ev>) -> io::Result<()> {
+        while self.turn(&rx) {
+            // Taken out so the render can borrow the rest of `self`.
+            let Some(mut view) = self.view.take() else {
+                continue;
+            };
+            let _ = view.term.draw(|f| self.render(f));
+            if view.flush().is_ok() {
+                self.view = Some(view);
+            }
+        }
+        if let Some(mut view) = self.view.take() {
+            let _ = wire::send_json(&mut view.out, wire::Kind::Bye, &"the session ended");
+        }
+        Ok(())
     }
 
     fn run(&mut self, terminal: &mut Term, rx: Receiver<Ev>) -> io::Result<()> {
@@ -304,7 +512,44 @@ impl App {
         match ev {
             Ev::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
             Ev::Term(Event::Mouse(m)) => self.on_mouse(m),
-            Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
+            Ev::Term(Event::Resize(cols, rows)) => {
+                if let Some(view) = &mut self.view {
+                    let area = Rect::new(0, 0, cols.max(1), rows.max(1));
+                    let _ = view.term.resize(area);
+                    // The old contents are wrong at the new size, and ratatui
+                    // would otherwise only send what changed against them.
+                    let _ = view.repaint();
+                }
+            }
+            Ev::Term(_) => {}
+            Ev::Attach(view) => {
+                if let Some(old) = self.view.take() {
+                    // Told why, rather than simply going quiet.
+                    let mut out = old.out;
+                    let _ =
+                        wire::send_json(&mut out, wire::Kind::Bye, &"taken over by another client");
+                }
+                let mut view = *view;
+                // The client's terminal holds whatever was on it before, and
+                // ratatui only sends what changed since its own last draw.
+                let _ = view.repaint();
+                self.view = Some(view);
+            }
+            Ev::Command(req, reply) => {
+                let answer = self.ask(&req);
+                let _ = reply.send(answer);
+            }
+            Ev::Detach(id) => {
+                // Only if it is the client currently being drawn for. A client
+                // that has been taken over closes its socket on the way out,
+                // and an unnamed detach would clear the view of the one that
+                // replaced it -- leaving the new client attached to a session
+                // that had stopped drawing for it.
+                if self.view.as_ref().is_some_and(|v| v.id == id) {
+                    // The session does not end because nobody is watching it.
+                    self.view = None;
+                }
+            }
             Ev::Output(id) => {
                 self.session.touch(id);
                 self.session.track_intents(&self.cfg.naming);
@@ -322,6 +567,14 @@ impl App {
                 self.session.refocus();
             }
             Ev::Tick => {
+                if let (Some(path), Some(ours)) = (&self.socket, self.socket_inode)
+                    && !server::reachable(path, ours)
+                {
+                    // Unreachable: nothing can attach, and what is here would
+                    // only be findable with `ps`.
+                    self.quit = true;
+                    return;
+                }
                 self.read_agents();
                 self.read_repos();
                 self.session.track_intents(&self.cfg.naming);
@@ -372,6 +625,180 @@ impl App {
                 format!("{} {what}", change.label),
                 self.cfg.brand.name.clone(),
             );
+        }
+    }
+
+    /// Do what was asked, or say why not.
+    ///
+    /// Reads are answered by `api::read` and never touch the seen rule: asking
+    /// about a workspace is not looking at one, and without that a status line
+    /// polling the session would clear every notification it exists to show.
+    fn ask(&mut self, req: &wire::Request) -> wire::Reply {
+        use wire::Reply;
+        if let Some(answer) = api::read(&self.session, &req.cmd, &req.args) {
+            return answer;
+        }
+        let area = self.content;
+        let arg = |n: usize| req.args.get(n).cloned().unwrap_or_default();
+
+        match req.cmd.as_str() {
+            "session.info" => Reply::ok(serde_json::json!({
+                "workspaces": self.session.flat().len(),
+                "layouts": self.session.layouts.len(),
+                "attached": self.view.is_some(),
+                "version": env!("CARGO_PKG_VERSION"),
+            })),
+
+            "workspace.focus" => match api::target_workspace(&self.session, &arg(0)) {
+                Some((p, w)) => {
+                    self.session.focus = Focus::Ws { p, w };
+                    Reply::ok(serde_json::json!({ "focused": arg(0) }))
+                }
+                None => Reply::err("no such workspace"),
+            },
+
+            "workspace.create" => {
+                let path = if arg(0).is_empty() {
+                    std::env::current_dir().unwrap_or_else(|_| config::home())
+                } else {
+                    config::expand(&arg(0))
+                };
+                if !path.is_dir() {
+                    return Reply::err("no such directory");
+                }
+                let p = self.session.open_project(&path);
+                match self.session.new_workspace(p, area.height, area.width) {
+                    Some(()) => {
+                        let w = self.session.projects[p].workspaces.len() - 1;
+                        let id = self.session.projects[p].workspaces[w].id;
+                        Reply::ok(serde_json::json!({ "workspace": api::workspace_id(id) }))
+                    }
+                    None => Reply::err("could not start a shell there"),
+                }
+            }
+
+            "workspace.rename" => match api::target_workspace(&self.session, &arg(0)) {
+                Some((p, w)) => {
+                    let name = req.args[1..].join(" ");
+                    if name.trim().is_empty() {
+                        return Reply::err("a name, or nothing to hand it back");
+                    }
+                    let Some(ws) = self.session.workspace_mut(p, w) else {
+                        return Reply::err("no such workspace");
+                    };
+                    ws.label = name.clone();
+                    // Named from outside is named by a human: naming stands
+                    // down until the hold is released.
+                    ws.naming.held = true;
+                    ws.naming.applied = Some(name.clone());
+                    Reply::ok(serde_json::json!({ "label": name }))
+                }
+                None => Reply::err("no such workspace"),
+            },
+
+            "workspace.close" => match api::target_workspace(&self.session, &arg(0)) {
+                Some((p, w)) => {
+                    let ids: Vec<_> = self
+                        .session
+                        .workspace(p, w)
+                        .map(|ws| ws.panes.iter().map(|x| x.id).collect())
+                        .unwrap_or_default();
+                    for id in ids {
+                        if let Some(ws) = self.session.workspace_mut(p, w)
+                            && let Some(pane) = ws.pane_mut(id)
+                        {
+                            pane.close();
+                        }
+                    }
+                    Reply::ok(serde_json::json!({ "closed": arg(0) }))
+                }
+                None => Reply::err("no such workspace"),
+            },
+
+            "pane.focus" => match api::target_pane(&self.session, &arg(0)) {
+                Some(id) => match api::locate(&self.session, id) {
+                    Some((p, w)) => {
+                        self.session.focus = Focus::Ws { p, w };
+                        if let Some(ws) = self.session.workspace_mut(p, w) {
+                            ws.focus = id;
+                        }
+                        Reply::ok(serde_json::json!({ "focused": arg(0) }))
+                    }
+                    None => Reply::err("no such pane"),
+                },
+                None => Reply::err("no such pane"),
+            },
+
+            "pane.split" => {
+                let Some(id) = api::target_pane(&self.session, &arg(0)) else {
+                    return Reply::err("no such pane");
+                };
+                let Some((p, w)) = api::locate(&self.session, id) else {
+                    return Reply::err("no such pane");
+                };
+                let dir = if arg(1).eq_ignore_ascii_case("rows") {
+                    Dir::Rows
+                } else {
+                    Dir::Cols
+                };
+
+                // Split where asked, not wherever the human happens to be
+                // looking. A caller that meant "here" said so with an id.
+                let was = self.session.focus;
+                self.session.focus = Focus::Ws { p, w };
+                if let Some(ws) = self.session.workspace_mut(p, w) {
+                    ws.focus = id;
+                }
+                self.session.split(dir, area.height, area.width);
+                let new = self.session.workspace(p, w).map(|ws| ws.focus);
+                self.session.focus = was;
+
+                match new {
+                    Some(pane) => {
+                        let ws_id = self.session.workspace(p, w).map(|x| x.id).unwrap_or(0);
+                        Reply::ok(serde_json::json!({ "pane": api::pane_id(ws_id, pane) }))
+                    }
+                    None => Reply::err("could not split"),
+                }
+            }
+
+            "pane.send-keys" => {
+                let Some(id) = api::target_pane(&self.session, &arg(0)) else {
+                    return Reply::err("no such pane");
+                };
+                let text = req.args[1..].join(" ");
+                match self.session.write_to(id, text.as_bytes()) {
+                    true => Reply::ok(serde_json::json!({ "sent": text.len() })),
+                    false => Reply::err("no such pane"),
+                }
+            }
+
+            "pane.close" => {
+                let Some(id) = api::target_pane(&self.session, &arg(0)) else {
+                    return Reply::err("no such pane");
+                };
+                match self.session.close_pane(id) {
+                    true => Reply::ok(serde_json::json!({ "closed": arg(0) })),
+                    false => Reply::err("no such pane"),
+                }
+            }
+
+            "layout.open" => {
+                match self
+                    .session
+                    .layouts
+                    .iter()
+                    .position(|l| l.def.name == arg(0))
+                {
+                    Some(i) => {
+                        self.session.open_layout(i, area);
+                        Reply::ok(serde_json::json!({ "opened": arg(0) }))
+                    }
+                    None => Reply::err("no such layout"),
+                }
+            }
+
+            other => Reply::err(format!("no such command: {other}")),
         }
     }
 

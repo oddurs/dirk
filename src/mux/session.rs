@@ -70,6 +70,12 @@ pub struct NameState {
 }
 
 pub struct Workspace {
+    /// A handle that does not move.
+    ///
+    /// The number beside a workspace in the nav is positional and changes when
+    /// spaces are reordered; this does not. Anything addressing a workspace
+    /// from outside uses it.
+    pub id: u64,
     pub label: String,
     /// What the agent in here is doing, as of the last update.
     pub state: crate::agent::State,
@@ -274,10 +280,12 @@ impl Session {
             (proj.path.clone(), proj.name.clone())
         };
         let pane = self.spawn_shell(&path, rows, cols)?;
+        let id = self.id();
         let proj = self.projects.get_mut(p)?;
         proj.expanded = true;
         let root = pane.id;
         proj.workspaces.push(Workspace {
+            id,
             label: name,
             state: crate::agent::State::None,
             seen: true,
@@ -452,7 +460,9 @@ impl Session {
             let Some(&first) = tree.leaves().first() else {
                 return;
             };
+            let ws_id = self.id();
             self.layouts[i].ws = Some(Workspace {
+                id: ws_id,
                 label: def.name.clone(),
                 state: crate::agent::State::None,
                 seen: true,
@@ -709,14 +719,21 @@ pub struct Change {
     pub focused: bool,
 }
 
-/// The last `lines` of a pane's screen, as text.
+/// The last `lines` a pane has written, as text.
+///
+/// Anchored to the cursor, not to the bottom of the grid. A screen that has not
+/// filled yet has all its output at the top and nothing at the bottom, so
+/// reading the last rows of the grid answers with blank lines — which is what
+/// `pane read` did, and what the blocked check did before it was fixed for the
+/// same reason.
 fn viewport(pane: &Pane, lines: u16) -> Option<String> {
     let term = pane.term.lock().ok()?;
     let screen = term.screen();
     let (rows, cols) = screen.size();
-    let last = rows.saturating_sub(1);
-    let from = last.saturating_sub(lines);
-    Some(screen.contents_between(from, 0, last, cols))
+    let (cursor, _) = screen.cursor_position();
+    let to = cursor.min(rows.saturating_sub(1));
+    let from = to.saturating_sub(lines);
+    Some(screen.contents_between(from, 0, to, cols))
 }
 
 /// An agent that has been quiet for this long has stopped.
@@ -984,6 +1001,45 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Type into a pane, wherever it is.
+    pub fn write_to(&mut self, id: PaneId, bytes: &[u8]) -> bool {
+        match self.pane_anywhere_mut(id) {
+            Some(pane) if !pane.dead => {
+                pane.write(bytes);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Close one pane by handle, wherever it is.
+    pub fn close_pane(&mut self, id: PaneId) -> bool {
+        let Some(pane) = self.pane_anywhere_mut(id) else {
+            return false;
+        };
+        let gone = pane.dead;
+        pane.close();
+        if gone {
+            // Killing a child that has already exited emits no event, so this
+            // is the one case that has to reap itself.
+            self.reap(id);
+        }
+        true
+    }
+
+    /// The last `lines` of what a pane has drawn, wherever it is.
+    ///
+    /// What an agent asking about a neighbour actually wants: the screen, not
+    /// the scrollback, and not an escape-sequence stream it would have to parse.
+    pub fn pane_text(&self, id: PaneId, lines: u16) -> Option<String> {
+        for ws in self.every_workspace() {
+            if let Some(pane) = ws.pane(id) {
+                return viewport(pane, lines);
+            }
+        }
+        None
     }
 
     /// Everything a name can be made of, for one workspace.
@@ -1344,6 +1400,7 @@ mod tests {
     /// A workspace with only the fields the state machine reads.
     fn ws(state: State, seen: bool) -> Workspace {
         Workspace {
+            id: 0,
             label: String::new(),
             state,
             seen,

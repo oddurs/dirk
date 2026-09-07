@@ -257,6 +257,57 @@ without it. Your key is read from the environment; the configuration file holds
 only the *name* of the variable, because a configuration file is a thing people
 paste into issues.
 
+## Sessions
+
+`dirk` attaches to a session, starting it if it is not running. The session is a
+separate process that owns the panes, so closing the terminal does not close
+anything in it — come back with `dirk` and everything is where you left it,
+including whatever happened while nobody was watching.
+
+```console
+$ dirk                      # attach, starting the session if needed
+$ dirk --session review     # a session of its own
+$ dirk --no-session         # one process, ends with this terminal
+```
+
+**The server renders; the client paints bytes it does not read.** That is the
+decision the rest follows from. Shipping session state and letting each client
+compose it sounds more principled and costs more: two renderers drift, the local
+one gets a fix, the remote one does not, and the difference is a rendering bug
+nobody can reproduce. There is one renderer, it lives in the session, and a
+client is a terminal with a socket — which is also why attaching over `ssh` will
+be a small change rather than a second implementation.
+
+One client at a time. A second `dirk` takes the session over and the first is
+told why.
+
+## Asking a session things
+
+A session answers for itself, which is the difference between a multiplexer
+agents happen to run in and one they can work in.
+
+```console
+$ dirk pane list
+$ dirk pane split w7:p12 rows
+$ dirk pane send-keys --current "cargo test"
+$ dirk agent list
+$ dirk session commands          # the whole surface
+```
+
+Answers are JSON, including the failures — a caller is a program, and prose on
+stderr is not something a program can branch on.
+
+**Ids are opaque and stable.** `w7` is a workspace and `w7:p12` a pane in it; the
+number the nav shows beside a workspace is positional and changes when spaces
+are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
+`--current` resolves from them — so a command from inside a pane reaches the
+session holding it without the caller looking anything up first.
+
+**Reads do not mark an agent seen.** Focusing a workspace is what says you have
+looked at it; asking about one over a socket is not looking. Without that rule a
+status line polling the session would quietly clear every notification it was
+built to show.
+
 ## Build
 
 ```console
@@ -324,6 +375,8 @@ split tree; the API needs a daemon; ordering agents by attention is a re-sort of
 a guess until the states are real.
 
 ## Status
+
+v0.4 has begun: sessions outlive the terminal they were started from.
 
 v0.3 is done. dirk reads what is running in each pane from its foreground
 process group, so a shell is a shell and an agent is an agent; the four
