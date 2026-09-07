@@ -50,7 +50,7 @@ the split tree they need underneath. This is the milestone dirk is for.
 
 ## v0.3 — It knows what the agents are doing
 
-`##········` 17% · 1 of 6 done · due 2026-11-15
+`###·······` 29% · 2 of 7 done · due 2026-11-15
 
 Real agent detection and real lifecycle states, so `blocked` — the only state
 waiting on a human — is shown rather than guessed. Attention routing and
@@ -58,15 +58,16 @@ notifications on top of it.
 
 ### backlog
 
-- [ ] `0031` Real lifecycle states, including seen <sup>feature · p0 · agents</sup>
 - [ ] `0032` Attention counts in the rail <sup>feature · p1 · chrome</sup>
 - [ ] `0033` Notify when an agent blocks or finishes <sup>feature · p1 · agents</sup>
 - [ ] `0034` Agent names <sup>feature · p2 · agents</sup>
 - [ ] `0051` An agent run under an interpreter reports as the interpreter <sup>bug · p1 · agents</sup>
+- [ ] `0052` Naming should hold off while an agent is blocked <sup>feature · p1 · naming</sup>
 
 ### done
 
 - [x] `0030` Detect the coding agent in a pane <sup>feature · p0 · agents</sup>
+- [x] `0031` Real lifecycle states, including seen <sup>feature · p0 · agents</sup>
 
 ## v0.4 — Sessions that outlive their terminal
 

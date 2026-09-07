@@ -72,6 +72,13 @@ pub struct Pane {
     pub closing: bool,
     /// What is running here, as of the last sample.
     pub occupant: crate::agent::Occupant,
+    /// When this pane last produced output.
+    ///
+    /// Per pane, not per workspace: a workspace holding an agent beside a
+    /// `npm run dev` would otherwise look busy for ever, because the server's
+    /// output would keep the whole workspace fresh and the agent could never be
+    /// seen to stop.
+    pub touched: std::time::Instant,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -170,6 +177,7 @@ impl Pane {
             exit: None,
             closing: false,
             occupant: crate::agent::Occupant::default(),
+            touched: std::time::Instant::now(),
             writer,
             master,
             child,

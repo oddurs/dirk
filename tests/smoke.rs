@@ -756,3 +756,89 @@ fn a_pane_running_an_agent_is_detected_as_one() {
         h.drawn()
     );
 }
+
+#[test]
+fn an_agent_sitting_on_an_approval_prompt_reads_as_blocked() {
+    // A shell named `claude` is detected as one, so printing what Claude Code
+    // prints when it wants an answer drives the whole path: detection, the tail
+    // of the screen, the marker table, the state machine, the glyph.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+
+    // Recognised as an agent, and not blocked while it has said nothing.
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("agents"))),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+    let blocked = |h: &Harness| h.rows().iter().any(|r| r.trim_start().starts_with("! "));
+    assert!(
+        !blocked(&h),
+        "blocked before anything was asked\n{}",
+        h.drawn()
+    );
+
+    // A question in prose is not an approval prompt -- it is how a finished
+    // turn ends -- so this must not read as blocked.
+    h.send(b"printf 'Would you like me to run the tests?\\n'\r");
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !blocked(&h),
+        "a question in prose read as an approval prompt\n{}",
+        h.drawn()
+    );
+
+    // The real thing: a question above a menu of answers.
+    h.send(b"printf 'Do you want to proceed?\\n> 1. Yes\\n  2. No\\n'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), blocked),
+        "an approval prompt did not read as blocked\n{}",
+        h.drawn()
+    );
+
+    // And it stops being blocked once the prompt is off the screen.
+    h.send(b"clear\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| !blocked(h)),
+        "still blocked after the prompt was cleared\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn work_that_finishes_while_you_are_elsewhere_reads_as_done() {
+    // The seen rule, end to end. `done` and `idle` are the same underlying
+    // state and only whether you were looking separates them, so the only way
+    // to test it for real is to look somewhere else while work happens.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| h
+            .rows()
+            .iter()
+            .any(|r| r.contains("agents"))),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+
+    // Work that will land after focus has moved away.
+    h.send(b"(sleep 3; printf 'zz%s' LATE) &\r");
+    h.prefix(b"n");
+
+    // The new workspace is focused, so the first one is working unwatched, and
+    // what it produces is unseen when it stops.
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| {
+            h.rows().iter().any(|r| r.trim_start().starts_with("+ "))
+        }),
+        "work that finished out of sight was not reported as done\n{}",
+        h.drawn()
+    );
+}

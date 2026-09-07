@@ -283,6 +283,11 @@ impl App {
             while let Ok(next) = rx.try_recv() {
                 self.handle(next);
             }
+            // Once per frame, for the same reason drawing is: one `read` of a
+            // busy pane produces an event, and working out every agent's state
+            // locks each agent pane's terminal and reads its screen. Doing that
+            // per chunk contends with the reader threads holding the same lock.
+            self.session.update_states(Instant::now());
             if self.quit || self.session.is_empty() {
                 return Ok(());
             }

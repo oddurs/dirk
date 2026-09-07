@@ -283,10 +283,10 @@ fn attention(session: &Session, sort: Sort) -> Vec<(usize, usize)> {
     let mut v: Vec<(usize, usize)> = Vec::new();
     for (p, proj) in session.projects.iter().enumerate() {
         for (w, ws) in proj.workspaces.iter().enumerate() {
-            if ws
-                .active_pane()
-                .is_some_and(|x| x.occupant.agent().is_some())
-            {
+            // The same field the glyph reads. Asking the occupant here and
+            // the state there was two answers to one question, and they
+            // disagreed on screen.
+            if ws.state != crate::agent::State::None {
                 v.push((p, w));
             }
         }
@@ -940,30 +940,26 @@ fn space_row(
     }
 }
 
-/// A workspace's state is its active pane's, since a workspace with one pane is
-/// the common case and one with two has no single answer anyway.
+/// A workspace's state, as the word the theme and the nav both speak.
 ///
-/// Read from what is actually running in the pane. The previous version guessed
-/// from whether a title had ever been published, which marked every shell as
-/// working — shells set titles, usually to the working directory.
+/// The agent's state when there is an agent. When there is not, the column
+/// still has something worth saying — a build is running, or a shell is at a
+/// prompt — and blanking it lost that. The `agents` list keeps asking the
+/// narrower question, which is why it reads `ws.state` directly.
 fn state_of(ws: &Workspace) -> &'static str {
-    use crate::agent::Occupant;
-    let Some(pane) = ws.active_pane() else {
-        return "unknown";
-    };
-    if pane.dead {
-        return "idle";
+    use crate::agent::{Occupant, State};
+    if ws.state != State::None {
+        return ws.state.glyph_name();
     }
-    match &pane.occupant {
-        // Telling working from blocked needs to read what the agent has drawn,
-        // which is 0031. Until then an agent that has said what it is doing is
-        // doing something.
-        Occupant::Agent(_) if pane.title().is_some() => "working",
-        Occupant::Agent(_) => "idle",
-        // Something is running, and it is not an agent and not a prompt.
-        Occupant::Program(_) => "working",
-        Occupant::Shell => "idle",
-        Occupant::Unknown => "unknown",
+    match ws.active_pane() {
+        None => "unknown",
+        Some(p) if p.dead => "idle",
+        Some(p) => match &p.occupant {
+            // Something is running that is not an agent and not a prompt.
+            Occupant::Program(_) => "working",
+            Occupant::Shell => "idle",
+            _ => "unknown",
+        },
     }
 }
 
