@@ -70,6 +70,8 @@ pub struct Pane {
     /// Set when a human closed this pane, as opposed to its program exiting on
     /// its own. The two look identical from the pty and mean opposite things.
     pub closing: bool,
+    /// What is running here, as of the last sample.
+    pub occupant: crate::agent::Occupant,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -167,6 +169,7 @@ impl Pane {
             dead: false,
             exit: None,
             closing: false,
+            occupant: crate::agent::Occupant::default(),
             writer,
             master,
             child,
@@ -196,6 +199,24 @@ impl Pane {
     pub fn write(&mut self, bytes: &[u8]) {
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
+    }
+
+    /// The process group the tty currently has in the foreground.
+    ///
+    /// This is what a shell sets before it waits for a command and resets when
+    /// the command ends, so it is exactly "what is running in this pane right
+    /// now" — not what was started in it, and not what its children are up to.
+    #[cfg(unix)]
+    pub fn foreground(&self) -> Option<i32> {
+        if self.dead {
+            return None;
+        }
+        self.master.process_group_leader()
+    }
+
+    #[cfg(not(unix))]
+    pub fn foreground(&self) -> Option<i32> {
+        None
     }
 
     /// The last OSC title this pane published, if any.

@@ -275,14 +275,18 @@ fn rank(state: &str) -> u8 {
 /// the agent that has been blocked for ten minutes is wherever its workspace
 /// happens to sit. This is the same set, ordered by what is owed.
 ///
-/// "Has published an intent" is the crude signal dirk can honestly use today —
-/// a shell has no intent and a coding agent publishes one continuously. 0031
-/// makes the states real; the ordering here is already what it should be.
+/// Membership is "holds a recognised agent", which dirk now reads from the
+/// pane's foreground process group. It used to be "has published a title", and
+/// that was wrong in a way worth naming: shells set titles too, so every plain
+/// shell was listed here as something wanting attention.
 fn attention(session: &Session, sort: Sort) -> Vec<(usize, usize)> {
     let mut v: Vec<(usize, usize)> = Vec::new();
     for (p, proj) in session.projects.iter().enumerate() {
         for (w, ws) in proj.workspaces.iter().enumerate() {
-            if ws.active_pane().and_then(|x| x.title()).is_some() {
+            if ws
+                .active_pane()
+                .is_some_and(|x| x.occupant.agent().is_some())
+            {
                 v.push((p, w));
             }
         }
@@ -830,9 +834,22 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 .clone()
                 .or_else(|| pane.title())
                 .unwrap_or_else(|| {
-                    pane.cwd
-                        .file_name()
-                        .map_or_else(String::new, |f| f.to_string_lossy().into_owned())
+                    // Failing a label or a title, say what is running: that is more
+                    // use than the directory, which the row above already implies.
+                    match &pane.occupant {
+                        crate::agent::Occupant::Agent(k) => k.name.to_string(),
+                        crate::agent::Occupant::Program(p) => p.clone(),
+                        // "free" rather than "shell": what matters about a
+                        // prompt is that an agent could be started in it.
+                        o if o.available() => "free".into(),
+                        // Nothing known yet -- the first tick after a split, or
+                        // a platform with no foreground group to read. The
+                        // directory is a poor name and an empty row is worse.
+                        _ => pane
+                            .cwd
+                            .file_name()
+                            .map_or_else(String::new, |f| f.to_string_lossy().into_owned()),
+                    }
                 });
             let left = w.saturating_sub(x - inner.x) as usize;
             write_str(buf, x, y, &elide(&name, left), style, w);
@@ -925,15 +942,28 @@ fn space_row(
 
 /// A workspace's state is its active pane's, since a workspace with one pane is
 /// the common case and one with two has no single answer anyway.
+///
+/// Read from what is actually running in the pane. The previous version guessed
+/// from whether a title had ever been published, which marked every shell as
+/// working — shells set titles, usually to the working directory.
 fn state_of(ws: &Workspace) -> &'static str {
-    match ws.active_pane() {
-        None => "unknown",
-        Some(p) if p.dead => "idle",
-        // Without agent detection dirk cannot tell working from blocked; a pane
-        // that has published an intent is doing something, one that has not is
-        // a shell. Real states arrive with 0030 and 0031.
-        Some(p) if p.title().is_some() => "working",
-        Some(_) => "idle",
+    use crate::agent::Occupant;
+    let Some(pane) = ws.active_pane() else {
+        return "unknown";
+    };
+    if pane.dead {
+        return "idle";
+    }
+    match &pane.occupant {
+        // Telling working from blocked needs to read what the agent has drawn,
+        // which is 0031. Until then an agent that has said what it is doing is
+        // doing something.
+        Occupant::Agent(_) if pane.title().is_some() => "working",
+        Occupant::Agent(_) => "idle",
+        // Something is running, and it is not an agent and not a prompt.
+        Occupant::Program(_) => "working",
+        Occupant::Shell => "idle",
+        Occupant::Unknown => "unknown",
     }
 }
 

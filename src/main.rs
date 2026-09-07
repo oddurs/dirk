@@ -42,6 +42,7 @@
 //! frame rather than one frame per write, and an idle dirk costs nothing at
 //! all. There is no polling anywhere in this file.
 
+mod agent;
 mod config;
 mod git;
 mod hit;
@@ -219,6 +220,8 @@ struct App {
     /// the session, and the button sits at the edge of the screen where a stray
     /// click is most likely, so it takes two.
     quit_armed: Option<Instant>,
+    /// True while a process-table sample is in flight.
+    sampling: bool,
     /// True while the pointer is dragging the divider. Held as state because a
     /// drag is three events and only the first one lands on the divider.
     dragging: bool,
@@ -243,6 +246,7 @@ impl App {
             nav: Nav::default(),
             nav_rows: Vec::new(),
             side: Rect::ZERO,
+            sampling: false,
             quit_armed: None,
             dragging: false,
             content: Rect {
@@ -297,11 +301,16 @@ impl App {
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
+            Ev::Agents(reading) => {
+                self.sampling = false;
+                self.session.apply_agents(reading);
+            }
             Ev::Exited(id) => {
                 self.session.reap(id);
                 self.session.refocus();
             }
             Ev::Tick => {
+                self.read_agents();
                 self.read_repos();
                 self.rename_pass();
                 if !self.status.is_empty()
@@ -320,6 +329,46 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Ask what is running in each pane.
+    ///
+    /// The foreground process groups are read here — a `tcgetpgrp` each, too
+    /// cheap to be worth a thread. Turning them into names needs the process
+    /// table, which does not belong on the drawing thread: `ps` on a loaded
+    /// machine is slow, and a slow `ps` must not be able to stop dirk redrawing.
+    fn read_agents(&mut self) {
+        // One sample at a time. Without this, a `ps` slower than the tick --
+        // which is the loaded machine this is written to survive -- accumulates
+        // threads and processes without bound, and lets an old reading land
+        // after a newer one and overwrite it.
+        if self.sampling {
+            return;
+        }
+        let panes = self.session.foregrounds();
+        if panes.is_empty() {
+            return;
+        }
+        self.sampling = true;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let table = crate::agent::table();
+            let panes = panes
+                .into_iter()
+                .map(|(id, pgid)| {
+                    let occupant = match pgid {
+                        // Nothing in the foreground: the pane is holding
+                        // nothing, and that is news.
+                        None => Some(crate::agent::Occupant::Unknown),
+                        // A group that is not in the table ended between the
+                        // pgid being read and `ps` running. That is not news.
+                        Some(pgid) => table.get(&pgid).map(|c| crate::agent::classify(c)),
+                    };
+                    (id, occupant)
+                })
+                .collect();
+            let _ = tx.send(Ev::Agents(crate::agent::Reading { panes }));
+        });
     }
 
     /// Ask git about any project whose answer has gone stale.

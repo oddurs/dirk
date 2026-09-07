@@ -340,11 +340,28 @@ fn closing_a_split_pane_gives_the_whole_width_back() {
     assert!(h.wait_for(READY, START), "never started");
 
     h.prefix(b"|");
-    h.prefix(b"x");
 
-    // Forty characters do not fit in half of a 52-column content area, so if
-    // the split had left a single-child node behind instead of collapsing, this
-    // would wrap onto a second row.
+    // A marker in the new pane, so its disappearance is the signal that the
+    // close has actually been processed. Closing is not synchronous with the
+    // keystroke -- the child is killed, the pty reaches EOF, and the event
+    // comes back -- and typing into the gap sends the keys to the pane that is
+    // on its way out, where they are lost.
+    h.send(b"printf 'zz%s' GOING\r");
+    assert!(
+        h.wait_for("zzGOING", Duration::from_secs(10)),
+        "the new pane never echoed"
+    );
+
+    h.prefix(b"x");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h.find("zzGOING").is_none()),
+        "the pane was never closed\n{}",
+        h.drawn()
+    );
+
+    // Forty characters do not fit in half of the content area, so if the split
+    // had left a single-child node behind instead of collapsing, this would
+    // wrap onto a second row.
     let marker = "X".repeat(40);
     h.send(format!("printf {marker}\r").as_bytes());
 
@@ -676,4 +693,66 @@ fn the_quit_button_takes_two_clicks() {
         std::thread::sleep(Duration::from_millis(50));
     }
     panic!("the second click did not quit\n{}", h.drawn());
+}
+
+#[test]
+fn a_shell_that_sets_a_title_is_not_mistaken_for_an_agent() {
+    // Shells set terminal titles, usually to the working directory, and the
+    // first version of the agents list was "anything that has published a
+    // title" -- so every plain shell was listed as something wanting attention.
+    // What is running is now read from the pane's foreground process group.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;Looks like an intent\\007'\r");
+    assert!(
+        h.wait_for("Looks like an intent", Duration::from_secs(10)),
+        "the workspace was never named\n{}",
+        h.drawn()
+    );
+
+    // The name is adopted -- that part is right, the title is all dirk has to
+    // go on. What must not happen is the shell appearing under `agents`.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !h.rows().iter().any(|r| r.contains("agents")),
+        "a shell was listed as an agent\n{}",
+        h.drawn()
+    );
+}
+
+/// A program that behaves like a shell but is named like an agent, so the whole
+/// detection chain can be exercised without installing one.
+fn fake_agent(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("dirk-smoke-bin").join(format!(
+        "{}-{}",
+        std::process::id(),
+        next_config_id()
+    ));
+    std::fs::create_dir_all(&dir).expect("bin dir");
+    let link = dir.join(name);
+    let _ = std::fs::remove_file(&link);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/bin/sh", &link).expect("symlink");
+    link
+}
+
+#[test]
+fn a_pane_running_an_agent_is_detected_as_one() {
+    // End to end: the foreground process group is read from the pty, looked up
+    // in the process table, and its name classified. A shell named `claude` is
+    // enough to drive all three -- what is being identified is the name of the
+    // program in the foreground, which is the whole point.
+    let claude = fake_agent("claude");
+    let mut h =
+        Harness::start_with_config(&format!("shell = {:?}\n", claude.display().to_string()));
+    assert!(h.wait_for(READY, START), "never started");
+
+    assert!(
+        h.wait_until(Duration::from_secs(15), |h| {
+            h.rows().iter().any(|r| r.contains("agents"))
+        }),
+        "a pane running `claude` was not recognised as holding an agent\n{}",
+        h.drawn()
+    );
 }
