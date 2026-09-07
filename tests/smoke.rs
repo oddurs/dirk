@@ -939,3 +939,48 @@ fn an_agent_is_given_a_name_you_could_type() {
     // show: a pane that has published a title displays that instead, which is
     // more useful in that row. `name::unique` is tested directly.
 }
+
+#[test]
+fn a_label_is_arranged_by_its_template() {
+    // `{n}` rather than `{branch}`: a CI checkout can be on a detached head,
+    // where the branch token is absent -- which is its own test below, not
+    // this one's business.
+    let mut h = Harness::start_with_config(
+        "[naming.templates]\nworkspace = \"#{n} {intent}\"\n[notify]\nenabled = false\n",
+    );
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;Reading the vt100 grid\\007'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| {
+            h.rows().iter().any(|r| {
+                r.chars()
+                    .take(34)
+                    .collect::<String>()
+                    .contains("#1 Reading")
+            })
+        }),
+        "the label was not arranged by the template\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_program_that_titles_itself_does_not_become_a_workspace_name() {
+    // Shells and editors publish their own name as a title. Without the ignore
+    // list they arrive as intents: a pane running `nvim` becomes a workspace
+    // called "nvim".
+    let mut h = Harness::start_with_config("[notify]\nenabled = false\n");
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;lazygit\\007'\r");
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        !h.rows().iter().any(
+            |r| r.chars().take(34).collect::<String>().contains("lazygit")
+                && !r.contains("  lazygit")
+        ),
+        "a program name became a workspace label\n{}",
+        h.drawn()
+    );
+}

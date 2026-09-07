@@ -70,6 +70,16 @@ pub struct Workspace {
     /// `done` is a state that pushes no further change — so the second
     /// notification was not delayed, it was lost.
     pub notified: Option<(crate::agent::State, Instant)>,
+    /// When the state last changed. `since` is measured from here, and answers
+    /// "who has been blocked longest".
+    pub state_since: Instant,
+    /// When the intent last changed. `age` is measured from here, and answers
+    /// "what has been grinding on the same thing all day". A workspace that has
+    /// started and finished six times is still on one task, and this is the
+    /// clock that says so.
+    pub intent_since: Instant,
+    /// The intent the clock above is measuring.
+    pub intent: Option<String>,
     /// When this workspace last produced output. The nav shows how long ago,
     /// because "how long has this been sitting there" is most of triage.
     pub touched: Instant,
@@ -237,6 +247,9 @@ impl Session {
             state: crate::agent::State::None,
             seen: true,
             notified: None,
+            state_since: Instant::now(),
+            intent_since: Instant::now(),
+            intent: None,
             touched: Instant::now(),
             expanded: false,
             panes: vec![pane],
@@ -406,6 +419,9 @@ impl Session {
                 state: crate::agent::State::None,
                 seen: true,
                 notified: None,
+                state_since: Instant::now(),
+                intent_since: Instant::now(),
+                intent: None,
                 touched: Instant::now(),
                 expanded: false,
                 panes,
@@ -836,6 +852,78 @@ impl Session {
         changes
     }
 
+    /// Note the intent a workspace's agent is publishing, so `age` can measure
+    /// how long it has been the same one.
+    pub fn track_intents(&mut self) {
+        for proj in &mut self.projects {
+            for ws in &mut proj.workspaces {
+                let title = ws.active_pane().and_then(|p| p.title());
+                let now = crate::name::normalize(title.as_deref().unwrap_or_default());
+                let now = (!now.is_empty()).then_some(now);
+                if now != ws.intent {
+                    // Only when it actually changed. A title republished
+                    // unchanged is the same intent, and `age` is what says how
+                    // long that has been true.
+                    ws.intent_since = Instant::now();
+                    ws.intent = now;
+                }
+            }
+        }
+    }
+
+    /// Everything a name can be made of, for one workspace.
+    pub fn tokens(&self, p: usize, w: usize) -> crate::tokens::Tokens {
+        use crate::tokens::Tokens;
+        let mut t = Tokens::default();
+        let Some(proj) = self.projects.get(p) else {
+            return t;
+        };
+        let Some(ws) = proj.workspaces.get(w) else {
+            return t;
+        };
+
+        t.set("project", proj.name.clone());
+        if let Some(repo) = &proj.repo {
+            t.set("branch", repo.branch.clone());
+            t.flag("worktree", "worktree", repo.worktree);
+        }
+
+        // Positional, and it changes when spaces are reordered -- display
+        // rather than identity.
+        let n = self.flat().iter().position(|&x| x == (p, w)).map(|i| i + 1);
+        if let Some(n) = n {
+            t.set("n", n.to_string());
+        }
+
+        if let Some(intent) = &ws.intent {
+            t.set("intent", intent.clone());
+            t.set(
+                "intent-slug",
+                crate::name::slugify(intent, crate::name::AGENT_NAME_MAX),
+            );
+        }
+
+        // Two clocks. `since` restarts on every state change; `age` only when
+        // the intent does.
+        t.set("since", since(ws.state_since.elapsed()));
+        t.set("age", since(ws.intent_since.elapsed()));
+
+        if let Some(pane) = ws.active_pane()
+            && let Some(kind) = pane.occupant.agent()
+        {
+            t.set("agent", kind.name);
+        }
+        let agents = ws
+            .panes
+            .iter()
+            .filter(|p| p.occupant.agent().is_some())
+            .count();
+        if agents > 1 {
+            t.set("agents", agents.to_string());
+        }
+        t
+    }
+
     /// Give every agent a name, and take it back when the agent goes.
     ///
     /// Suggested from the intent of the workspace it is in, which is the same
@@ -979,6 +1067,18 @@ impl Session {
     }
 }
 
+/// What `apply` is about to set, so the clock can be reset before it is.
+fn next_state(observed: Observed, seen: bool) -> crate::agent::State {
+    use crate::agent::State;
+    match observed {
+        Observed::NoAgent => State::None,
+        Observed::Blocked => State::Blocked,
+        Observed::Working => State::Working,
+        Observed::Waiting if seen => State::Idle,
+        Observed::Waiting => State::Done,
+    }
+}
+
 fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
     use crate::agent::State;
 
@@ -997,6 +1097,9 @@ fn apply(ws: &mut Workspace, observed: Observed, focused: bool) {
         ws.seen = false;
     }
 
+    if ws.state != next_state(observed, ws.seen) {
+        ws.state_since = Instant::now();
+    }
     ws.state = match observed {
         Observed::NoAgent => State::None,
         Observed::Blocked => State::Blocked,
@@ -1095,6 +1198,9 @@ mod tests {
             state,
             seen,
             notified: None,
+            state_since: Instant::now(),
+            intent_since: Instant::now(),
+            intent: None,
             touched: Instant::now(),
             panes: Vec::new(),
             tree: Node::Leaf(0),

@@ -162,15 +162,109 @@ impl Default for Notify {
     }
 }
 
-/// The namesync policy, as knobs.
+/// The naming policy, as knobs.
+///
+/// Every default is what the policy did before it was configurable, so a file
+/// that sets none of these changes nothing.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Naming {
     pub enabled: bool,
-    /// How long a title must hold still before it is committed as a name.
+    /// How long a title must hold still before it is committed.
     pub debounce_ms: u64,
-    /// Floor on how often one workspace may be renamed.
+    /// Floor between two renames of one workspace.
     pub min_interval_ms: u64,
+    /// Token overlap above which a new intent is "the same thing, reworded".
+    pub similarity_threshold: f32,
+    /// Never overwrite a name a human set. This is what stops the policy
+    /// fighting you.
+    pub respect_manual_names: bool,
+    /// A blocked agent's title describes the dialog, not the work.
+    pub skip_while_blocked: bool,
+    /// Drop a leading project name, so a row under `ptop` does not read
+    /// `ptop-adopt-remaining-lessons`.
+    pub strip_project_prefix: bool,
+    /// Titles that are programs rather than intents. Compared case-insensitively
+    /// against the whole title.
+    pub ignore_titles: Vec<String>,
+    pub targets: Targets,
+    pub templates: Templates,
+}
+
+/// What naming is allowed to name.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Targets {
+    pub workspace: bool,
+    pub agent: bool,
+}
+
+impl Default for Targets {
+    fn default() -> Self {
+        Self {
+            workspace: true,
+            agent: true,
+        }
+    }
+}
+
+/// How each name is arranged, over the tokens in `tokens.rs`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Templates {
+    pub workspace: String,
+    pub agent: String,
+}
+
+impl Default for Templates {
+    fn default() -> Self {
+        Self {
+            workspace: "{intent}".into(),
+            agent: "{intent-slug}".into(),
+        }
+    }
+}
+
+/// Programs that show their own name as a terminal title. Without this list
+/// they arrive as intents and become workspace labels.
+fn default_ignore_titles() -> Vec<String> {
+    [
+        "claude",
+        "claude code",
+        "codex",
+        "pi",
+        "copilot",
+        "cursor",
+        "droid",
+        "aider",
+        "goose",
+        "bash",
+        "zsh",
+        "fish",
+        "sh",
+        "nu",
+        "pwsh",
+        "powershell",
+        "nvim",
+        "vim",
+        "nano",
+        "helix",
+        "hx",
+        "emacs",
+        "less",
+        "man",
+        "node",
+        "python",
+        "irb",
+        "psql",
+        "lazygit",
+        "htop",
+        "top",
+        "btop",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 impl Default for Naming {
@@ -179,6 +273,13 @@ impl Default for Naming {
             enabled: true,
             debounce_ms: 1200,
             min_interval_ms: 15_000,
+            similarity_threshold: 0.6,
+            respect_manual_names: true,
+            skip_while_blocked: true,
+            strip_project_prefix: true,
+            ignore_titles: default_ignore_titles(),
+            targets: Targets::default(),
+            templates: Templates::default(),
         }
     }
 }
@@ -296,6 +397,17 @@ impl Config {
                     l.name,
                     l.key.unwrap_or(' ')
                 );
+            }
+        }
+        // Reported before the terminal is taken over, where it can be read. A
+        // mistyped token renders as silence otherwise: a label simply shorter
+        // than intended, with nothing to say why.
+        for (what, template) in [
+            ("workspace", &cfg.naming.templates.workspace),
+            ("agent", &cfg.naming.templates.agent),
+        ] {
+            for token in crate::tokens::unknown(template) {
+                eprintln!("dirk: {what} template: no such token {{{token}}}");
             }
         }
         cfg.layouts.retain(|l| l.runnable());

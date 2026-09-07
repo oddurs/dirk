@@ -114,12 +114,18 @@ pub fn similarity(a: &str, b: &str) -> f32 {
 }
 
 /// True when a title says nothing about intent and must never become a name.
-pub fn is_junk(title: &str, repo: &str) -> bool {
+pub fn is_junk(title: &str, repo: &str, ignore: &[String]) -> bool {
     let t = normalize(title);
     if t.is_empty() {
         return true;
     }
     let lower = t.to_lowercase();
+
+    // Programs that show their own name as a title. Without this they arrive
+    // as intents: a pane running `nvim` would be a workspace called "nvim".
+    if ignore.iter().any(|x| x.eq_ignore_ascii_case(&lower)) {
+        return true;
+    }
 
     // A shell prompt: "oddurs@Oddurs-MacBook-Pro:~/Code/perfect".
     if let Some(colon) = t.find(':') {
@@ -340,10 +346,6 @@ pub enum Decision {
     Skip(Skip),
 }
 
-/// 0..1 token overlap above which a new intent counts as "the same thing,
-/// reworded" and is skipped.
-const SIMILARITY_THRESHOLD: f32 = 0.6;
-
 /// Decide whether `title` should become the workspace's label.
 ///
 /// Pure apart from the clock, so the test suite drives it directly.
@@ -368,7 +370,7 @@ pub fn decide(
     //
     // This branch was written when the policy was ported and could not be
     // reached: dirk had no idea what blocked meant until 0031.
-    if blocked {
+    if blocked && cfg.skip_while_blocked {
         // Forgotten, not merely skipped. `rename_pass` runs on every chunk of
         // output and the state is recomputed once per frame, so the pass that
         // first sees the question still sees `working` and records it as
@@ -390,7 +392,7 @@ pub fn decide(
     if intent.is_empty() {
         return Decision::Skip(Skip::NoIntent);
     }
-    if is_junk(&intent, repo) {
+    if is_junk(&intent, repo, &cfg.ignore_titles) {
         return Decision::Skip(Skip::Junk);
     }
 
@@ -398,14 +400,18 @@ pub fn decide(
     // the one dirk last wrote, a human changed it. Back off permanently. A
     // label dirk generated itself is nobody's choice, so it stays adoptable.
     let cur = normalize(current);
-    if !cur.is_empty() && !looks_auto_generated(&cur, repo, branch) {
+    if cfg.respect_manual_names && !cur.is_empty() && !looks_auto_generated(&cur, repo, branch) {
         let ours = state.applied.as_deref().map(normalize);
         if ours.as_deref() != Some(cur.as_str()) {
             return Decision::Skip(Skip::Manual);
         }
     }
 
-    let desired = strip_project(&intent, repo);
+    let desired = if cfg.strip_project_prefix {
+        strip_project(&intent, repo)
+    } else {
+        intent.clone()
+    };
     if desired.is_empty() {
         return Decision::Skip(Skip::NoIntent);
     }
@@ -435,7 +441,7 @@ pub fn decide(
     }
 
     // A reworded title describing the same work is not a new intent.
-    if !cur.is_empty() && similarity(&cur, &desired) >= SIMILARITY_THRESHOLD {
+    if !cur.is_empty() && similarity(&cur, &desired) >= cfg.similarity_threshold {
         state.pending = None;
         return Decision::Skip(Skip::Similar);
     }
@@ -453,9 +459,9 @@ mod tests {
 
     fn cfg() -> Naming {
         Naming {
-            enabled: true,
             debounce_ms: 0,
             min_interval_ms: 0,
+            ..Naming::default()
         }
     }
 
@@ -560,15 +566,30 @@ mod tests {
             "bedreader", // the repo name is what dirk already defaults to
         ];
         for t in junk {
-            assert!(is_junk(t, "bedreader"), "{t} should be junk");
+            assert!(is_junk(t, "bedreader", &[]), "{t} should be junk");
         }
+    }
+
+    #[test]
+    fn a_program_that_titles_itself_is_not_an_intent() {
+        // Without the list these become workspace names: a pane running nvim
+        // would be a workspace called "nvim".
+        let ignore = crate::config::Naming::default().ignore_titles;
+        for t in ["nvim", "lazygit", "Claude Code", "htop"] {
+            assert!(is_junk(t, "dirk", &ignore), "{t} should be ignored");
+            // And without the list, most of them get through.
+        }
+        assert!(
+            !is_junk("lazygit", "dirk", &[]),
+            "the list is what rejects it"
+        );
     }
 
     #[test]
     fn ordinary_words_that_happen_to_be_commands_are_kept() {
         // The policy's own caveat: "go", "make" and "less" are English too.
         for t in ["go routine leak fix", "make the sidebar clickable"] {
-            assert!(!is_junk(t, "dirk"), "{t} should have survived");
+            assert!(!is_junk(t, "dirk", &[]), "{t} should have survived");
         }
     }
 
@@ -586,9 +607,9 @@ mod tests {
     #[test]
     fn a_title_must_hold_still_before_it_is_committed() {
         let cfg = Naming {
-            enabled: true,
             debounce_ms: 1000,
             min_interval_ms: 0,
+            ..Naming::default()
         };
         let mut st = NameState::default();
         let t0 = Instant::now();
@@ -644,9 +665,9 @@ mod tests {
     #[test]
     fn one_rename_per_workspace_per_interval() {
         let cfg = Naming {
-            enabled: true,
             debounce_ms: 0,
             min_interval_ms: 30_000,
+            ..Naming::default()
         };
         let mut st = NameState::default();
         let t0 = Instant::now();

@@ -51,6 +51,7 @@ mod mux;
 mod name;
 mod notify;
 mod theme;
+mod tokens;
 mod ui;
 
 use config::Config;
@@ -305,6 +306,7 @@ impl App {
             Ev::Term(Event::Resize(..)) | Ev::Term(_) => {}
             Ev::Output(id) => {
                 self.session.touch(id);
+                self.session.track_intents();
                 self.rename_pass();
             }
             Ev::Git(answer) => self.session.apply_repo(answer),
@@ -320,6 +322,7 @@ impl App {
             Ev::Tick => {
                 self.read_agents();
                 self.read_repos();
+                self.session.track_intents();
                 self.rename_pass();
                 if !self.status.is_empty()
                     && self.status_at.elapsed() > Duration::from_secs(3)
@@ -445,7 +448,10 @@ impl App {
                 let blocked = ws.state == agent::State::Blocked;
 
                 let ws = &mut self.session.projects[p].workspaces[w];
-                if let name::Decision::Rename(label) = name::decide(
+                if !self.cfg.naming.targets.workspace {
+                    continue;
+                }
+                if let name::Decision::Rename(intent) = name::decide(
                     &self.cfg.naming,
                     &mut ws.naming,
                     &current,
@@ -456,7 +462,16 @@ impl App {
                     blocked,
                     now,
                 ) {
-                    ws.label = label;
+                    // The decision is what the intent should be; the template
+                    // is how it is arranged. Rendered after, so the policy
+                    // compares intents with intents rather than with whatever
+                    // a template happened to produce.
+                    let mut tokens = self.session.tokens(p, w);
+                    tokens.set("intent", intent.clone());
+                    tokens.set("intent-slug", name::slugify(&intent, name::AGENT_NAME_MAX));
+                    let label = tokens::render(&self.cfg.naming.templates.workspace, &tokens);
+                    let ws = &mut self.session.projects[p].workspaces[w];
+                    ws.label = if label.is_empty() { intent } else { label };
                 }
             }
         }

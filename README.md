@@ -151,14 +151,51 @@ split = "rows"
     size    = "30%"
 
 [naming]
-enabled          = true
-debounce_ms      = 1200      # how long a title must hold still
-min_interval_ms  = 15000     # floor between two renames of one workspace
+enabled              = true
+debounce_ms          = 1200   # how long a title must hold still
+min_interval_ms      = 15000  # floor between two renames of one workspace
+similarity_threshold = 0.6    # above this, a new title is the same thing reworded
+respect_manual_names = true   # never overwrite a name you wrote
+skip_while_blocked   = true   # a blocked agent's title is the question, not the work
+strip_project_prefix = true   # "ptop-adopt-lessons" under "ptop" reads "Adopt-lessons"
+# Titles that are programs rather than intents. Ships with a list; setting this
+# replaces it.
+ignore_titles        = ["nvim", "lazygit", "claude", "htop"]
+
+[naming.targets]
+workspace = true
+agent     = true
+
+# A name is a template over the tokens below. An absent token leaves no gap.
+[naming.templates]
+workspace = "{intent}"
+agent     = "{intent-slug}"
 
 [notify]
 enabled          = true
 min_interval_ms  = 60000     # floor between two interruptions about one space
 ```
+
+### The tokens a name is made of
+
+| | |
+| --- | --- |
+| `project` `branch` `worktree` | which checkout this is |
+| `n` | the workspace's number — display, not identity |
+| `intent` `intent-slug` | what the agent says it is doing |
+| `agent` `agents` | the kind, and a count when there is more than one |
+| `since` | how long in the **current state** — who has been blocked longest |
+| `age` | how long on the **current intent** — what has been grinding all day |
+| `locked` `stale` | flags, present as a word or absent entirely |
+
+`since` and `age` are different clocks and confusing them makes both useless. An
+agent that has started and finished six times is still working on one task, and
+`age` is the number that says so.
+
+A token that is not known is *absent*, not empty, so `"{project} {worktree}
+{branch}"` renders `dirk main` rather than `dirk  main`. A template naming a
+token that does not exist is reported at startup rather than rendering as
+silence.
 
 ## Naming, in detail
 
