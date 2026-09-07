@@ -265,6 +265,18 @@ impl Config {
                 );
             }
         }
+        // Command keys win, so a layout bound to one is unreachable. Silently
+        // is the problem: the entry is listed with a key that does nothing.
+        const RESERVED: &[char] = &['n', 'o', 'x', 'r', 'v', 's', 'd', 'w', 'q', 'j', 'k', ';'];
+        for l in &cfg.layouts {
+            if l.key.is_some_and(|k| RESERVED.contains(&k)) {
+                eprintln!(
+                    "dirk: layout {}: key {:?} is a command key and will not reach it",
+                    l.name,
+                    l.key.unwrap_or(' ')
+                );
+            }
+        }
         cfg.layouts.retain(|l| l.runnable());
         cfg
     }

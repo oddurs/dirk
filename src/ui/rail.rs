@@ -22,10 +22,11 @@
 //! where the sidebar ends. One row, always, in every state — a footer that
 //! disappears when there is nothing to say is not a footer.
 //!
-//! Three jobs, left to right, and they are the reason it earns a row of every
+//! Four jobs, left to right, and they are the reason it earns a row of every
 //! screen: **where am I** (the brand, and it is the only place branding
 //! appears), **where can I go** (a chip per workspace, clickable, focused one
-//! filled), and **what is going on** (counts and the clock).
+//! filled), **what is going on** (counts and the clock), and **how do I stop**
+//! (the button at the far right).
 
 use crate::config::Config;
 use crate::hit::{HitMap, Target};
@@ -35,15 +36,28 @@ use crate::ui::{elide, fill, write_str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+/// What the rail should say right now, as opposed to what it always says.
+pub struct Now<'a> {
+    pub clock: &'a str,
+    /// A transient note, or the prefix indicator. Empty most of the time.
+    pub note: &'a str,
+    /// The quit button has been clicked once and is waiting for the second.
+    pub quit_armed: bool,
+}
+
 pub fn render(
     buf: &mut Buffer,
     area: Rect,
     cfg: &Config,
     session: &Session,
-    clock: &str,
-    status: &str,
+    now: &Now,
     hits: &mut HitMap,
 ) {
+    let Now {
+        clock,
+        note: status,
+        quit_armed: armed,
+    } = *now;
     fill(buf, area, THEME.rail());
     if area.width < 20 {
         return;
@@ -65,6 +79,29 @@ pub fn render(
         area.width,
     );
 
+    // ── Quit, at the far right ──────────────────────────────────────────
+    // Two clicks, not one. This ends every shell and every agent in the
+    // session, and it sits at the edge of the screen where a stray click is
+    // most likely -- a button that does that on one click is a trap.
+    let quit = if armed { " quit? " } else { " ✕ " };
+    let quit_w = quit.chars().count() as u16;
+    let quit_x = area.right().saturating_sub(quit_w);
+    let quit_style = if armed {
+        THEME.critical()
+    } else {
+        THEME.faint().patch(THEME.rail())
+    };
+    write_str(buf, quit_x, area.y, quit, quit_style, quit_w);
+    hits.push(
+        Rect {
+            x: quit_x,
+            y: area.y,
+            width: quit_w,
+            height: 1,
+        },
+        Target::Quit,
+    );
+
     // ── Right edge, measured before the chips so they cannot overrun it ──
     let right = {
         let mut parts: Vec<String> = Vec::new();
@@ -81,7 +118,7 @@ pub fn render(
         parts.join("  ·  ")
     };
     let right_w = right.chars().count() as u16;
-    let right_x = area.x + area.width.saturating_sub(right_w + 1);
+    let right_x = quit_x.saturating_sub(right_w + 1);
     write_str(
         buf,
         right_x,

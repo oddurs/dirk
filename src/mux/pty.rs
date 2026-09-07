@@ -217,14 +217,24 @@ impl Pane {
 
     /// Note that the program has ended, and how.
     ///
-    /// The child has already exited by the time this is called — the read end
-    /// returned EOF — so the wait returns immediately.
+    /// Never blocks. EOF on the pty means the last slave descriptor closed, not
+    /// that the process is gone — a program that daemonizes, or a read that
+    /// failed for its own reasons, gets here with the child still running. A
+    /// blocking `wait` on the drawing thread would then hang the whole program
+    /// with no redraws and no keys, which looks exactly like a freeze.
     pub fn finish(&mut self) {
         self.dead = true;
-        self.exit = Some(match self.child.wait() {
-            Ok(s) if s.success() => "exited".into(),
-            Ok(s) => format!("exited {}", s.exit_code()),
-            Err(_) => "exited".into(),
+        let mut status = self.child.try_wait().ok().flatten();
+        if status.is_none() {
+            // Still running with nothing on the other end of the pty. Nothing
+            // can reach it and it can reach nothing; end it.
+            let _ = self.child.kill();
+            status = self.child.try_wait().ok().flatten();
+        }
+        self.exit = Some(match status {
+            Some(s) if s.success() => "exited".into(),
+            Some(s) => format!("exited {}", s.exit_code()),
+            None => "stopped".into(),
         });
     }
 }

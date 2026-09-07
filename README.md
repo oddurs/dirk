@@ -6,24 +6,29 @@
 A terminal multiplexer that knows what its sessions are for.
 
 ```
-┌──────────────┬──────────────────────────────────────────────────┐
-│ layouts    1 │                                                  │
-│ 1 • Overview │                                                  │
-│   ↵ open     │                                                  │
-│              │                the focused pane                  │
-│ spaces     3 │                                                  │
-│ ▾ dirk       │                                                  │
-│   * mux core │                                                  │
-│   · shell    │                                                  │
-│   + workspace│                                                  │
-│   n new · o …│                                                  │
-│ ▸ smali    2 │                                                  │
-│              │                                                  │
-│ agents     1 │                                                  │
-│   * mux core │                                                  │
-├──────────────┴──────────────────────────────────────────────────┤
-│ ◆ dirk   ▊1 mux core  ▏2 shell           3 spaces  ·  14:22     │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────┬────────────────────────────────────┐
+│ layouts                      4 │ ─ roadmap ──────── exited · r resta│
+│ 1 • Overview                   │  v0.2  The nav                     │
+│ 2   ptop                       │   [####################] 100%      │
+│ 3   lazygit                    │                                    │
+│ 4   cairn                      │                                    │
+│   ↵ open                       │ ─ ptop ──────────────── ─ board ───│
+│                                │ CPU 9.5%  MEM 78.0%     0040 Search│
+│ spaces                       2 │  14 cores ▃▂▂▁ ▂▁▁▁     0041 Tabs: │
+│ ▾ dirk                         │ ── timeline ─────────   0042 Comman│
+│   * 1 Building the mux core now│  25 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0043 Pane z│
+│       main                     │ CPU ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0044 Create│
+│ ▸ · 2 Reading the grid ⑂   1d  │                                    │
+│       feat/packaging           │                                    │
+│   + workspace                  │                                    │
+│   n new  ·  o project          │                                    │
+│                                │                                    │
+│ agents               attention │                                    │
+│   * Building the mux core  now │                                    │
+│   ↵ go  ·  s sort              │                                    │
+├────────────────────────────────┴────────────────────────────────────┤
+│ ◆ dirk  ▊1 mux core  ▏2 reading the grid    2 spaces · 14:22    ✕ │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 tmux gives you panes and asks you to remember what is in them. dirk starts from
@@ -91,6 +96,10 @@ literal one through.
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `q` | quit |
+
+The `✕` at the right of the bar quits too, and takes two clicks: it ends every
+shell and every agent in the session, and it sits at the edge of the screen
+where a stray click is most likely.
 
 Everything else goes straight through to the program in the pane.
 
@@ -219,8 +228,8 @@ The sidebar is the product, and v0.1 has a sketch of it. The roadmap is
 
 | | | |
 | --- | --- | --- |
-| **v0.1** | It runs | panes on a pty, a clickable sidebar, a rail, naming |
-| **v0.2** | The nav | three sections — layouts, spaces, agents — two-line rows carrying project, worktree, branch and intent, and static layouts with a split tree under them (`0011`, `0022` done) |
+| **v0.1** ✓ | It runs | panes on a pty, a clickable sidebar, a rail, naming |
+| **v0.2** ✓ | The nav | three sections — layouts, spaces, agents — two-line rows carrying worktree, branch, intent and age, and static layouts with a split tree under them |
 | **v0.3** | It knows what the agents are doing | real detection and real lifecycle states, so `blocked` is shown rather than guessed; attention routing and notifications |
 | **v0.4** | Sessions that outlive their terminal | a daemon, detach and reattach, persistence, and a socket API with a CLI so an agent inside a pane can drive dirk |
 | **v0.5** | A multiplexer you would not miss tmux from | scrollback, copy mode, search, tabs, zoom, a command palette, configurable keys |
@@ -232,7 +241,11 @@ a guess until the states are real.
 
 ## Status
 
-v0.1 is a single process. Close the terminal and the work goes with it, so
+v0.2 is done: the nav is three sections of two-line rows, layouts are declared
+arrangements that hold their shape when a panel stops, and everything in the
+column is clickable.
+
+It is still a single process. Close the terminal and the work goes with it, so
 [herdr](https://herdr.dev) stays installed for anything long-running — that is
 item `0007`, and the whole of v0.4.
 

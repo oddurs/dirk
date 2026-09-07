@@ -23,15 +23,11 @@ closing the terminal ends the session. Shipped.
 
 ## v0.2 — The nav
 
-`##########` 94% · 15 of 16 done · due 2026-10-15
+`##########` 100% · 16 of 16 done · due 2026-10-15
 
 The sidebar becomes the product. Three sections — layouts, spaces, agents — with
 two-line rows carrying project, worktree, branch and intent. Static layouts, and
 the split tree they need underneath. This is the milestone dirk is for.
-
-### backlog
-
-- [ ] `0050` Sections should shrink proportionally, not scroll as one list <sup>feature · p2 · nav</sup>
 
 ### done
 
@@ -50,6 +46,7 @@ the split tree they need underneath. This is the milestone dirk is for.
 - [x] `0028` Age, right-aligned <sup>feature · p2 · nav</sup>
 - [x] `0029` Drag the sidebar divider <sup>feature · p2 · nav</sup>
 - [x] `0049` A layout pane whose program exits should not vanish <sup>bug · p1 · layout</sup>
+- [x] `0050` Sections should shrink proportionally, not scroll as one list <sup>feature · p2 · nav</sup>
 
 ## v0.3 — It knows what the agents are doing
 

@@ -52,6 +52,8 @@ pub enum Target {
     PickerRow(usize),
     /// The agents list is the only one whose order is a choice.
     SortAgents,
+    /// The quit button at the right of the rail.
+    Quit,
 }
 
 #[derive(Default)]
