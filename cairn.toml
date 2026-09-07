@@ -166,6 +166,7 @@ values = [
   "perf",
   "docs",
   "packaging",
+  "web",        # the website, and the generator that builds it
 ]
 column = true
 description = "Subsystem this touches"

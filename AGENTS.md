@@ -80,8 +80,18 @@ carries one — but do not make it do that work.
 ## Subagents and commands
 
 `.claude/agents/` holds the specialists: `backlog`, `smoke`, `chrome`, `news`,
-`reviewer`, `docs`. `.claude/commands/` holds the loop above as `/work`,
-`/check`, `/ship`, `/land`, `/release`, `/backlog`.
+`reviewer`, `docs`, `site`. `.claude/commands/` holds the loop above as
+`/work`, `/check`, `/ship`, `/land`, `/release`, `/backlog`.
+
+## The website
+
+`site/` is a workspace member: `make site` builds it, `make site-serve` serves
+it. It is generated from the program — the palette from `src/theme.rs`, the
+roadmap from `ROADMAP.md`, the changelog from `NEWS`, the screens from the real
+binary — so **nothing on the site is a hand-copied duplicate of something in
+the repository.** If you are about to type a keybinding, a colour or a version
+number that already exists in the tree, generate it instead. `HACKING` has the
+rest.
 
 <!-- cairn:begin -->
 ## Roadmap and issues

@@ -1,3 +1,9 @@
+# The site is a member rather than a separate repository: it is generated from
+# the program -- the palette from src/theme.rs, the screens from the real
+# binary -- so it has to be built against the same source tree.
+[workspace]
+members = ["site"]
+
 [package]
 name = "dirk"
 version = "0.4.0"
@@ -11,7 +17,7 @@ keywords = ["terminal", "multiplexer", "tui", "pty", "tmux"]
 categories = ["command-line-utilities"]
 # Let-chains, which this uses throughout.
 rust-version = "1.88"
-exclude = ["/cairn", "/.github", "/.claude", "/.githooks", "/scripts"]
+exclude = ["/cairn", "/.github", "/.claude", "/.githooks", "/scripts", "/site"]
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

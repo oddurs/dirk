@@ -13,8 +13,8 @@ DIRK    := target/release/dirk
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DISTDIR := dirk-$(VERSION)
 
-.PHONY: all build check test fmt lint shot roadmap setup news ChangeLog dist \
-        install install-man uninstall clean distclean help
+.PHONY: all build check test fmt lint shot shots site site-serve roadmap setup \
+        news ChangeLog dist install install-man uninstall clean distclean help
 
 all: build
 
@@ -26,16 +26,18 @@ build:
 # Everything CI runs. If this passes, the pull request should be green.
 check: fmt lint test
 
+# --all and --workspace: the site generator is a member and is held to the
+# same standard as the program. It ships too.
 fmt:
-	$(CARGO) fmt --check
+	$(CARGO) fmt --all --check
 
 lint:
-	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 # The unit tests cover the naming policy; tests/smoke.rs drives the real binary
 # on a real pseudo-terminal, so this is one entry point for both.
 test:
-	$(CARGO) test
+	$(CARGO) test --workspace
 
 # ─── the loop ────────────────────────────────────────────────────────────────
 
@@ -54,6 +56,34 @@ setup:
 shot:
 	$(CARGO) build
 	$(CARGO) run --example shot
+
+# ─── the website ─────────────────────────────────────────────────────────────
+
+# The base path the built site will be served under. GitHub Pages serves this
+# project at /dirk/; a local build is at the root. It is a variable rather than
+# a constant so moving to a domain is one flag and not a search.
+SITE_BASE ?= /
+
+site:
+	$(CARGO) run --quiet -p site -- build --base $(SITE_BASE)
+
+# Serves site/dist and rebuilds when anything it reads changes, including
+# src/theme.rs -- a colour changed in the program shows up in the browser.
+site-serve:
+	$(CARGO) run --quiet -p site -- serve
+
+# The terminal renders the site shows: real output from the real binary. They
+# are committed rather than built on demand, so a site build never needs a
+# pseudo-terminal and a change to the chrome shows up in a diff.
+#
+# The build is not optional, for the same reason `shot` needs it: the example
+# spawns the built binary rather than linking it.
+shots:
+	$(CARGO) build
+	$(CARGO) run --quiet --example shot -- --html > site/shots/overview.html
+	@echo "wrote site/shots/overview.html"
+
+
 
 # Regenerate the roadmap from the backlog.
 roadmap:
@@ -112,13 +142,16 @@ clean:
 	$(CARGO) clean
 
 distclean: clean
-	rm -rf ChangeLog $(DISTDIR) dirk-*.tar.gz
+	rm -rf ChangeLog $(DISTDIR) dirk-*.tar.gz site/dist
 
 help:
 	@echo 'build      cargo build --release'
 	@echo 'check      fmt, clippy and the full suite — the gate CI enforces'
 	@echo 'setup      configure git for the worktree workflow (once per checkout)'
 	@echo 'shot       print what dirk currently paints, as plain text'
+	@echo 'site       build the website into site/dist'
+	@echo 'site-serve build it, serve it, and rebuild on change'
+	@echo 'shots      regenerate the terminal renders the site shows'
 	@echo 'roadmap    regenerate ROADMAP.md from the backlog'
 	@echo 'news       the release notes for $(VERSION), cut from NEWS'
 	@echo 'dist       dirk-$(VERSION).tar.gz, buildable from source'

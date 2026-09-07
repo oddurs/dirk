@@ -108,6 +108,37 @@ next keystroke is never processed — which looks exactly like dirk ignoring you
 input.
 
 
+The website
+-----------
+
+`site/` is a workspace member, and `cargo run -p site -- build` is the whole of
+it. It is a cargo target rather than an off-the-shelf generator because half of
+what belongs on the site is generated from the program.
+
+    $ make site          build into site/dist
+    $ make site-serve    serve it, and rebuild when anything it reads changes
+    $ make shots         regenerate the terminal renders from the real binary
+
+The palette comes out of `src/theme.rs`, the roadmap out of `ROADMAP.md`, the
+changelog out of `NEWS`, and the screens out of the real binary on a real
+pseudo-terminal. Nothing on the site is a hand-copied duplicate of something in
+the repository, and nothing new should be.
+
+`site-serve` watches `src/theme.rs` as well as `site/`, so a colour changed in
+the program shows up in the browser without restarting anything.
+
+Two things about it are worth knowing before changing much. The site is served
+under `/dirk/` and built under `/` locally, so every internal link goes through
+the base path — one written straight into a template works in development and
+404s in production. And the terminal renders under `site/shots` are committed
+rather than built on demand: a site build should never need to allocate a
+pseudo-terminal, and a change to the chrome should show up in a diff and be
+looked at.
+
+A push to main that touches any of that deploys the site. A pull request builds
+it without deploying, so a change that breaks it fails in review.
+
+
 The backlog
 -----------
 
