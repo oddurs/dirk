@@ -86,6 +86,7 @@ impl Section {
                 (Press::Key("a"), "agent", Action::NewAgent),
                 (Press::Key("n"), "new", Action::NewWorkspace),
                 (Press::Key("o"), "project", Action::OpenProject),
+                (Press::Key("W"), "worktree", Action::NewWorktree),
             ],
             Section::Attention => &[(Press::Mark(G::Enter), "go", Action::Hint)],
         }
@@ -105,6 +106,7 @@ enum Press {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Hint,
+    NewWorktree,
     NewAgent,
     NewWorkspace,
     OpenProject,
@@ -124,6 +126,10 @@ impl Action {
             },
             Action::NewAgent => match session.focus {
                 Focus::Ws { .. } => Some(Target::NewAgent),
+                Focus::Layout(_) => None,
+            },
+            Action::NewWorktree => match session.focus {
+                Focus::Ws { .. } => Some(Target::NewWorktree),
                 Focus::Layout(_) => None,
             },
         }

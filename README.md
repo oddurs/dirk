@@ -128,6 +128,7 @@ literal one through.
 | `r` | restart a stopped pane |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `a` | start an agent here |
+| `W` | a worktree, and a space open in it |
 | `[` | read this pane's scrollback, and copy out of it |
 | `/` | find a line, in any pane |
 | `d` | **detach** — leave, and let everything keep running |
@@ -181,6 +182,32 @@ operation and the programs would not survive it. A zoomed space is marked in the
 nav, since one pane looks like one pane.
 
 Moving is the same idea: two panes exchange places and neither is restarted.
+
+## Worktrees
+
+Running several agents on one repository means several checkouts, and making one
+was: leave dirk, `git worktree add`, come back, open the project. `W` asks for a
+branch and does all four — which matters because it is the thing you do to start
+*each* agent, not once.
+
+```console
+$ dirk worktree list                    # and which one you are in
+$ dirk worktree add feat/packaging
+$ dirk worktree remove feat/packaging   # --force if it holds uncommitted work
+```
+
+The new checkout goes **beside** the repository — `dirk` and `dirk-feat-packaging`
+— which is what people do by hand: inside it would be a directory git has to be
+told to ignore, and somewhere central would be one nobody finds again. It goes
+beside the repository proper rather than beside whichever worktree you are
+standing in, or they nest.
+
+Removing one refuses while it holds work nobody has committed. That is git's own
+refusal, passed along in git's own words rather than reworded: the case for
+removing it anyway is one only you can make, and `--force` is how you make it.
+
+A worktree is marked `⑂` in the nav, which is what tells two rows wearing the
+same repository's name apart.
 
 ## Reading what has gone past
 
