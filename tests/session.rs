@@ -3393,3 +3393,137 @@ fn an_agent_block_in_the_config_still_works_and_a_file_wins() {
 
     drop(client);
 }
+
+#[test]
+fn a_state_that_is_wrong_can_be_asked_why() {
+    // Four ranked signals decide a state and `agent list` names only the
+    // winner. When the answer is wrong that is not enough: what you need is
+    // what the other three said, and which marker did or did not match.
+    let session = unique("explain");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = first_id(&list);
+
+    // Nothing has reported and nothing is a harness, so every signal should say
+    // so rather than the answer being a bare "unknown".
+    let (ok, said) = ask(&session, &["agent", "explain", &ws]);
+    assert!(ok, "agent explain failed: {said}");
+    assert!(
+        said.contains("\"signals\""),
+        "no signals in the answer: {said}"
+    );
+    assert!(
+        said.contains("no hook has reported here"),
+        "the reported signal did not say why it was silent: {said}"
+    );
+    assert!(
+        said.contains("not a harness dirk recognises"),
+        "it did not say the pane holds no agent: {said}"
+    );
+
+    // A report puts a state on the row, and explain says which signal did it.
+    let (ok, out) = ask(&session, &["agent", "state", "blocked", &ws]);
+    assert!(ok, "the report was refused: {out}");
+    let (ok, said) = ask(&session, &["agent", "explain", &ws]);
+    assert!(ok, "agent explain failed: {said}");
+    assert!(
+        said.contains("\"why\": \"reported\""),
+        "it did not name the winning signal: {said}"
+    );
+    assert!(
+        said.contains("the agent said so"),
+        "the winning signal did not say what it claimed: {said}"
+    );
+
+    let (ok, _) = ask(&session, &["agent", "explain", "w9999"]);
+    assert!(!ok, "explaining a workspace that does not exist succeeded");
+
+    drop(client);
+}
+
+#[test]
+fn a_captured_screen_can_be_run_through_the_same_rule() {
+    // This is how a wrong detection becomes a test case rather than a bug
+    // report with a screenshot in it — and it works with no session at all,
+    // because the screen has already been captured.
+    let session = unique("explainfile");
+    let dir = config_home().join("explain-screens");
+    std::fs::create_dir_all(&dir).expect("screens dir");
+
+    // A marker with a menu under it: blocked.
+    let asking = dir.join("asking.txt");
+    std::fs::write(&asking, "Do you want to proceed?\n  1. Yes\n  2. No\n").expect("screen");
+    let (ok, said) = ask(
+        &session,
+        &[
+            "agent",
+            "explain",
+            "--file",
+            asking.to_str().unwrap(),
+            "--agent",
+            "claude",
+        ],
+    );
+    assert!(ok, "explaining a captured screen failed: {said}");
+    assert!(
+        said.contains("\"blocked\": true"),
+        "it did not read as blocked: {said}"
+    );
+    assert!(
+        said.contains("\"marker\": \"Do you want\""),
+        "it did not say which marker matched: {said}"
+    );
+
+    // The same words with no menu under them: a finished turn, not a question.
+    // This is the rule that had to be got right, and the one worth being able
+    // to demonstrate.
+    let prose = dir.join("prose.txt");
+    std::fs::write(&prose, "Would you like me to run the tests?\n").expect("screen");
+    let (ok, said) = ask(
+        &session,
+        &[
+            "agent",
+            "explain",
+            "--file",
+            prose.to_str().unwrap(),
+            "--agent",
+            "claude",
+        ],
+    );
+    assert!(ok, "explaining a captured screen failed: {said}");
+    assert!(
+        said.contains("\"blocked\": false"),
+        "prose read as blocked: {said}"
+    );
+    assert!(
+        said.contains("no menu of numbered answers"),
+        "it did not say why it was not blocked: {said}"
+    );
+
+    // No session was needed for any of that.
+    let socket = std::env::temp_dir()
+        .join(format!("dirk-{}", unsafe { libc::getuid() }))
+        .join(format!("{session}.sock"));
+    assert!(!socket.exists(), "explaining a file started a session");
+
+    // A harness dirk does not know is refused, with the ones it does listed.
+    let (ok, said) = ask(
+        &session,
+        &[
+            "agent",
+            "explain",
+            "--file",
+            prose.to_str().unwrap(),
+            "--agent",
+            "nosuch",
+        ],
+    );
+    assert!(!ok, "an unknown harness was accepted: {said}");
+    assert!(
+        said.contains("claude"),
+        "the refusal did not list what it knows: {said}"
+    );
+}

@@ -209,6 +209,22 @@
     },
     {
       "answer": [
+        "workspace",
+        "pane",
+        "agent",
+        "rules",
+        "state",
+        "why",
+        "seen",
+        "signals[]",
+        "screen",
+        "window"
+      ],
+      "args": "<workspace|pane>",
+      "name": "agent.explain"
+    },
+    {
+      "answer": [
         "agents[]"
       ],
       "args": "",

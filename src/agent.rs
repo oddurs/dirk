@@ -448,16 +448,67 @@ pub fn hooks(kind: &str) -> String {
     }
 }
 
-/// Is this agent waiting for an answer?
+/// Is this agent waiting for an answer, and what makes you say that?
 ///
 /// Only the region around the cursor is read, not the whole screen: an agent
 /// that merely wrote the words "do you want" in a paragraph further up is not
 /// waiting for anything.
-pub fn is_blocked(kind: &Kind, window: &str) -> bool {
-    if !kind.blocked.iter().any(|m| window.contains(m.as_str())) {
-        return false;
+///
+/// What the screen rule found, rather than only what it concluded.
+///
+/// The conclusion is one bit and the interesting part is the other three: which
+/// marker matched, whether a menu was required, and whether one was there. A
+/// state you cannot explain is a state you stop believing, and when this one is
+/// wrong it is always for one of those reasons.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Found {
+    /// The first marker present in the window, if any.
+    pub marker: Option<String>,
+    /// The line it appeared on, as the window has them.
+    pub line: Option<String>,
+    /// Whether this harness requires a menu alongside its marker.
+    pub needs_menu: bool,
+    /// Whether the window holds one.
+    pub menu: bool,
+}
+
+impl Found {
+    pub fn blocked(&self) -> bool {
+        self.marker.is_some() && (!self.needs_menu || self.menu)
     }
-    !kind.choices || has_menu(window)
+
+    /// Why this is not `blocked`, in the words somebody debugging it needs.
+    pub fn why_not(&self) -> Option<&'static str> {
+        match (self.marker.is_some(), self.needs_menu && !self.menu) {
+            (false, _) => Some("no marker for this harness is on the screen"),
+            (true, true) => Some("a marker matched, but there is no menu of numbered answers"),
+            _ => None,
+        }
+    }
+}
+
+/// Run the screen rule and keep its working.
+///
+/// The one place the rule lives, so that what `agent explain` reports and what
+/// the nav believes cannot be two different rules that happen to agree today.
+pub fn examine(kind: &Kind, window: &str) -> Found {
+    let marker = kind
+        .blocked
+        .iter()
+        .find(|m| window.contains(m.as_str()))
+        .cloned();
+    let line = marker.as_ref().and_then(|m| {
+        window
+            .lines()
+            .find(|l| l.contains(m.as_str()))
+            .map(|l| l.trim().to_string())
+    });
+    Found {
+        marker,
+        line,
+        needs_menu: kind.choices,
+        menu: has_menu(window),
+    }
 }
 
 /// Two or more numbered answers, which is what an approval box is.
@@ -500,6 +551,10 @@ pub struct Reading {
 
 #[cfg(test)]
 mod tests {
+    fn blocked(kind: &super::Kind, window: &str) -> bool {
+        super::examine(kind, window).blocked()
+    }
+
     use super::*;
 
     /// Most of these ask about a program name alone, which is the common case.
@@ -613,13 +668,13 @@ mod tests {
         let kinds = defaults();
         let find = |n: &str| kinds.iter().find(|k| k.name == n).unwrap();
         let claude = find("claude");
-        assert!(is_blocked(
+        assert!(blocked(
             claude,
             "Do you want to proceed?\n  1. Yes\n  2. No"
         ));
-        assert!(!is_blocked(claude, "Reading src/agent.rs\nWriting tests"));
+        assert!(!blocked(claude, "Reading src/agent.rs\nWriting tests"));
         // A marker belongs to one agent, not to all of them.
-        assert!(!is_blocked(find("codex"), "Do you want to proceed?"));
+        assert!(!blocked(find("codex"), "Do you want to proceed?"));
     }
 
     #[test]

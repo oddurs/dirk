@@ -283,6 +283,59 @@ pub fn read(
             Reply::ok(json!({ "agents": list }))
         }
 
+        // Why this pane is in the state it is. Four ranked signals decide one,
+        // and `agent list` names only the winner -- which is not enough when
+        // the answer is wrong, because then what you need is what the other
+        // three said and which marker did or did not match.
+        "agent.explain" => {
+            let Some(target) = args.first() else {
+                return Some(Reply::err("agent.explain needs a workspace or a pane"));
+            };
+            let Some((p, w)) = target_workspace(session, target) else {
+                return Some(Reply::err(format!("no such workspace or pane: {target}")));
+            };
+            let Some(ws) = session.workspace(p, w) else {
+                return Some(Reply::err("no such workspace"));
+            };
+            let seen = crate::mux::session::explain(ws, std::time::Instant::now());
+            let signals: Vec<Value> = seen
+                .signals
+                .iter()
+                .enumerate()
+                .map(|(rank, (name, claim, note))| {
+                    json!({
+                        "rank": rank + 1,
+                        "signal": name,
+                        "claims": claim.map(|s| s.glyph_name()),
+                        "note": note,
+                    })
+                })
+                .collect();
+            let pane = ws.active_pane();
+            let kind = pane.and_then(|p| p.occupant.agent());
+            Reply::ok(json!({
+                "workspace": workspace_id(ws.id),
+                "pane": pane.map(|p| pane_id(ws.id, p.id)),
+                "agent": kind.map(|k| k.name.clone()),
+                // Which rules were in play, since a marker that does not match
+                // is as often a rules problem as a screen one.
+                "rules": kind.map(|k| k.from.name()),
+                // What is on the row, which is what this is really about.
+                "state": ws.state.glyph_name(),
+                "why": ws.source.name(),
+                "seen": ws.seen,
+                "signals": signals,
+                "screen": seen.found.as_ref().map(|f| json!({
+                    "marker": f.marker,
+                    "line": f.line,
+                    "menu_required": f.needs_menu,
+                    "menu_found": f.menu,
+                    "blocked": f.blocked(),
+                })),
+                "window": seen.window,
+            }))
+        }
+
         "agent.list" => {
             let list: Vec<Value> = session
                 .flat()
@@ -480,6 +533,11 @@ pub const COMMANDS: &[Command] = &[
         name: "agent.state",
         args: "<blocked|working|done|idle|starting> [workspace|pane]",
         answer: "state, workspace, seen",
+    },
+    Command {
+        name: "agent.explain",
+        args: "<workspace|pane>",
+        answer: "workspace, pane, agent, rules, state, why, seen, signals[], screen, window",
     },
     Command {
         name: "agent.rules",

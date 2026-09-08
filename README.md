@@ -336,6 +336,21 @@ A wrong `working` costs nothing. A wrong `blocked` is an interruption you did
 not need, and two of those is how a feature gets turned off — so silence may
 promote *working → done* and may never say *blocked*.
 
+**`dirk agent explain <target>` says which one decided, and what the others
+said.** A badge you cannot explain is a badge you stop believing, and when this
+one is wrong it is almost always the screen rule: a marker that no longer
+matches, or one that matched with no menu under it. So it reports the marker,
+the line it was on, whether a menu was required and whether one was there.
+
+```console
+$ dirk agent explain w7                        # a live pane
+$ dirk agent explain --file screen.txt --agent claude
+```
+
+The second form needs no session at all. That is how a wrong detection becomes
+a test case instead of a bug report with a screenshot in it: capture the screen,
+run it through the same rule, and put the file in `tests/`.
+
 **Rank one is worth installing.** `dirk agent hooks claude` prints a snippet;
 everything below it is dirk guessing at something the agent already knows.
 

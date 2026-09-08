@@ -114,7 +114,7 @@ JSON; `--current` means the pane you are in.
   workspace list|focus|create|rename|close
   pane      list|focus|split|read|run|send-text|send-keys|close
   layout    list|open
-  agent     list|rules|start|state|prompt|wait|hooks
+  agent     list|rules|explain|start|state|prompt|wait|hooks
   worktree  list|add|remove
   tab       list|new|focus|rename|close
   session   info|list|reload|commands|notify|quit|prune
@@ -371,6 +371,60 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // Answered without a session, because the point of it is that a screen
+    // somebody captured can be run through the same rule as a live one. That
+    // is how a wrong detection becomes a test case instead of a bug report
+    // with a screenshot in it.
+    if command_args_are(&args, "agent", "explain")
+        && let Some(file) = value_of(&args, "--file")
+    {
+        let cfg = Config::load();
+        let kinds = cfg.kinds();
+        let name = value_of(&args, "--agent").unwrap_or_default();
+        let Some(kind) = kinds.iter().find(|k| k.name == name) else {
+            eprintln!("dirk: --file needs --agent, naming a harness dirk knows");
+            eprintln!(
+                "Try one of: {}",
+                kinds
+                    .iter()
+                    .map(|k| k.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            std::process::exit(1);
+        };
+        let window = match std::fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(e) => {
+                // Structured, like every other failure: the caller is a script
+                // feeding it captured screens.
+                say(&format!(
+                    "{}\n",
+                    serde_json::json!({ "ok": false, "error": format!("{file}: {e}") })
+                ));
+                std::process::exit(1);
+            }
+        };
+        let found = crate::agent::examine(kind, &window);
+        say(&format!(
+            "{}\n",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "agent": kind.name,
+                "rules": kind.from.name(),
+                "blocked": found.blocked(),
+                "why_not": found.why_not(),
+                "screen": {
+                    "marker": found.marker,
+                    "line": found.line,
+                    "menu_required": found.needs_menu,
+                    "menu_found": found.menu,
+                },
+            }))
+            .unwrap_or_default()
+        ));
+        return Ok(());
+    }
+
     if command_args_are(&args, "agent", "hooks") {
         let kind = words(&args).get(2).copied().unwrap_or("claude").to_string();
         say(&crate::agent::hooks(&kind));
@@ -462,12 +516,26 @@ fn command_args_are(args: &[String], noun: &str, verb: &str) -> bool {
     words.first() == Some(&noun) && words.get(1) == Some(&verb)
 }
 
+/// The value of a `--name value` or `--name=value` option, if it was given.
+fn value_of(args: &[String], name: &str) -> Option<String> {
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if let Some(v) = arg.strip_prefix(&format!("{name}=")) {
+            return Some(v.to_string());
+        }
+        if arg == name {
+            return rest.next().cloned();
+        }
+    }
+    None
+}
+
 /// The command in `args`, with the options and their values taken out.
 ///
 /// Dropping only the `-` words is not enough: `--session foo session list`
 /// would leave `foo` in front of the command and match nothing.
 fn words(args: &[String]) -> Vec<&str> {
-    const TAKES_A_VALUE: &[&str] = &["--session", "--remote"];
+    const TAKES_A_VALUE: &[&str] = &["--session", "--remote", "--file", "--agent"];
     let mut out = Vec::new();
     let mut skip = false;
     for arg in args {

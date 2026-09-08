@@ -1381,7 +1381,7 @@ const WORKING_FOR: Duration = Duration::from_millis(1500);
 
 /// What can be seen from outside, before the seen flag is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Observed {
+pub(crate) enum Observed {
     NoAgent,
     Blocked,
     Working,
@@ -1391,12 +1391,44 @@ enum Observed {
     Said(crate::agent::State),
 }
 
+/// Every signal that was consulted, what it claimed, and what won.
+///
+/// Produced by the same pass that decides the state, so that what `agent
+/// explain` reports and what the nav believes cannot be two rules that happen
+/// to agree today.
+pub struct Explained {
+    pub observed: Observed,
+    /// In rank order, best first. Each is a name, what it claimed, and a
+    /// sentence about why.
+    pub signals: Vec<(&'static str, Option<crate::agent::State>, String)>,
+    /// What the screen rule found, when there was a screen to read.
+    pub found: Option<crate::agent::Found>,
+    /// The window the screen rule was run against.
+    pub window: Option<String>,
+}
+
 fn observe(ws: &Workspace, now: Instant) -> Observed {
+    explain(ws, now).observed
+}
+
+/// The same pass, with its working kept.
+pub fn explain(ws: &Workspace, now: Instant) -> Explained {
+    use crate::agent::State;
+    let mut signals: Vec<(&'static str, Option<State>, String)> = Vec::new();
+    let done = |observed, signals, found, window| Explained {
+        observed,
+        signals,
+        found,
+        window,
+    };
+
     let Some(pane) = ws.active_pane() else {
-        return Observed::NoAgent;
+        signals.push(("pane", None, "there is no pane here".into()));
+        return done(Observed::NoAgent, signals, None, None);
     };
     if pane.dead {
-        return Observed::NoAgent;
+        signals.push(("pane", None, "its program has exited".into()));
+        return done(Observed::NoAgent, signals, None, None);
     }
 
     // Rank one, and the only source here that is not a guess. Taken before the
@@ -1415,18 +1447,35 @@ fn observe(ws: &Workspace, now: Instant) -> Observed {
     // Nothing is lost by being strict here: inference runs on the very next
     // line, and if the agent really is still blocked its own prompt is on the
     // screen for the screen rule to find.
-    if let Some((said, at)) = ws.reported
-        && pane.touched <= at
-    {
-        return Observed::Said(said);
+    match ws.reported {
+        Some((said, at)) if pane.touched <= at => {
+            signals.push(("reported", Some(said), "the agent said so".into()));
+            return done(Observed::Said(said), signals, None, None);
+        }
+        Some((said, _)) => signals.push((
+            "reported",
+            None,
+            format!(
+                "it reported {} and has said something since",
+                said.glyph_name()
+            ),
+        )),
+        None => signals.push(("reported", None, "no hook has reported here".into())),
     }
 
     let Some(kind) = pane.occupant.agent() else {
-        return Observed::NoAgent;
+        signals.push((
+            "process",
+            None,
+            "the foreground process is not a harness dirk recognises".into(),
+        ));
+        return done(Observed::NoAgent, signals, None, None);
     };
 
     // Only panes holding an agent are read, which is what keeps this off the
     // cost of every tick.
+    let mut found = None;
+    let mut window = None;
     if let Ok(term) = pane.term.lock() {
         let screen = term.screen();
         let (rows, cols) = screen.size();
@@ -1443,15 +1492,41 @@ fn observe(ws: &Workspace, now: Instant) -> Observed {
         let to = cursor.min(last);
         let from = to.saturating_sub(crate::agent::PROMPT_ROWS);
         let prompt = screen.contents_between(from, 0, to, cols);
-        if crate::agent::is_blocked(kind, &prompt) {
-            return Observed::Blocked;
+        let seen = crate::agent::examine(kind, &prompt);
+        let blocked = seen.blocked();
+        signals.push((
+            "screen",
+            blocked.then_some(State::Blocked),
+            match seen.why_not() {
+                Some(why) => why.to_string(),
+                None => format!("{:?} is on the screen, with a menu under it", seen.marker),
+            },
+        ));
+        found = Some(seen);
+        window = Some(prompt);
+        if blocked {
+            return done(Observed::Blocked, signals, found, window);
         }
     }
 
-    if now.duration_since(pane.touched) < WORKING_FOR {
-        return Observed::Working;
+    let quiet = now.duration_since(pane.touched);
+    if quiet < WORKING_FOR {
+        signals.push((
+            "silence",
+            Some(State::Working),
+            format!("it produced output {}ms ago", quiet.as_millis()),
+        ));
+        return done(Observed::Working, signals, found, window);
     }
-    Observed::Waiting
+    signals.push((
+        "silence",
+        None,
+        format!(
+            "nothing for {}s, which may promote working to done and may never say blocked",
+            quiet.as_secs()
+        ),
+    ));
+    done(Observed::Waiting, signals, found, window)
 }
 
 /// The part of a pane's rectangle that carries terminal content.
