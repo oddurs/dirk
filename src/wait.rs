@@ -111,7 +111,15 @@ impl Settled {
     }
 }
 
-/// Read `--until` and `--timeout` out of the words a caller sent.
+/// Which options take a value. Everything else is a switch.
+///
+/// Named rather than guessed. A parser that gave every option the next word
+/// turned `--regex --timeout 30000` into a pattern of `--timeout`, a positional
+/// `30000`, and a wait with no deadline at all — which is to say it hung, in
+/// the one place a hang is hardest to notice.
+const VALUED: &[&str] = &["until", "timeout", "lines"];
+
+/// Read the options out of the words a caller sent.
 ///
 /// The positional words come back in order and the options are taken out, so a
 /// handler reads its target from `words[0]` whether or not flags were passed
@@ -127,12 +135,25 @@ pub fn options(args: &[String]) -> (Vec<String>, Vec<(String, String)>) {
         };
         match name.split_once('=') {
             Some((k, v)) => opts.push((k.to_string(), v.to_string())),
-            // A flag whose value is missing takes an empty one rather than
-            // swallowing the next word, which might be the target.
-            None => opts.push((name.to_string(), rest.next().cloned().unwrap_or_default())),
+            None if VALUED.contains(&name) => {
+                opts.push((name.to_string(), rest.next().cloned().unwrap_or_default()))
+            }
+            None => opts.push((name.to_string(), String::new())),
         }
     }
     (words, opts)
+}
+
+/// The first option here that this command does not take.
+///
+/// An option nobody reads is worse here than anywhere else: the command it was
+/// passed to is one that waits, so a misspelling is not a wrong answer, it is
+/// no answer until the timeout that was also misspelled.
+pub fn unknown(opts: &[(String, String)], allowed: &[&str]) -> Option<String> {
+    opts.iter()
+        .map(|(k, _)| k)
+        .find(|k| !allowed.contains(&k.as_str()))
+        .cloned()
 }
 
 /// The states `--until` means when a caller does not say.
@@ -204,6 +225,36 @@ mod tests {
         let (words, opts) = options(&strings(&["w1:p2", "--timeout=5000"]));
         assert_eq!(words, vec!["w1:p2"]);
         assert_eq!(opts, vec![("timeout".into(), "5000".into())]);
+    }
+
+    #[test]
+    fn a_switch_does_not_swallow_the_option_after_it() {
+        // `--regex --timeout 30000` used to parse as a pattern of "--timeout",
+        // a positional "30000", and no deadline. The command did not fail; it
+        // waited for ever for a line that could not be printed.
+        let (words, opts) = options(&strings(&[
+            "w1:p2",
+            "^done$",
+            "--regex",
+            "--timeout",
+            "30000",
+        ]));
+        assert_eq!(words, vec!["w1:p2", "^done$"]);
+        assert_eq!(
+            opts,
+            vec![
+                ("regex".to_string(), String::new()),
+                ("timeout".to_string(), "30000".to_string()),
+            ]
+        );
+        assert!(deadline(&opts).unwrap().is_some());
+    }
+
+    #[test]
+    fn an_option_this_command_does_not_take_is_named() {
+        let (_, opts) = options(&strings(&["w1:p2", "--regexp"]));
+        assert_eq!(unknown(&opts, &["regex"]), Some("regexp".to_string()));
+        assert_eq!(unknown(&opts, &["regex", "regexp"]), None);
     }
 
     #[test]

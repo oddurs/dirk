@@ -755,6 +755,7 @@ $ dirk pane split w7:p12 rows
 $ dirk pane run --current "cargo test"
 $ dirk agent list
 $ dirk agent wait --current --until done --timeout 600000
+$ dirk pane wait-output w7:p3 "passed|failed" --regex --timeout 120000
 $ dirk session commands          # the whole surface
 ```
 
@@ -772,10 +773,21 @@ defaults to the three that mean it has stopped needing the processor —
 `blocked`, `done`, `idle`. It returns immediately if the agent is already in
 one, and `--timeout` is milliseconds; without one it waits as long as you do.
 
+`dirk pane wait-output <pane> <text>` is the same for the half of a session that
+is not an agent: a test watcher, a dev server, a deploy. `--regex` reads the
+text as a pattern, matched one line at a time so that `^` means the start of a
+line; `--lines` says how far back "recent" reaches. It searches the moment it is
+asked as well as on every turn after, so a caller that starts a command and then
+waits for its output does not lose the race to text already on the screen.
+
 The session holds the question rather than the caller polling for it, so a
 state entered and left between two polls is not one anybody misses — and an
 agent that exits while you are waiting ends the wait saying so, which is a
 different thing from a timeout and wants a different response.
+
+An option a wait does not understand is refused. On a command that returns
+immediately a misspelled flag is a wrong answer you can see; on one that waits
+it is no answer at all.
 
 Answers are JSON, including the failures — a caller is a program, and prose on
 stderr is not something a program can branch on.

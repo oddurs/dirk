@@ -2657,6 +2657,27 @@ fn waiting_for_a_line_out_of_a_pane_that_holds_no_agent() {
     );
     assert!(!ok, "a pattern that does not parse was accepted: {said}");
 
+    // So is an option this command does not take. On a command that waits, a
+    // misspelling is not a wrong answer -- it is no answer at all, until a
+    // timeout that was probably misspelled too.
+    let (ok, said) = ask(
+        &session,
+        &[
+            "pane",
+            "wait-output",
+            &id,
+            "zzNEVER",
+            "--regexp",
+            "--timeout",
+            "700",
+        ],
+    );
+    assert!(!ok, "an option that does not exist was accepted: {said}");
+    assert!(
+        said.contains("regexp"),
+        "the failure did not name the option it did not understand: {said}"
+    );
+
     // And patience that runs out says timeout.
     let (ok, said) = ask(
         &session,

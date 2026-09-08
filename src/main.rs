@@ -1417,6 +1417,9 @@ impl App {
     fn hold(&mut self, req: &wire::Request) -> Result<Option<wait::What>, String> {
         let (words, opts) = wait::options(&req.args);
         if req.cmd == "pane.wait-output" {
+            if let Some(bad) = wait::unknown(&opts, &["regex", "lines", "timeout"]) {
+                return Err(format!("pane.wait-output takes no --{bad}"));
+            }
             let Some(target) = words.first() else {
                 return Err("pane.wait-output needs a pane".into());
             };
@@ -1435,6 +1438,9 @@ impl App {
         }
         if req.cmd != "agent.wait" {
             return Ok(None);
+        }
+        if let Some(bad) = wait::unknown(&opts, &["until", "timeout"]) {
+            return Err(format!("agent.wait takes no --{bad}"));
         }
         let Some(target) = words.first() else {
             return Err("agent.wait needs a workspace or a pane".into());
