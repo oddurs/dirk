@@ -34,6 +34,20 @@ matrix, cached, and it does not run the tests.
 
 ## Acceptance criteria
 
-- [ ] Every target in `release.yml` is checked by `ci.yml`
-- [ ] The list is in one place, or the two are checked against each other
-- [ ] A target that fails to compile fails the pull request, not the tag
+- [x] Every target in `release.yml` is checked by `ci.yml`
+- [x] The list is in one place, or the two are checked against each other
+- [x] A target that fails to compile fails the pull request, not the tag
+
+## 2026-09-08
+
+One list, not two. The targets are read out of `release.yml` by the job that
+uses them, because a second copy in `ci.yml` is exactly the thing that goes
+stale — and going stale is the whole failure this job exists to prevent.
+
+The scrape asserts what it found. A `release.yml` somebody reformatted would
+otherwise leave the matrix empty, every job passing, and nobody checking
+anything; fewer than two targets is an error rather than a quiet afternoon.
+
+`cargo check` and not `--all-targets`: the tarball holds the binary, so the
+question is whether the program is valid for the target. Cross-compiling the
+test binaries would put the dev-dependencies in the way of that question.
