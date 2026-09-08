@@ -2,7 +2,7 @@
 id: 91
 title: A project is a repository, not a directory
 type: feature
-status: backlog
+status: done
 milestone: v1.0
 created: 2026-09-07
 updated: 2026-09-07

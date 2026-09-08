@@ -18,15 +18,16 @@ A terminal multiplexer that knows what its sessions are for.
 │                                │ CPU 9.5%  MEM 78.0%     0040 Search│
 │ spaces                       2 │  14 cores ▃▂▂▁ ▂▁▁▁     0041 Tabs: │
 │ ▾ dirk                         │ ── timeline ─────────   0042 Comman│
-│   * 1 Building the mux core now│  25 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0043 Pane z│
-│       main                     │ CPU ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0044 Create│
-│ ▸ · 2 Reading the grid ⑂   1d  │                                    │
-│       feat/packaging           │                                    │
+│   * 1 main                  now│  25 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0043 Pane z│
+│       Building the mux core    │ CPU ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0044 Create│
+│ ▸ · 2 feat/packaging ⑂     1d  │                                    │
+│       Reading the grid         │                                    │
 │   + workspace                  │                                    │
 │   n new  ·  o project          │                                    │
 │                                │                                    │
 │ agents               attention │                                    │
-│   * Building the mux core  now │                                    │
+│   * main                   now │                                    │
+│       Building the mux core    │                                    │
 │   ↵ go  ·  s sort              │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
 │ ◆ dirk  ▊1 mux core  ▏2 reading      ! 1  + 2   2 spaces · 14:22   ✕ │

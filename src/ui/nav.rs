@@ -24,15 +24,16 @@
 //!
 //! spaces                10
 //!  ▾ dirk
-//!    * 1 Building the mux core     2m
-//!        main
-//!    · 2 Reading the vt100 grid ⑂  1d
-//!        feat/packaging-manifests
+//!    * 1 main                      2m
+//!        Building the mux core
+//!    · 2 feat/packaging-manifests ⑂  1d
+//!        Reading the vt100 grid
 //!    + workspace
 //!    n new  ·  o project
 //!
-//! agents                 1
-//!    * Building the mux core
+//! needs you              1
+//!    * main
+//!        Building the mux core
 //! ```
 //!
 //! Three lists of different things, and the order they appear in is the
@@ -42,6 +43,11 @@
 //! The same workspace appears under spaces and under agents. That is not
 //! duplication — spaces answers "what is open, and where" and agents answers
 //! "what needs me", and they are sorted differently for exactly that reason.
+//!
+//! A space leads with what it is and captions it with what it is doing. The
+//! branch and the number hold still; the intent is rewritten every time the
+//! agent revises what it says it is up to, and a column you scan for somewhere
+//! to go cannot be one that moves under you.
 //!
 //! Everything is built as a flat list of rows first and rendered as a window
 //! onto it. Scrolling is then an offset, selection an index, and hit testing the
@@ -148,15 +154,16 @@ pub enum Row {
     Heading(Section, usize),
     Layout(usize),
     Project(usize),
-    /// The identity line of a workspace: state, number, name, age.
+    /// The identity line of a workspace: state, number, branch, age.
     Workspace {
         p: usize,
         w: usize,
         n: usize,
     },
-    /// Its second line: which checkout this is. Scenery — the selection lands
-    /// on the identity line, and clicking either goes to the same place.
-    Branch {
+    /// Its second line: what the program inside says it is doing. Scenery —
+    /// the selection lands on the identity line, and clicking either goes to
+    /// the same place.
+    Intent {
         p: usize,
         w: usize,
     },
@@ -193,7 +200,7 @@ impl Row {
     pub fn selectable(self) -> bool {
         !matches!(
             self,
-            Row::Heading(..) | Row::Footer(_) | Row::Blank | Row::Branch { .. }
+            Row::Heading(..) | Row::Footer(_) | Row::Blank | Row::Intent { .. }
         )
     }
 
@@ -203,7 +210,7 @@ impl Row {
         Some(match self {
             Row::Layout(i) => Target::Layout(i),
             Row::Project(i) => Target::ProjectFold(i),
-            Row::Workspace { p, w, .. } | Row::Agent { p, w } | Row::Branch { p, w } => {
+            Row::Workspace { p, w, .. } | Row::Agent { p, w } | Row::Intent { p, w } => {
                 Target::Workspace { p, w }
             }
             Row::Tab { p, w, t } => Target::NavTab { p, w, t },
@@ -241,8 +248,8 @@ pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
             out.push(Row::Workspace { p, w, n });
             // Only when there is something to say. A row with nothing for its
             // second line draws one line rather than a blank one.
-            if cfg.nav.tall() && proj.repo_of(w).is_some_and(|r| !r.branch.is_empty()) {
-                out.push(Row::Branch { p, w });
+            if cfg.nav.tall() && captioned(proj, w) {
+                out.push(Row::Intent { p, w });
             }
             // A workspace with one tab holding one pane draws no subtree: there
             // is nothing the row above does not already say.
@@ -278,12 +285,38 @@ pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
         if !owed.is_empty() || cfg.nav.attention_always() {
             out.push(Row::Blank);
             out.push(Row::Heading(Section::Attention, owed.len()));
-            out.extend(owed.into_iter().map(|(p, w)| Row::Agent { p, w }));
+            // The same shape as a space, identity and caption both. The two
+            // lists are read together -- something is owed here, now find it
+            // down there -- and rows that lead with different names are two
+            // rows you cannot match up.
+            out.extend(owed.into_iter().flat_map(|(p, w)| {
+                let caption =
+                    cfg.nav.tall() && session.projects.get(p).is_some_and(|x| captioned(x, w));
+                [
+                    Some(Row::Agent { p, w }),
+                    caption.then_some(Row::Intent { p, w }),
+                ]
+                .into_iter()
+                .flatten()
+            }));
             out.push(Row::Footer(Section::Attention));
         }
     }
 
     out
+}
+
+/// Whether a space's intent belongs on a line of its own.
+///
+/// Two ways it does not. Having nothing to say is one. The other is a space
+/// with no branch: its label is the only name it has, so it is already up on
+/// the identity line, and a caption repeating it is a row that says the same
+/// thing twice.
+fn captioned(proj: &crate::mux::session::Project, w: usize) -> bool {
+    proj.workspaces
+        .get(w)
+        .is_some_and(|ws| !ws.label.is_empty())
+        && proj.repo_of(w).is_some_and(|r| !r.branch.is_empty())
 }
 
 /// Lower is more urgent. `blocked` is first because it is the only state
@@ -881,11 +914,11 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             let Some(ws) = session.workspace(p, wi) else {
                 return;
             };
-            let worktree = session
-                .projects
-                .get(p)
-                .is_some_and(|x| x.repo_of(wi).is_some_and(|r| r.worktree));
-            space_row(buf, cx, ws, p, wi, Some(n), worktree);
+            // The space's own checkout, not the project's: two worktrees of
+            // one repository are on two branches, which is why there are two
+            // of them.
+            let repo = session.projects.get(p).and_then(|x| x.repo_of(wi));
+            space_row(buf, cx, ws, p, wi, Some(n), repo);
         }
 
         Row::Agent { p, w: wi } => {
@@ -895,31 +928,27 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             // Worktrees are marked here too. This is the list where telling
             // them apart matters most: several agents in parallel means several
             // checkouts of one repository, all wearing its name.
-            let worktree = session
-                .projects
-                .get(p)
-                .is_some_and(|x| x.repo_of(wi).is_some_and(|r| r.worktree));
-            space_row(buf, cx, ws, p, wi, None, worktree);
+            let repo = session.projects.get(p).and_then(|x| x.repo_of(wi));
+            space_row(buf, cx, ws, p, wi, None, repo);
         }
 
-        Row::Branch { p, w: wi } => {
-            // The space's own checkout, not the project's: two worktrees of one
-            // repository are on two branches, which is why there are two of
-            // them.
-            let Some(repo) = session.projects.get(p).and_then(|x| x.repo_of(wi)) else {
+        Row::Intent { p, w: wi } => {
+            let Some(ws) = session.workspace(p, wi) else {
                 return;
             };
             let style = if selected && active {
                 base
             } else {
-                THEME.branch()
+                THEME.intent()
             };
+            // Indented under the name it is a caption of, rather than starting
+            // where that name does: two lines flush left read as two rows.
             let left = w.saturating_sub(6) as usize;
             write_str(
                 buf,
                 inner.x + 6,
                 y,
-                &elide(&repo.branch, left, cx.g.text(G::Ellipsis)),
+                &crate::name::shorten(&ws.label, left, cx.g.text(G::Ellipsis)),
                 style,
                 w,
             );
@@ -1068,7 +1097,7 @@ fn space_row(
     p: usize,
     wi: usize,
     number: Option<usize>,
-    worktree: bool,
+    repo: Option<&crate::git::Repo>,
 ) {
     let Ctx {
         inner,
@@ -1080,6 +1109,12 @@ fn space_row(
     } = *cx;
     let w = inner.width;
     let focused = session.focus == Focus::Ws { p, w: wi };
+    let worktree = repo.is_some_and(|r| r.worktree);
+    // What this space *is*, which is the branch when there is one. A space
+    // outside a repository, or on a detached head, has only its label -- and
+    // then the label is the most stable name it has rather than a caption of
+    // something above it.
+    let branch = repo.map(|r| r.branch.as_str()).filter(|b| !b.is_empty());
     let state = state_of(ws);
     let glyph = cx.g.text(G::state(state));
 
@@ -1110,6 +1145,10 @@ fn space_row(
     let style = match (focused, selected && active) {
         (true, _) => THEME.text(),
         (false, true) => THEME.selected(),
+        // A branch and a label are different kinds of name and are coloured as
+        // what they are, so a space with neither is not quietly wearing the
+        // other one's clothes.
+        (false, false) if branch.is_some() => THEME.branch(),
         (false, false) => THEME.intent(),
     };
     // The name gets what is left after the age, plus a space so the two never
@@ -1130,7 +1169,14 @@ fn space_row(
         buf,
         x,
         y,
-        &crate::name::shorten(&ws.label, left, cx.g.text(G::Ellipsis)),
+        // A branch is an identifier and a label is a sentence, and each is
+        // shortened by the rule that fits it: a branch cut at the tail is
+        // still recognisable, and a label cut at the tail keeps the half
+        // every other row shares.
+        &match branch {
+            Some(b) => elide(b, left, cx.g.text(G::Ellipsis)),
+            None => crate::name::shorten(&ws.label, left, cx.g.text(G::Ellipsis)),
+        },
         style,
         w,
     );
@@ -1139,9 +1185,9 @@ fn space_row(
     if ws.here().zoomed && ws.panes().len() > 1 {
         x += write_str(buf, x + 1, y, cx.g.text(G::Zoomed), THEME.warn(), w) + 1;
     }
-    // Kept in the short form, where the branch line is not. Which branch this
-    // is is scenery; that it is a worktree at all is what tells two rows
-    // wearing the same repository's name apart.
+    // Which branch this is does not say whether it is a worktree, and in the
+    // short form there is no second line to say it either. This mark is what
+    // tells two rows wearing one repository's name apart.
     if worktree {
         x += write_str(buf, x + 1, y, cx.g.text(G::Worktree), THEME.worktree(), w) + 1;
     }
@@ -1209,7 +1255,7 @@ mod tests {
             Row::Heading(Section::Spaces, 2),
             Row::Project(0),
             Row::Workspace { p: 0, w: 0, n: 1 },
-            Row::Branch { p: 0, w: 0 },
+            Row::Intent { p: 0, w: 0 },
             Row::Workspace { p: 0, w: 1, n: 2 },
             Row::NewWorkspace(0),
             Row::Footer(Section::Spaces),
@@ -1302,12 +1348,12 @@ mod tests {
 
     #[test]
     fn a_workspaces_second_line_goes_where_its_first_line_goes() {
-        // Clicking the branch under a name is still clicking that workspace,
+        // Clicking the intent under a name is still clicking that workspace,
         // even though the selection never lands on it.
-        let branch = Row::Branch { p: 0, w: 0 };
-        assert!(!branch.selectable());
+        let intent = Row::Intent { p: 0, w: 0 };
+        assert!(!intent.selectable());
         assert_eq!(
-            branch.target(),
+            intent.target(),
             Row::Workspace { p: 0, w: 0, n: 1 }.target()
         );
     }
@@ -1321,7 +1367,7 @@ mod tests {
         assert_eq!(
             nav.selection(&rows),
             Some(Row::Workspace { p: 0, w: 1, n: 2 }),
-            "`j` should reach the next workspace, not its branch line"
+            "`j` should reach the next workspace, not its intent line"
         );
     }
 
