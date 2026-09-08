@@ -2164,6 +2164,14 @@ impl App {
     /// runs with no session at all — and they had already drifted: the second
     /// was not doing any of the work the first had gained since.
     fn after_events(&mut self) {
+        // Before anything reads a grid. A pane whose reader panicked is frozen
+        // and silent, and silent is what an idle agent looks like -- so left
+        // alone it keeps its row, keeps its place in the attention column, and
+        // never says why it stopped.
+        for id in self.session.bury_the_unreadable() {
+            self.note(&format!("pane {id} stopped: dirk could no longer read it"));
+        }
+
         // A board that does not keep its panes loses them when you look away.
         // Checked here rather than at every place focus can move, because focus
         // moves from keys, clicks, the API and a workspace closing under you.

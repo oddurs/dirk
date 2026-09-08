@@ -2813,6 +2813,37 @@ impl Session {
         out
     }
 
+    /// End any pane whose grid has stopped being readable.
+    ///
+    /// Walked from here rather than checked at each of the places that read a
+    /// grid, because those places are right to do nothing: one of them cannot
+    /// tell a lock that is busy from one that is broken, and none of them owns
+    /// the pane. This does.
+    ///
+    /// Returns what it buried, so the caller can say so.
+    pub fn bury_the_unreadable(&mut self) -> Vec<PaneId> {
+        let mut gone = Vec::new();
+        let mut sweep = |ws: &mut Workspace| {
+            for p in ws.every_pane_mut() {
+                if !p.dead && p.unreadable() {
+                    p.give_up();
+                    gone.push(p.id);
+                }
+            }
+        };
+        for i in 0..self.layouts.len() {
+            if let Some(ws) = self.layouts[i].ws.as_mut() {
+                sweep(ws);
+            }
+        }
+        for p in 0..self.projects.len() {
+            for w in 0..self.projects[p].workspaces.len() {
+                sweep(&mut self.projects[p].workspaces[w]);
+            }
+        }
+        gone
+    }
+
     pub fn apply_agents(&mut self, reading: crate::agent::Reading) {
         let found: std::collections::HashMap<PaneId, Option<crate::agent::Occupant>> =
             reading.panes.into_iter().collect();
