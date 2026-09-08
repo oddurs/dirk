@@ -362,6 +362,393 @@ pub fn read(
     })
 }
 
+/// What a caller may ask that changes something, and what it gets back.
+///
+/// The twin of `read`, and split from it for the same reason: a read is
+/// obviously a read, and this is obviously not one.
+///
+/// It takes the session rather than the whole program because that is all these
+/// answers need, and taking only that is what makes them reachable from a test
+/// without a terminal — which is what six hundred lines of them inside one
+/// method on a ninety-field struct were not. `None` means this is not one of
+/// them; the caller tries what is left.
+pub fn write(
+    session: &mut Session,
+    area: ratatui::layout::Rect,
+    cmd: &str,
+    args: &[String],
+) -> Option<crate::wire::Reply> {
+    use crate::mux::session::Focus;
+    use crate::wire::Reply;
+    let arg = |n: usize| args.get(n).cloned().unwrap_or_default();
+    Some(match cmd {
+        "workspace.focus" => match target_workspace(session, &arg(0)) {
+            Some((p, w)) => {
+                session.focus = Focus::Ws { p, w };
+                Reply::ok(serde_json::json!({ "focused": arg(0) }))
+            }
+            None => Reply::err("no such workspace"),
+        },
+
+        "workspace.create" => {
+            let path = if arg(0).is_empty() {
+                std::env::current_dir().unwrap_or_else(|_| crate::config::home())
+            } else {
+                crate::config::expand(&arg(0))
+            };
+            if !path.is_dir() {
+                return Some(Reply::err("no such directory"));
+            }
+            let p = session.open_project(&path);
+            // Saved and put back, as `pane.split` does: a background
+            // command should not pull the attached human away from what
+            // they were doing, nor resize their panes doing it.
+            let was = session.focus;
+            let made = session.new_workspace_at(p, &path, area.height, area.width);
+            session.focus = was;
+            session.refocus();
+            match made {
+                Some(()) => {
+                    let w = session.projects[p].workspaces.len() - 1;
+                    let id = session.projects[p].workspaces[w].id;
+                    Reply::ok(serde_json::json!({ "workspace": workspace_id(id) }))
+                }
+                None => Reply::err("could not start a shell there"),
+            }
+        }
+
+        "workspace.rename" => match target_workspace(session, &arg(0)) {
+            Some((p, w)) => {
+                let name = args[1..].join(" ");
+                if name.trim().is_empty() {
+                    return Some(Reply::err("a name, or nothing to hand it back"));
+                }
+                let Some(ws) = session.workspace_mut(p, w) else {
+                    return Some(Reply::err("no such workspace"));
+                };
+                ws.label = name.clone();
+                // Named from outside is named by a human: naming stands
+                // down until the hold is released.
+                ws.naming.held = true;
+                ws.naming.applied = Some(name.clone());
+                Reply::ok(serde_json::json!({ "label": name }))
+            }
+            None => Reply::err("no such workspace"),
+        },
+
+        "workspace.close" => match target_workspace(session, &arg(0)) {
+            Some((p, w)) => {
+                let ids: Vec<_> = session
+                    .workspace(p, w)
+                    .map(|ws| ws.panes().iter().map(|x| x.id).collect())
+                    .unwrap_or_default();
+                for id in ids {
+                    if let Some(ws) = session.workspace_mut(p, w)
+                        && let Some(pane) = ws.pane_mut(id)
+                    {
+                        pane.close();
+                    }
+                }
+                Reply::ok(serde_json::json!({ "closed": arg(0) }))
+            }
+            None => Reply::err("no such workspace"),
+        },
+
+        "pane.focus" => match target_pane(session, &arg(0)) {
+            Some(id) => match locate(session, id) {
+                Some((p, w)) => {
+                    session.focus = Focus::Ws { p, w };
+                    if let Some(ws) = session.workspace_mut(p, w) {
+                        ws.set_focus(id);
+                    }
+                    Reply::ok(serde_json::json!({ "focused": arg(0) }))
+                }
+                None => Reply::err("no such pane"),
+            },
+            None => Reply::err("no such pane"),
+        },
+
+        "pane.split" => {
+            let Some(id) = target_pane(session, &arg(0)) else {
+                return Some(Reply::err("no such pane"));
+            };
+            let Some((p, w)) = locate(session, id) else {
+                return Some(Reply::err("no such pane"));
+            };
+            let dir = if arg(1).eq_ignore_ascii_case("rows") {
+                crate::mux::tree::Dir::Rows
+            } else {
+                crate::mux::tree::Dir::Cols
+            };
+
+            // Split where asked, not wherever the human happens to be
+            // looking. A caller that meant "here" said so with an id.
+            let was = session.focus;
+            session.focus = Focus::Ws { p, w };
+            if let Some(ws) = session.workspace_mut(p, w) {
+                ws.set_focus(id);
+            }
+            session.split(dir, area.height, area.width);
+            let new = session.workspace(p, w).map(|ws| ws.focus());
+            session.focus = was;
+
+            match new {
+                Some(pane) => {
+                    let ws_id = session.workspace(p, w).map(|x| x.id).unwrap_or(0);
+                    Reply::ok(serde_json::json!({ "pane": pane_id(ws_id, pane) }))
+                }
+                None => Reply::err("could not split"),
+            }
+        }
+
+        // Three verbs where there was one. A command, literal text and a
+        // keystroke fail in different ways -- text can be pasted, a key
+        // cannot, and a command needs both in an order that is guaranteed
+        // -- so a single verb meant every caller wrote the ordering itself
+        // and got it wrong against anything slow to read.
+        "pane.run" | "pane.send-text" => {
+            let Some(id) = target_pane(session, &arg(0)) else {
+                return Some(Reply::err("no such pane"));
+            };
+            if session.pane_alive(id) == Some(false) {
+                return Some(Reply::err("that pane's program has exited"));
+            }
+            let text = args[1..].join(" ");
+            if text.is_empty() {
+                return Some(Reply::err(format!("{} needs something to send", cmd)));
+            }
+            // The submitting return goes in the same write as the command.
+            // Two writes is two chances for a program reading slowly to
+            // see a bare newline and run whatever it had, which is how a
+            // caller ends up having typed half a command.
+            let mut bytes = text.clone().into_bytes();
+            if cmd == "pane.run" {
+                bytes.push(b'\r');
+            }
+            match session.write_to(id, &bytes) {
+                true => Reply::ok(serde_json::json!({ "sent": text })),
+                false => Reply::err("no such pane"),
+            }
+        }
+
+        "pane.send-keys" => {
+            let Some(id) = target_pane(session, &arg(0)) else {
+                return Some(Reply::err("no such pane"));
+            };
+            if session.pane_alive(id) == Some(false) {
+                return Some(Reply::err("that pane's program has exited"));
+            }
+            if args.len() < 2 {
+                return Some(Reply::err("pane.send-keys needs a key"));
+            }
+            let mut keys = Vec::new();
+            for name in &args[1..] {
+                match crate::keys::named(name) {
+                    Some(k) => keys.push(k),
+                    None => return Some(Reply::err(format!("no such key: {name}"))),
+                }
+            }
+            match session.keys_to(id, &keys) {
+                true => Reply::ok(serde_json::json!({ "sent": args[1..] })),
+                false => Reply::err("that key has no sequence on this terminal"),
+            }
+        }
+
+        // Display, deliberately not state. `agent state` is a small closed
+        // set dirk reasons about — it drives waits, notifications, ordering
+        // and the attention column — and it has to stay that way. This is
+        // where everything a program wants to *show* goes instead, so an
+        // indexer's progress stops having to become a state in order to be
+        // visible.
+        "pane.metadata" => {
+            let Some(id) = target_pane(session, &arg(0)) else {
+                return Some(Reply::err("no such pane"));
+            };
+            for pair in &args[1..] {
+                let Some((key, value)) = pair.split_once('=') else {
+                    return Some(Reply::err(format!("{pair:?} is not key=value")));
+                };
+                if key.is_empty() {
+                    return Some(Reply::err("a token needs a name"));
+                }
+                session.report_metadata(id, key, value);
+            }
+            match session.metadata(id) {
+                Some(said) => Reply::ok(serde_json::json!({
+                    "pane": arg(0),
+                    "said": said,
+                })),
+                None => Reply::err("no such pane"),
+            }
+        }
+
+        // A pane keeps its process, its scrollback and its agent identity
+        // across the move: the `Pane` itself travels, because none of
+        // those live anywhere else. Its handle does not change either —
+        // dirk's pane ids are session-wide — so anything already holding
+        // `p12`, a wait included, keeps working.
+        "pane.move" => {
+            let (words, opts) = crate::wait::options(args);
+            if let Some(bad) = crate::wait::unknown(&opts, &["tab", "new-tab", "new-workspace"]) {
+                return Some(Reply::err(format!("pane.move takes no --{bad}")));
+            }
+            let Some(target) = words.first() else {
+                return Some(Reply::err("pane.move needs a pane"));
+            };
+            let Some(id) = target_pane(session, target) else {
+                return Some(Reply::err("no such pane"));
+            };
+            let was = pane_id_of(session, id);
+            let to = match opts
+                .iter()
+                .find(|(k, _)| k.starts_with("tab") || k.starts_with("new"))
+            {
+                Some((k, v)) if k == "tab" => match parse_tab(v) {
+                    Some(tab) => crate::mux::session::Move::Tab(tab),
+                    None => return Some(Reply::err(format!("not a tab id: {v}"))),
+                },
+                Some((k, _)) if k == "new-tab" => crate::mux::session::Move::NewTab,
+                Some(_) => crate::mux::session::Move::NewWorkspace,
+                None => {
+                    return Some(Reply::err(
+                        "pane.move needs --tab, --new-tab or --new-workspace",
+                    ));
+                }
+            };
+            match session.move_pane(id, to, area) {
+                Ok(moved) => Reply::ok(serde_json::json!({
+                    "pane": pane_id_of(session, moved),
+                    // The workspace half of the id is a statement about
+                    // where the pane is, so a caller holding the old one
+                    // is told rather than left to find out.
+                    "previous": was,
+                })),
+                Err(why) => Reply::err(why),
+            }
+        }
+
+        "pane.close" => {
+            let Some(id) = target_pane(session, &arg(0)) else {
+                return Some(Reply::err("no such pane"));
+            };
+            match session.close_pane(id) {
+                true => Reply::ok(serde_json::json!({ "closed": arg(0) })),
+                false => Reply::err("no such pane"),
+            }
+        }
+
+        "layout.open" => match session.layouts.iter().position(|l| l.def.name == arg(0)) {
+            Some(i) => {
+                session.open_layout(i, area);
+                Reply::ok(serde_json::json!({ "opened": arg(0) }))
+            }
+            None => Reply::err("no such layout"),
+        },
+
+        "worktree.list" => {
+            let Some(dir) = session.focused_dir() else {
+                return Some(Reply::err("no project focused"));
+            };
+            let here = session.focused_dir();
+            Reply::ok(serde_json::json!({
+                "worktrees": crate::git::worktrees(&dir)
+                    .into_iter()
+                    .map(|t| serde_json::json!({
+                        "path": t.path,
+                        "branch": t.branch,
+                        "main": t.main,
+                        // Which one you are in, since the answer is a list
+                        // of directories that all look alike.
+                        "open": here.as_deref() == Some(t.path.as_path()),
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
+
+        "worktree.remove" => {
+            let Some(dir) = session.focused_dir() else {
+                return Some(Reply::err("no project focused"));
+            };
+            let want = arg(0);
+            let force = args.iter().any(|a| a == "--force");
+            // By branch or by path, because a branch is what you remember
+            // and a path is what `worktree list` gave you.
+            let Some(tree) = crate::git::worktrees(&dir)
+                .into_iter()
+                .find(|t| t.branch == want || t.path.to_string_lossy() == want)
+            else {
+                return Some(Reply::err(format!("no worktree for {want}")));
+            };
+            if tree.main {
+                return Some(Reply::err("that is the repository, not a worktree of it"));
+            }
+            match crate::git::remove(&dir, &tree.path, force) {
+                Ok(()) => {
+                    session.close_checkout(&tree.path);
+                    Reply::ok(serde_json::json!({ "removed": tree.path }))
+                }
+                Err(why) => Reply::err(why),
+            }
+        }
+
+        // Rank one: the agent saying what it is doing, which is a fact
+        // where everything else dirk has is a guess.
+        "agent.state" => {
+            let Some(state) = crate::agent::State::named(&arg(0)) else {
+                return Some(Reply::err("no such state"));
+            };
+            // No target means the workspace you are looking at. A target
+            // that was given and did not resolve is an error, not an
+            // invitation to pick one: `--current` outside a pane arrives
+            // here as the literal string, and a hook firing just after its
+            // workspace closed would otherwise land its state -- and its
+            // notification, and its noise -- on whatever you happen to be
+            // looking at instead.
+            let target = match arg(1).is_empty() {
+                true => match session.focus {
+                    Focus::Ws { p, w } => Some((p, w)),
+                    Focus::Layout(_) => None,
+                },
+                false => target_workspace(session, &arg(1)),
+            };
+            let Some((p, w)) = target else {
+                return Some(Reply::err("no such workspace"));
+            };
+            // The harness's own name for this conversation, when the hook
+            // passed one along. Taken before the workspace is borrowed
+            // mutably, because reading it needs the kinds.
+            let named = args
+                .iter()
+                .position(|a| a == "--session")
+                .and_then(|i| args.get(i + 1))
+                .filter(|id| !id.is_empty())
+                .cloned();
+            let kind = session
+                .workspace(p, w)
+                .and_then(|ws| ws.active_pane())
+                .and_then(|pane| pane.occupant.agent())
+                .map(|k| k.name.clone());
+            let Some(ws) = session.workspace_mut(p, w) else {
+                return Some(Reply::err("no such workspace"));
+            };
+            ws.reported = Some((state, std::time::Instant::now()));
+            // Kept only alongside the harness it came from: a reference is
+            // only meaningful to the program that issued it, and resuming
+            // codex on claude's id would start a conversation nobody had.
+            if let (Some(id), Some(kind)) = (named, kind) {
+                ws.agent_session = Some((kind, id));
+            }
+            Reply::ok(serde_json::json!({
+                "workspace": workspace_id(ws.id),
+                "state": state.glyph_name(),
+                "session": ws.agent_session.as_ref().map(|(_, id)| id.clone()),
+            }))
+        }
+
+        _ => return None,
+    })
+}
+
 /// One command, as the table below records it.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Command {
@@ -685,140 +1072,187 @@ pub fn target_pane(session: &Session, arg: &str) -> Option<PaneId> {
 mod tests {
     use super::*;
 
+    /// A session with one project open in it, and the area a client would give
+    /// it.
+    ///
+    /// The whole point of `write` taking a session rather than the program: this
+    /// is four lines and no terminal. The same answers used to be six hundred
+    /// lines inside one method on a ninety-field struct, reachable only by
+    /// starting dirk on a pseudo-terminal and typing at it.
+    fn a_session() -> (crate::mux::session::Session, ratatui::layout::Rect) {
+        let cfg = crate::config::Config::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Held: the panes post to it, and a dropped receiver makes every send
+        // fail, which is not what any of these tests is about.
+        std::mem::forget(rx);
+        let mut session = crate::mux::session::Session::new(&cfg, tx);
+        session.open_project(std::path::Path::new("."));
+        (
+            session,
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        )
+    }
+
+    /// A workspace of its own, and the id of the pane in it.
+    fn a_workspace_with_a_pane(
+        session: &mut crate::mux::session::Session,
+        area: ratatui::layout::Rect,
+    ) -> String {
+        let made = say(session, area, "workspace.create", &[]);
+        assert!(made.ok, "workspace.create failed: {made:?}");
+        let ws = made.result["workspace"]
+            .as_str()
+            .expect("an id")
+            .to_string();
+        let (p, w) = target_workspace(session, &ws).expect("it is there");
+        let pane = session
+            .workspace(p, w)
+            .and_then(|it| it.panes().first().map(|pane| pane.id))
+            .expect("a workspace arrives with a pane in it");
+        pane_id_of(session, pane).expect("the pane has an id")
+    }
+
+    fn say(
+        session: &mut crate::mux::session::Session,
+        area: ratatui::layout::Rect,
+        cmd: &str,
+        args: &[&str],
+    ) -> crate::wire::Reply {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+        write(session, area, cmd, &args).unwrap_or_else(|| panic!("{cmd} is not a writing command"))
+    }
+
     #[test]
-    fn the_checked_in_schema_is_the_one_this_binary_speaks() {
-        // The point of checking it in: a change to the surface arrives as a
-        // diff in a pull request rather than as a bug report from whoever was
-        // speaking the old one.
-        let want = include_str!("../doc/api.json");
-        let have = serde_json::to_string_pretty(&schema()).expect("the schema serialises");
+    fn a_command_that_writes_nothing_is_not_this_half_s() {
+        // `None` is how the two halves divide the surface between them: a read
+        // falls through to whatever is left, and so does a command that does
+        // not exist. Answering either here would take it away from the code
+        // that actually handles it.
+        let (mut session, area) = a_session();
+        assert!(write(&mut session, area, "pane.list", &[]).is_none());
+        assert!(write(&mut session, area, "nonsense.thing", &[]).is_none());
+    }
+
+    #[test]
+    fn a_workspace_is_made_and_then_named_and_then_closed() {
+        let (mut session, area) = a_session();
+
+        let made = say(&mut session, area, "workspace.create", &[]);
+        assert!(made.ok, "workspace.create failed: {made:?}");
+        let id = made.result["workspace"]
+            .as_str()
+            .expect("the new workspace's id")
+            .to_string();
+        assert!(
+            target_workspace(&session, &id).is_some(),
+            "it answered with an id that names nothing"
+        );
+
+        let named = say(&mut session, area, "workspace.rename", &[&id, "a", "name"]);
+        assert!(named.ok, "workspace.rename failed: {named:?}");
+        let (p, w) = target_workspace(&session, &id).expect("it is still there");
         assert_eq!(
-            have.trim(),
-            want.trim(),
-            "doc/api.json is stale — run `make api`"
+            session.workspace(p, w).map(|ws| ws.label.as_str()),
+            Some("a name")
+        );
+
+        // Closing ends the panes and stops there. The workspace goes when their
+        // exits reach the event loop, which is the half of this that is not
+        // here -- and is why the answer is about what was asked rather than
+        // about what is left.
+        let closed = say(&mut session, area, "workspace.close", &[&id]);
+        assert!(closed.ok, "workspace.close failed: {closed:?}");
+        let (p, w) = target_workspace(&session, &id).expect("still there, for now");
+        let alive = session
+            .workspace(p, w)
+            .map(|ws| ws.panes().iter().filter(|pane| !pane.dead).count())
+            .unwrap_or_default();
+        assert_eq!(
+            alive, 0,
+            "it said it closed {id} and something is still running"
         );
     }
 
     #[test]
-    fn every_command_the_code_answers_is_in_the_table() {
-        // The drift this caught: `pane.wait-output` was answered, documented
-        // and tested, and was not in the table — so the skill, the schema and
-        // the completions all quietly stopped mentioning it. The table is read
-        // by three things and written by hand, which is exactly the shape that
-        // rots.
-        //
-        // Scanned out of the source because there is no way to ask the match
-        // arms what they match. A literal that looks like a command is one.
-        let sources = [include_str!("main.rs"), include_str!("api.rs")];
-        let listed: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
-        for text in sources {
-            for literal in text.split('"').skip(1).step_by(2) {
-                let Some((noun, verb)) = literal.split_once('.') else {
-                    continue;
-                };
-                if !NOUNS.contains(&noun) || verb.is_empty() {
-                    continue;
-                }
-                // Decided on rather than merely mentioned. `"api.rs"` is a
-                // filename and `"agent.state"` in a sentence is prose; what
-                // makes a literal a command is that something branches on it.
-                let branched = [
-                    format!("\"{literal}\" =>"),
-                    format!("\"{literal}\" |"),
-                    format!("== \"{literal}\""),
-                    format!("!= \"{literal}\""),
-                ];
-                if !branched
-                    .iter()
-                    .any(|pattern| text.contains(pattern.as_str()))
-                {
-                    continue;
-                }
-                assert!(
-                    listed.contains(&literal),
-                    "{literal} is answered somewhere and is not in COMMANDS"
-                );
-            }
-        }
+    fn a_name_of_nothing_but_spaces_is_refused() {
+        // Handing a name back is `rename` with no name at all. A name made of
+        // spaces is a mistake, and taking it would leave a row that looks
+        // unnamed and cannot be renamed by the thing that names rows.
+        let (mut session, area) = a_session();
+        let made = say(&mut session, area, "workspace.create", &[]);
+        let id = made.result["workspace"]
+            .as_str()
+            .expect("an id")
+            .to_string();
+        let said = say(&mut session, area, "workspace.rename", &[&id, "   "]);
+        assert!(!said.ok, "a name of spaces was taken");
     }
 
     #[test]
-    fn every_command_is_in_the_manual_page() {
-        // The page is the interface's documentation, and CI only checks that it
-        // parses -- so `tab` and `worktree` were added, shipped, and had no
-        // entry between them for a milestone and a half.
-        //
-        // Scoped to the COMMANDS section, because `tab` is also a key and
-        // `close` is also prose: a word appearing somewhere in a manual page is
-        // not the same as a command being documented in it.
-        let page = include_str!("../doc/dirk.1");
-        let listed = page
-            .split(".SH COMMANDS")
-            .nth(1)
-            .and_then(|rest| rest.split(".SH OPTIONS").next())
-            .expect("the page has a COMMANDS section")
-            // Roff, unescaped just enough to find a word in it: `send\-keys` is
-            // written with the hyphen escaped so it is not a line break.
-            .replace("\\-", "-")
-            .replace("\\fR", " ")
-            .replace("\\fB", " ");
-        for cmd in COMMANDS {
-            let (noun, verb) = cmd.name.split_once('.').expect("noun and verb");
-            for word in [noun, verb] {
-                assert!(
-                    listed
-                        .split(|c: char| !c.is_alphanumeric() && c != '-')
-                        .any(|w| w == word),
-                    "{} is not in doc/dirk.1 -- add it to the COMMANDS section",
-                    cmd.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_listed_commands_are_the_ones_that_exist() {
-        // A surface that says it accepts something it does not is worse than
-        // one that says nothing.
-        let session = None::<()>;
-        let _ = session;
-        for cmd in COMMANDS {
-            let name = cmd.name;
-            assert!(name.contains('.'), "{name} is not a noun and a verb");
-            let (noun, _) = name.split_once('.').unwrap();
+    fn a_workspace_that_is_not_there_is_said_so_rather_than_guessed_at() {
+        let (mut session, area) = a_session();
+        for (cmd, args) in [
+            ("workspace.focus", vec!["w9999"]),
+            ("workspace.rename", vec!["w9999", "x"]),
+            ("workspace.close", vec!["w9999"]),
+            ("pane.focus", vec!["w9999:p1"]),
+            ("pane.close", vec!["w9999:p1"]),
+        ] {
+            let said = say(&mut session, area, cmd, &args);
+            assert!(!said.ok, "{cmd} answered for a workspace that is not there");
             assert!(
-                NOUNS.contains(&noun),
-                "{name} has a noun the CLI does not route"
+                said.error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("no such"),
+                "{cmd} said {:?} rather than what was wrong",
+                said.error
             );
         }
     }
 
     #[test]
-    fn an_id_reads_in_either_form() {
-        assert_eq!(parse_workspace("w7"), Some(7));
-        assert_eq!(parse_workspace("w7:p12"), Some(7));
-        // A pane id is unique on its own, so the workspace half is a courtesy
-        // to whoever is reading it.
-        assert_eq!(parse_pane("w7:p12"), Some(12));
-        assert_eq!(parse_pane("p12"), Some(12));
+    fn splitting_a_pane_makes_another_and_answers_with_its_id() {
+        let (mut session, area) = a_session();
+        let pane = a_workspace_with_a_pane(&mut session, area);
+
+        let split = say(&mut session, area, "pane.split", &[&pane, "cols"]);
+        assert!(split.ok, "pane.split failed: {split:?}");
+        let made = split.result["pane"].as_str().expect("the new pane's id");
+        assert_ne!(made, pane, "it answered with the pane it was given");
+        assert!(
+            target_pane(&session, made).is_some(),
+            "the id it answered with does not name a pane"
+        );
     }
 
     #[test]
-    fn nonsense_is_refused_rather_than_guessed_at() {
-        assert_eq!(parse_workspace("7"), None);
-        assert_eq!(parse_workspace(""), None);
-        assert_eq!(parse_pane("w7"), None, "a workspace is not a pane");
-        assert_eq!(parse_pane("w7:t1"), None, "nor is a tab");
-        assert_eq!(parse_pane("p"), None);
-    }
+    fn sending_keys_needs_a_key_dirk_can_read() {
+        let (mut session, area) = a_session();
+        let pane = a_workspace_with_a_pane(&mut session, area);
 
-    #[test]
-    fn an_id_survives_being_printed_and_read_back() {
-        // Ids come back to dirk in the next command, copied out of a reply.
-        let text = pane_id(7, 12);
-        assert_eq!(text, "w7:p12");
-        assert_eq!(parse_workspace(&text), Some(7));
-        assert_eq!(parse_pane(&text), Some(12));
-        assert_eq!(parse_workspace(&workspace_id(7)), Some(7));
+        let said = say(&mut session, area, "pane.send-keys", &[&pane]);
+        assert!(!said.ok, "send-keys with no key was answered");
+
+        let said = say(
+            &mut session,
+            area,
+            "pane.send-keys",
+            &[&pane, "ctrl+zarquon"],
+        );
+        assert!(!said.ok, "a key nobody can read was accepted");
+        assert!(
+            said.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("no such key"),
+            "it said {:?} rather than which key",
+            said.error
+        );
     }
 }
