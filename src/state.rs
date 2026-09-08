@@ -54,6 +54,14 @@ pub struct Project {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub label: String,
+    /// Which checkout of the project it was in.
+    ///
+    /// A project is a repository, so restoring one directory is not enough:
+    /// the worktrees somebody had open are part of the arrangement, and
+    /// putting every space back in the repository proper would quietly undo
+    /// the reason they made them.
+    #[serde(default)]
+    pub at: PathBuf,
     /// Whether a human named this one. Kept, or a restart would quietly hand a
     /// name you wrote back to the naming policy.
     pub held: bool,
@@ -165,9 +173,32 @@ pub fn read(base: &Path, session: &str) -> Stored {
 /// right now -- keeps the project, because those all come back and a project
 /// dropped here is a project erased by the next write.
 pub fn prune(mut saved: Saved) -> Saved {
-    saved.projects.retain(|p| match std::fs::metadata(&p.path) {
-        Ok(m) => m.is_dir(),
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    /// Gone means the filesystem said so. Anything else -- a mount that has
+    /// not come up, a server that is not answering, a directory you cannot
+    /// look in right now -- keeps it, because those all come back.
+    fn there(path: &Path) -> bool {
+        match std::fs::metadata(path) {
+            Ok(m) => m.is_dir(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        }
+    }
+
+    saved.projects.retain_mut(|p| {
+        let repo_there = there(&p.path);
+        let had = !p.workspaces.is_empty();
+        // A checkout that has gone takes its spaces and nothing else: removing
+        // a worktree is an ordinary thing to do and the repository it came from
+        // is still there. A space saved before spaces knew their own checkout
+        // is wherever the project is, which is what it always was.
+        p.workspaces.retain(|w| match w.at.as_os_str().is_empty() {
+            true => repo_there,
+            false => there(&w.at),
+        });
+        match had {
+            // Every checkout it had is gone, so there is nothing left to open.
+            true => !p.workspaces.is_empty(),
+            false => repo_there,
+        }
     });
     saved
 }
@@ -186,6 +217,7 @@ pub fn current(session: &crate::mux::Session) -> Saved {
                     .iter()
                     .map(|w| Workspace {
                         label: w.label.clone(),
+                        at: w.at.clone(),
                         held: w.naming.held,
                         tabs: (0..w.tabs.len()).map(|i| w.tab_label(i)).collect(),
                     })
@@ -211,7 +243,7 @@ pub fn differs(a: &Saved, b: &Saved) -> bool {
                     p.expanded,
                     p.workspaces
                         .iter()
-                        .map(|w| (w.label.clone(), w.held, w.tabs.clone()))
+                        .map(|w| (w.label.clone(), w.at.clone(), w.held, w.tabs.clone()))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -235,6 +267,7 @@ mod tests {
                     workspaces: labels
                         .iter()
                         .map(|l| Workspace {
+                            at: PathBuf::new(),
                             tabs: Vec::new(),
                             label: (*l).to_string(),
                             held: false,
@@ -301,6 +334,63 @@ mod tests {
             "a file we cannot read is not a file that is not there"
         );
         assert!(matches!(read(&dir, "never-written"), Stored::Fresh));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_checkout_that_has_gone_does_not_take_the_repository_with_it() {
+        // Removing a worktree is an ordinary thing to do. The repository it was
+        // a worktree of is still there, and so is the work in it.
+        let dir = scratch("checkout");
+        let here = dir.join("here");
+        std::fs::create_dir_all(&here).unwrap();
+        let mut state = Saved {
+            version: VERSION,
+            projects: vec![Project {
+                path: here.clone(),
+                expanded: true,
+                workspaces: vec![
+                    Workspace {
+                        label: "main".into(),
+                        at: here.clone(),
+                        held: false,
+                        tabs: Vec::new(),
+                    },
+                    Workspace {
+                        label: "gone".into(),
+                        at: dir.join("removed"),
+                        held: false,
+                        tabs: Vec::new(),
+                    },
+                ],
+            }],
+        };
+        state = prune(state);
+        assert_eq!(state.projects.len(), 1, "the repository went too");
+        assert_eq!(state.projects[0].workspaces.len(), 1);
+        assert_eq!(state.projects[0].workspaces[0].label, "main");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_whose_every_checkout_has_gone_is_dropped() {
+        // Nothing left to open. Keeping it would be a row in the nav that
+        // cannot be entered.
+        let dir = scratch("allgone");
+        let state = prune(Saved {
+            version: VERSION,
+            projects: vec![Project {
+                path: dir.join("repo"),
+                expanded: true,
+                workspaces: vec![Workspace {
+                    label: "x".into(),
+                    at: dir.join("repo-side"),
+                    held: false,
+                    tabs: Vec::new(),
+                }],
+            }],
+        });
+        assert!(state.projects.is_empty(), "an unopenable project was kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

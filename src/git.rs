@@ -42,8 +42,33 @@ pub struct Repo {
 /// most, and asking more often costs a process each time.
 pub const REFRESH: Duration = Duration::from_secs(15);
 
+/// Run git about one directory, and only that directory.
+///
+/// The environment is cleared of git's own variables first. `GIT_DIR` beats
+/// `-C`, so a dirk started from anywhere that exports one -- a git alias, a
+/// hook, a `git rebase --exec` -- would read that repository instead of the
+/// directory it was asked about, and every answer would be confidently wrong.
+///
+/// This is not hypothetical: it put four branches and two worktrees into
+/// somebody's repository, because the test suite was run from a git alias.
+fn plain(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
+    let out = plain("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -58,6 +83,28 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!s.is_empty()).then_some(s)
+}
+
+/// What repository a directory belongs to, and where that repository lives.
+///
+/// `--git-common-dir` answers the same path from a repository and from every
+/// worktree of it, which is exactly the identity a project wants: two
+/// directories are the same project when they are two checkouts of one
+/// repository, and no amount of comparing their own paths can tell you that.
+///
+/// The repository proper is that directory's parent -- `<main>/.git` -- which
+/// is where the name comes from. A bare repository has no parent worth naming
+/// and answers `None`, as does a directory that is not a repository at all.
+pub fn belongs_to(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let common = git(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common = PathBuf::from(common);
+    let main = common.parent()?.to_path_buf();
+    // A worktree's own git dir is under the common one; the repository proper's
+    // *is* it. Either way the answer above is the same, which is the point.
+    Some((common, main))
 }
 
 /// Read the branch and worktree status of a directory, or `None` when it is not
@@ -185,7 +232,7 @@ pub fn remove(dir: &Path, at: &Path, force: bool) -> Result<(), String> {
 
 /// Run git and hand back what it said when it fails.
 fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = plain("git")
         .arg("-C")
         .arg(dir)
         .args(args)

@@ -153,7 +153,16 @@ cmd_sync() {
 
 cmd_check() {
     step "make check"
-    make -C "$(git rev-parse --show-toplevel)" check
+    # Without the git environment. A `!` alias is handed GIT_DIR, GIT_WORK_TREE
+    # and friends, and everything it runs inherits them -- including the test
+    # suite, whose fixtures then quietly become branches in *this* repository
+    # rather than in the temporary one they built. GIT_DIR beats `git -C`, so
+    # there is no way for the callee to defend itself except by clearing it.
+    #
+    # This is not a hypothetical: it left four branches and two worktrees here.
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+        -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        make -C "$(git rev-parse --show-toplevel)" check
 }
 
 # ─── ship ────────────────────────────────────────────────────────────────────

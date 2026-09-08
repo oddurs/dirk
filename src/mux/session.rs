@@ -77,6 +77,12 @@ pub struct Workspace {
     /// from outside uses it.
     pub id: u64,
     pub label: String,
+    /// Which checkout of the project this space is in.
+    ///
+    /// A project is a repository and a repository has more than one directory,
+    /// so a space belongs to one of them rather than to the project. This is
+    /// what the branch beside a space is looked up by.
+    pub at: PathBuf,
     /// What the agent in here is doing, as of the last update.
     pub state: crate::agent::State,
     /// Whether you have looked at this workspace since it last started work.
@@ -390,15 +396,61 @@ impl Workspace {
 }
 
 pub struct Project {
+    /// What this project *is*: the repository, by its common git dir.
+    ///
+    /// Not the directory. A git worktree is a different directory and the same
+    /// repository, and keying by path made every worktree its own top-level
+    /// project wearing a directory name nobody chose. For something that is not
+    /// a repository at all, its own path is the identity, which is what it
+    /// always was.
+    pub key: PathBuf,
     pub name: String,
+    /// Where the repository proper is. The name comes from here, so a worktree
+    /// does not rename the project it belongs to.
     pub path: PathBuf,
+    /// Every checkout of it that has a space open. The repository proper is
+    /// first when it is here at all -- it need not be: you can be working only
+    /// in worktrees.
+    pub checkouts: Vec<Checkout>,
     pub workspaces: Vec<Workspace>,
     pub expanded: bool,
-    /// What git last said. `None` means either not a repository or not asked
-    /// yet, and the nav draws both the same way — as nothing.
+}
+
+/// One directory the repository is checked out into.
+pub struct Checkout {
+    pub path: PathBuf,
+    /// The repository proper, as against a worktree added beside it.
+    pub main: bool,
+    /// What git last said about this checkout. `None` means not asked yet, and
+    /// the nav draws that the same way it draws nothing to say.
     pub repo: Option<Repo>,
     /// When the answer arrived, so it can be asked again before it is wrong.
     pub read_at: Option<Instant>,
+}
+
+impl Project {
+    /// What git said about one checkout of this project.
+    pub fn checkout(&self, at: &Path) -> Option<&Checkout> {
+        self.checkouts.iter().find(|c| c.path == at)
+    }
+
+    /// What git says about the checkout a space is in.
+    pub fn repo_of(&self, w: usize) -> Option<&Repo> {
+        let ws = self.workspaces.get(w)?;
+        self.checkout(&ws.at)?.repo.as_ref()
+    }
+
+    /// The repository proper, or failing that whichever checkout is first.
+    ///
+    /// A project can be open only in worktrees -- that is a normal way to work
+    /// -- so "the main one" has to degrade to "one of them" rather than to
+    /// nothing.
+    pub fn principal(&self) -> Option<&Checkout> {
+        self.checkouts
+            .iter()
+            .find(|c| c.main)
+            .or_else(|| self.checkouts.first())
+    }
 }
 
 pub struct Layout {
@@ -427,6 +479,13 @@ pub struct Session {
     /// every index after them. Restoring by index lands you on whatever moved
     /// into the slot — exactly what "exactly where you were" promised not to do.
     previous: Option<PaneId>,
+    /// Which repository each directory belongs to, once asked.
+    ///
+    /// The one git read that cannot be asynchronous -- a project's identity has
+    /// to be known before the project exists -- so it is asked once per
+    /// directory instead. A directory does not change which repository it is
+    /// in without becoming a different directory.
+    repos: std::collections::HashMap<PathBuf, (PathBuf, PathBuf)>,
     pub shell: String,
     /// Transitions with no new intent that count as stale. Zero is off.
     stale_after: u32,
@@ -447,6 +506,7 @@ impl Session {
             projects: Vec::new(),
             focus: Focus::Ws { p: 0, w: 0 },
             previous: None,
+            repos: std::collections::HashMap::new(),
             shell: cfg.shell(),
             stale_after: if cfg.naming.show_stale {
                 cfg.naming.stale_after_turns
@@ -468,22 +528,71 @@ impl Session {
 
     /// Find the project for `path`, or add it. Returns its index.
     pub fn open_project(&mut self, path: &Path) -> usize {
-        if let Some(i) = self.projects.iter().position(|p| p.path == path) {
-            return i;
+        // Resolved first, because git answers in resolved paths and a directory
+        // reached two ways is one directory. On macOS `/tmp` is `/private/tmp`,
+        // so opening `/tmp/r` and comparing it against git's answer said the
+        // repository proper was not the repository proper.
+        let path = &path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        // What repository this directory belongs to, which is what decides
+        // whether it is a new project or another checkout of one that is
+        // already open.
+        //
+        // Synchronous, which git reads here otherwise never are: the identity
+        // has to be known before the project can exist, and there is nothing
+        // to draw until it does. Remembered per directory so restoring a
+        // session with fifteen spaces asks once per directory rather than
+        // sixteen times.
+        let (key, main) = match self.repos.get(path) {
+            Some(known) => known.clone(),
+            None => {
+                let answer = crate::git::belongs_to(path)
+                    .unwrap_or_else(|| (path.to_path_buf(), path.to_path_buf()));
+                self.repos.insert(path.to_path_buf(), answer.clone());
+                answer
+            }
+        };
+
+        let at = self.projects.iter().position(|p| p.key == key);
+        let i = match at {
+            Some(i) => i,
+            None => {
+                let name = Self::name_of(&main);
+                self.projects.push(Project {
+                    key,
+                    name,
+                    path: main.clone(),
+                    checkouts: Vec::new(),
+                    workspaces: Vec::new(),
+                    expanded: true,
+                });
+                self.projects.len() - 1
+            }
+        };
+
+        // The repository proper first, then worktrees in the order they were
+        // opened: the main one is where the name came from and where somebody
+        // looking for "the project" expects to land.
+        let proj = &mut self.projects[i];
+        if !proj.checkouts.iter().any(|c| &c.path == path) {
+            let checkout = Checkout {
+                path: path.to_path_buf(),
+                main: *path == main,
+                repo: None,
+                read_at: None,
+            };
+            match checkout.main {
+                true => proj.checkouts.insert(0, checkout),
+                false => proj.checkouts.push(checkout),
+            }
         }
-        let name = path
-            .file_name()
+        i
+    }
+
+    fn name_of(path: &Path) -> String {
+        path.file_name()
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        self.projects.push(Project {
-            name,
-            path: path.to_path_buf(),
-            workspaces: Vec::new(),
-            expanded: true,
-            repo: None,
-            read_at: None,
-        });
-        self.projects.len() - 1
+            .unwrap_or_else(|| path.display().to_string())
     }
 
     // ── Workspaces ──────────────────────────────────────────────────────
@@ -491,9 +600,26 @@ impl Session {
     /// Add a workspace to a project and focus it. The label starts as the
     /// project name; naming replaces it once the pane says what it is doing.
     pub fn new_workspace(&mut self, p: usize, rows: u16, cols: u16) -> Option<()> {
+        // Where the last space in this project is, so a second space lands
+        // beside the first rather than in whichever checkout happens to be the
+        // repository proper.
+        let at = self
+            .projects
+            .get(p)
+            .and_then(|x| x.workspaces.last().map(|w| w.at.clone()))
+            .or_else(|| {
+                self.projects
+                    .get(p)
+                    .and_then(|x| x.principal().map(|c| c.path.clone()))
+            })?;
+        self.new_workspace_at(p, &at, rows, cols)
+    }
+
+    /// A space in one particular checkout of a project.
+    pub fn new_workspace_at(&mut self, p: usize, at: &Path, rows: u16, cols: u16) -> Option<()> {
         let (path, name) = {
             let proj = self.projects.get(p)?;
-            (proj.path.clone(), proj.name.clone())
+            (at.to_path_buf(), proj.name.clone())
         };
         let pane = self.spawn_shell(&path, rows, cols)?;
         let id = self.id();
@@ -503,6 +629,7 @@ impl Session {
         proj.workspaces.push(Workspace {
             id,
             label: name,
+            at: path.clone(),
             state: crate::agent::State::None,
             seen: true,
             notified: None,
@@ -682,6 +809,9 @@ impl Session {
             self.layouts[i].ws = Some(Workspace {
                 id: ws_id,
                 label: def.name.clone(),
+                // A board is not in a project, so it is not in a checkout of
+                // one either. Its panes have their own directories.
+                at: here.clone(),
                 state: crate::agent::State::None,
                 seen: true,
                 notified: None,
@@ -780,7 +910,13 @@ impl Session {
                     ws.tab = ws.tab.min(ws.tabs.len().saturating_sub(1));
                 }
                 if ws.tabs.is_empty() {
-                    self.projects[p].workspaces.remove(w);
+                    let at = self.projects[p].workspaces.remove(w).at;
+                    // A checkout with no spaces left in it is not worth asking
+                    // git about every fifteen seconds -- and once the worktree
+                    // is removed on disk, it is a directory that is not there.
+                    if !self.projects[p].workspaces.iter().any(|x| x.at == at) {
+                        self.projects[p].checkouts.retain(|c| c.path != at);
+                    }
                     if self.projects[p].workspaces.is_empty() {
                         self.projects.remove(p);
                     }
@@ -887,18 +1023,53 @@ impl Session {
     /// For a directory that is about to stop existing: the panes in it are
     /// standing in something that will not be there, and leaving them is
     /// leaving shells whose working directory has been deleted underneath them.
-    pub fn close_project(&mut self, path: &Path) {
-        let Some(p) = self.projects.iter().position(|x| x.path == path) else {
+    /// Close one checkout: its spaces, and the project too if that was all of
+    /// them.
+    ///
+    /// By checkout rather than by project, because the thing that stops
+    /// existing is a directory. Removing a worktree should not close the
+    /// repository it was a worktree of.
+    pub fn close_checkout(&mut self, path: &Path) {
+        let Some(p) = self
+            .projects
+            .iter()
+            .position(|x| x.checkouts.iter().any(|c| c.path == path))
+        else {
             return;
         };
-        for ws in std::mem::take(&mut self.projects[p].workspaces) {
+        // Which space is focused, by identity. Removing spaces from the middle
+        // of the list shifts every index after them, and `refocus` only checks
+        // that the index still resolves -- so focus would land on a different
+        // space, silently, which is the worst of the three possible outcomes.
+        let focused = match self.focus {
+            Focus::Ws { p: fp, w } if fp == p => self.projects[p].workspaces.get(w).map(|ws| ws.id),
+            _ => None,
+        };
+
+        let proj = &mut self.projects[p];
+        proj.checkouts.retain(|c| c.path != path);
+        let (going, staying): (Vec<_>, Vec<_>) = std::mem::take(&mut proj.workspaces)
+            .into_iter()
+            .partition(|w| w.at == path);
+        proj.workspaces = staying;
+
+        // Back onto the same space, wherever it moved to. Gone means it was in
+        // the checkout that went, and then anywhere valid will do.
+        if let Some(id) = focused
+            && let Some(w) = self.projects[p].workspaces.iter().position(|x| x.id == id)
+        {
+            self.focus = Focus::Ws { p, w };
+        }
+        for ws in going {
             for tab in ws.tabs {
                 for mut pane in tab.panes {
                     pane.close();
                 }
             }
         }
-        self.projects.remove(p);
+        if self.projects[p].workspaces.is_empty() {
+            self.projects.remove(p);
+        }
         self.refocus();
     }
 
@@ -1333,29 +1504,39 @@ impl Session {
         }
     }
 
-    /// Projects whose git answer is missing or old enough to ask again.
+    /// Checkouts whose git answer is missing or old enough to ask again.
+    ///
+    /// Per checkout rather than per project: two worktrees of one repository
+    /// are on two branches, which is the entire reason somebody made the second
+    /// one, and one answer for both would be wrong for at least one of them.
     ///
     /// Returned as paths because the read happens on another thread, and a
-    /// project can be closed while its answer is still in flight.
+    /// checkout can be closed while its answer is still in flight.
     pub fn stale_repos(&mut self, now: Instant) -> Vec<PathBuf> {
         self.projects
             .iter_mut()
-            .filter(|p| {
-                p.read_at
+            .flat_map(|p| p.checkouts.iter_mut())
+            .filter(|c| {
+                c.read_at
                     .is_none_or(|t| now.duration_since(t) >= git::REFRESH)
             })
-            .map(|p| {
+            .map(|c| {
                 // Marked as asked before the answer arrives, or every tick
                 // would start another read of the same directory.
-                p.read_at = Some(now);
-                p.path.clone()
+                c.read_at = Some(now);
+                c.path.clone()
             })
             .collect()
     }
 
     pub fn apply_repo(&mut self, answer: git::Answer) {
-        if let Some(proj) = self.projects.iter_mut().find(|p| p.path == answer.dir) {
-            proj.repo = answer.repo;
+        if let Some(c) = self
+            .projects
+            .iter_mut()
+            .flat_map(|p| p.checkouts.iter_mut())
+            .find(|c| c.path == answer.dir)
+        {
+            c.repo = answer.repo;
         }
     }
 }
@@ -1607,7 +1788,7 @@ impl Session {
         };
 
         t.set("project", proj.name.clone());
-        if let Some(repo) = &proj.repo {
+        if let Some(repo) = proj.checkout(&ws.at).and_then(|c| c.repo.as_ref()) {
             t.set("branch", repo.branch.clone());
             t.flag("worktree", "worktree", repo.worktree);
         }
@@ -2022,6 +2203,7 @@ mod tests {
         Workspace {
             id: 0,
             label: String::new(),
+            at: PathBuf::new(),
             state,
             seen,
             notified: None,

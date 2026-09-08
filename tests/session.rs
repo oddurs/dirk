@@ -177,6 +177,14 @@ impl Client {
         // and pointing this at the checkout would leave saved sessions in the
         // repository.
         cmd.env("XDG_CONFIG_HOME", config_home());
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+        ] {
+            cmd.env_remove(var);
+        }
 
         extra(&mut cmd);
 
@@ -507,7 +515,16 @@ fn first_id(json: &str) -> String {
 
 /// Ask a running session something, the way a shell or an agent would.
 fn ask(session: &str, args: &[&str]) -> (bool, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"));
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+    ] {
+        cmd.env_remove(var);
+    }
+    let out = cmd
         .args(["--session", session])
         .args(args)
         .env("XDG_CONFIG_HOME", config_home())
@@ -1360,13 +1377,43 @@ fn a_socket_nothing_is_listening_on_can_be_swept_up() {
 // ── Worktrees ───────────────────────────────────────────────────────────
 
 /// A repository with one commit in it, somewhere disposable.
+/// Where a worktree these tests made is allowed to be.
+///
+/// Every one of them ends up beside its repository, and the repository is under
+/// the temp directory. A test whose dirk resolved the wrong checkout would make
+/// one beside *this* repository instead -- which happened once, silently, and
+/// left four branches and two worktrees in somebody's actual work.
+fn must_be_disposable(at: &std::path::Path) {
+    let tmp = std::env::temp_dir();
+    let at = at.canonicalize().unwrap_or_else(|_| at.to_path_buf());
+    let tmp = tmp.canonicalize().unwrap_or(tmp);
+    assert!(
+        at.starts_with(&tmp),
+        "a test made a worktree at {} -- outside {}, which means it was pointed \
+         at a repository that is not the fixture",
+        at.display(),
+        tmp.display()
+    );
+}
+
 fn a_repo(name: &str) -> std::path::PathBuf {
     let dir = config_home().join(format!("repo-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("repo dir");
     let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
+        // Cleared, because `GIT_DIR` beats `-C`. A suite run from a git alias
+        // -- which `git work ship` is -- inherits one, and this fixture would
+        // quietly become a branch in whatever repository that pointed at.
+        let mut cmd = std::process::Command::new("git");
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.arg("-C")
             .arg(&dir)
             .args(args)
             .env("GIT_AUTHOR_NAME", "t")
@@ -1409,14 +1456,36 @@ fn a_worktree_and_somewhere_to_work_in_it_are_one_action() {
         "{}-feat-parallel",
         repo.file_name().unwrap().to_string_lossy()
     ));
+    must_be_disposable(&at);
     assert!(at.is_dir(), "no worktree at {}: {out}", at.display());
 
-    // And a space open in it, on the branch, named from it.
-    let (ok, list) = ask(&session, &["workspace", "list"]);
-    assert!(ok, "workspace list failed");
+    // And a space open in it, on the branch. Polled, because what git says
+    // about a checkout arrives on a thread of its own and a space that was made
+    // a moment ago has not been asked about yet.
+    let deadline = Instant::now() + START;
+    let mut list = String::new();
+    while Instant::now() < deadline {
+        let (ok, out) = ask(&session, &["workspace", "list"]);
+        list = out;
+        if ok && list.contains("feat/parallel") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
     assert!(
-        list.contains("feat-parallel") || list.contains("feat/parallel"),
-        "no space opened in the new worktree: {list}"
+        list.contains("feat/parallel"),
+        "no space opened on the new branch: {list}"
+    );
+    // Under the repository it belongs to, rather than as a project of its own
+    // wearing a directory name nobody chose.
+    assert_eq!(
+        list.matches("\"project\"").count(),
+        list.matches(&format!(
+            "\"project\": \"{}\"",
+            repo.file_name().unwrap().to_string_lossy()
+        ))
+        .count(),
+        "the worktree opened as a separate project: {list}"
     );
 
     // Listing does not require leaving dirk, and says which one you are in.
@@ -1456,6 +1525,7 @@ fn removing_a_worktree_refuses_while_it_holds_uncommitted_work() {
         "{}-scratch",
         repo.file_name().unwrap().to_string_lossy()
     ));
+    must_be_disposable(&at);
     std::fs::write(at.join("a.txt"), b"changed\n").expect("dirty it");
 
     let (ok, why) = ask(&session, &["worktree", "remove", "scratch"]);
@@ -1635,4 +1705,141 @@ fn a_pane_is_as_wide_as_the_narrowest_screen_showing_it() {
 
     drop(narrow);
     drop(wide);
+}
+
+#[test]
+fn a_worktree_joins_the_project_it_is_a_worktree_of() {
+    // A project is keyed by its repository, not by its path. Keyed by path,
+    // every worktree opened as its own top-level project wearing whatever the
+    // directory happened to be called.
+    let repo = a_repo("group");
+    let session = unique("group");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["worktree", "add", "side"]);
+    assert!(ok, "worktree add failed: {out}");
+    let at = repo.parent().unwrap().join(format!(
+        "{}-side",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+
+    must_be_disposable(&at);
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let name = repo.file_name().unwrap().to_string_lossy().into_owned();
+    // Two spaces, one project, two directories.
+    assert_eq!(
+        list.matches("\"id\"").count(),
+        2,
+        "expected two spaces: {list}"
+    );
+    assert_eq!(
+        list.matches(&format!("\"project\": \"{name}\"")).count(),
+        2,
+        "the worktree opened as a project of its own: {list}"
+    );
+    assert!(
+        list.contains(&at.to_string_lossy().into_owned()),
+        "no space in the worktree's own directory: {list}"
+    );
+
+    // And removing the worktree leaves the repository open.
+    let (ok, out) = ask(&session, &["worktree", "remove", "side", "--force"]);
+    assert!(ok, "worktree remove failed: {out}");
+    let (ok, after) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    assert_eq!(
+        after.matches("\"id\"").count(),
+        1,
+        "removing a worktree closed the repository too: {after}"
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&at);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn each_checkout_reports_its_own_branch() {
+    // Two worktrees of one repository are on two branches -- which is the
+    // entire reason somebody made the second one. One answer for both would be
+    // wrong for at least one of them.
+    let repo = a_repo("branches");
+    let session = unique("branches");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["worktree", "add", "other"]);
+    assert!(ok, "worktree add failed: {out}");
+
+    let deadline = Instant::now() + START;
+    let mut list = String::new();
+    while Instant::now() < deadline {
+        let (ok, out) = ask(&session, &["workspace", "list"]);
+        list = out;
+        if ok && list.contains("\"branch\": \"other\"") && list.contains("\"branch\": \"main\"") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        list.contains("\"branch\": \"main\""),
+        "the repository proper lost its branch: {list}"
+    );
+    assert!(
+        list.contains("\"branch\": \"other\""),
+        "the worktree reported the wrong branch: {list}"
+    );
+
+    drop(client);
+    let at = repo.parent().unwrap().join(format!(
+        "{}-other",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&at);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn a_git_environment_from_outside_does_not_redirect_dirk() {
+    // `GIT_DIR` beats `git -C`, so a dirk started from anywhere that exports
+    // one -- a git alias, a hook, `git rebase --exec` -- would read *that*
+    // repository instead of the directory it was asked about, and every answer
+    // would be confidently wrong.
+    //
+    // It put four branches and two worktrees into this repository before
+    // anybody noticed, which is why the test names the failure rather than the
+    // fix.
+    let repo = a_repo("envguard");
+    let session = unique("envguard");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+            // Pointed somewhere else entirely, the way a git alias would.
+            cmd.env("GIT_DIR", "/definitely/not/this/one/.git");
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, trees) = ask(&session, &["worktree", "list"]);
+    assert!(ok, "worktree list failed: {trees}");
+    assert!(
+        trees.contains(&repo.to_string_lossy().into_owned()),
+        "dirk read the repository the environment named, not the one it is in: {trees}"
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&repo);
 }

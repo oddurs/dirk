@@ -833,9 +833,24 @@ impl App {
 
         let (rows, cols) = (self.content.height, self.content.width);
         for project in &saved.projects {
-            let p = self.session.open_project(&project.path);
+            // Only when there is nothing else to go on. Each space opens its
+            // own checkout below, and opening the repository proper as well
+            // would leave a checkout with no spaces in it -- polled by git
+            // every fifteen seconds for a directory nobody asked for.
+            if project.workspaces.is_empty() {
+                self.session.open_project(&project.path);
+            }
             for want in &project.workspaces {
-                if self.session.new_workspace(p, rows, cols).is_none() {
+                // In the checkout it was in. A space that was in a worktree
+                // goes back to that worktree; without this every one of them
+                // would come back in the repository proper, which is the one
+                // arrangement nobody chose.
+                let at = match want.at.as_os_str().is_empty() {
+                    true => project.path.clone(),
+                    false => want.at.clone(),
+                };
+                let p = self.session.open_project(&at);
+                if self.session.new_workspace_at(p, &at, rows, cols).is_none() {
                     continue;
                 }
                 let Some(proj) = self.session.projects.get_mut(p) else {
@@ -874,8 +889,12 @@ impl App {
             }
             // After the workspaces, not before: opening one expands the project
             // that holds it, so a collapsed project set up first is expanded
-            // again on the way past.
-            if let Some(proj) = self.session.projects.get_mut(p) {
+            // again on the way past. Found by key, because a project restored
+            // only from worktrees was never opened by its own path.
+            let key = self.session.projects.iter().position(|x| {
+                x.path == project.path || x.workspaces.iter().any(|w| w.at == project.path)
+            });
+            if let Some(proj) = key.and_then(|i| self.session.projects.get_mut(i)) {
                 proj.expanded = project.expanded;
             }
         }
@@ -1368,7 +1387,9 @@ impl App {
                 // command should not pull the attached human away from what
                 // they were doing, nor resize their panes doing it.
                 let was = self.session.focus;
-                let made = self.session.new_workspace(p, area.height, area.width);
+                let made = self
+                    .session
+                    .new_workspace_at(p, &path, area.height, area.width);
                 self.session.focus = was;
                 self.session.refocus();
                 match made {
@@ -1604,7 +1625,7 @@ impl App {
                 }
                 match git::remove(&dir, &tree.path, force) {
                     Ok(()) => {
-                        self.session.close_project(&tree.path);
+                        self.session.close_checkout(&tree.path);
                         Reply::ok(serde_json::json!({ "removed": tree.path }))
                     }
                     Err(why) => Reply::err(why),
@@ -1922,14 +1943,15 @@ impl App {
         let now = Instant::now();
         for p in 0..self.session.projects.len() {
             let repo = self.session.projects[p].name.clone();
-            // Without this, a workspace labelled with its own branch name looks
-            // hand-written and naming backs off from it permanently.
-            let branch = self.session.projects[p]
-                .repo
-                .as_ref()
-                .map(|r| r.branch.clone())
-                .unwrap_or_default();
             for w in 0..self.session.projects[p].workspaces.len() {
+                // Without this, a workspace labelled with its own branch name
+                // looks hand-written and naming backs off from it permanently.
+                // Per space rather than per project: with worktrees open, two
+                // spaces in one project are on two branches.
+                let branch = self.session.projects[p]
+                    .repo_of(w)
+                    .map(|r| r.branch.clone())
+                    .unwrap_or_default();
                 let ws = &self.session.projects[p].workspaces[w];
                 // The title first, always. The second source is for the pane
                 // that has none, and its candidate goes through this same
@@ -2915,11 +2937,18 @@ impl App {
     fn open(&mut self, path: &std::path::Path) {
         let (rows, cols) = (self.content.height, self.content.width);
         let p = self.session.open_project(path);
-        match self.session.projects[p].workspaces.is_empty() {
-            true => {
-                self.session.new_workspace(p, rows, cols);
+        // A space in *this* checkout. Opening a worktree of a project that is
+        // already open must not land you in the repository proper, which is
+        // the one directory you did not ask for.
+        let here = self.session.projects[p]
+            .workspaces
+            .iter()
+            .position(|w| w.at == path);
+        match here {
+            Some(w) => self.session.focus = Focus::Ws { p, w },
+            None => {
+                self.session.new_workspace_at(p, path, rows, cols);
             }
-            false => self.session.focus = Focus::Ws { p, w: 0 },
         }
     }
 
