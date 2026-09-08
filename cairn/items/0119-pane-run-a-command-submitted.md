@@ -2,7 +2,7 @@
 id: 119
 title: 'pane run: a command, submitted'
 type: feature
-status: review
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07

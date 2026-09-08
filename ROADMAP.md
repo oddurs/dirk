@@ -132,24 +132,18 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v0.6 — Driving it from outside
 
-`#######···` 67% · 6 of 9 done · due 2027-03-15
+`##########` 100% · 9 of 9 done · due 2027-03-15
 
 The socket API can be asked things. This is the half that lets a program use
-
-### backlog
-
-- [ ] `0117` agent wait: block until a state, not until a sleep <sup>feature · p0 · api</sup>
-
-### in review
-
-- [ ] `0119` pane run: a command, submitted <sup>feature · p2 · api</sup>
-- [ ] `0121` A terminal size when nobody is looking <sup>feature · p1 · server</sup>
 
 ### done
 
 - [x] `0116` agent prompt: give an agent work over the socket <sup>feature · p0 · api</sup>
+- [x] `0117` agent wait: block until a state, not until a sleep <sup>feature · p0 · api</sup>
 - [x] `0118` pane wait-output: the same, for things that are not agents <sup>feature · p1 · api</sup>
+- [x] `0119` pane run: a command, submitted <sup>feature · p2 · api</sup>
 - [x] `0120` Direct attach: one pane in your terminal, no interface <sup>feature · p2 · api</sup>
+- [x] `0121` A terminal size when nobody is looking <sup>feature · p1 · server</sup>
 - [x] `0122` dirk api schema: the socket protocol, as data <sup>feature · p2 · api</sup>
 - [x] `0123` Shell completions <sup>feature · p2 · packaging</sup>
 - [x] `0124` dirk notify: an interruption a script can cause <sup>feature · p3 · api</sup>
