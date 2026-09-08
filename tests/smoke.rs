@@ -22,6 +22,10 @@
 //! that is to give it one: spawn the real binary on a real pty, read what it
 //! paints, and drive it with real keystrokes.
 
+//! `unwrap` here is an assertion. `clippy.toml` says so for `#[cfg(test)]`
+//! modules; a suite is its own crate and has to say it itself.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod fixture;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};

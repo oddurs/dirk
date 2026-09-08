@@ -44,6 +44,30 @@ vt100 = "0.16"
 libc = "0.2.189"
 portable-pty = "0.9"
 
+# Chosen rather than adopted wholesale. The pedantic set finds about three
+# hundred more things than the default one and disagrees with this project's
+# style on purpose for most of them — a `match` on a boolean is an idiom here,
+# and a lint set nobody agrees with is a lint set people learn to override.
+#
+# What is here either locks in something the tree already does or catches
+# something that should never ship. Each says why.
+[lints.clippy]
+# There is not one of these in `src`, and that is worth keeping rather than
+# rediscovering. A panic in a session holding somebody's shells and agents ends
+# all of them; every fallible thing in the program handles its failure, and this
+# is what says so. `clippy.toml` allows them where a panic is an assertion.
+unwrap_used = "deny"
+expect_used = "deny"
+# `x.to_path_buf()` on something that is already a `PathBuf`, `x.to_string()` on
+# a `String`. Both say "convert" where what is happening is a copy, which is the
+# kind of small wrongness that makes a line harder to read than it needs to be.
+implicit_clone = "deny"
+# None of these exist, and none of them should reach a release: a stub that
+# panics, and a debug print in a program that draws a terminal.
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+
 [profile.release]
 lto = true
 codegen-units = 1

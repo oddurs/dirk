@@ -291,13 +291,16 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 ## Unscheduled
 
-`#######···` 64% · 7 of 11 done
+`########··` 75% · 9 of 12 done
 
 ### backlog
 
 - [ ] `0183` Every enum setting is a string, checked twice <sup>chore · p3 · config</sup>
-- [ ] `0187` Pick the pedantic lints worth keeping <sup>chore · p3 · packaging</sup>
-- [ ] `0189` NEWS stops four milestones ago <sup>docs · p1 · docs</sup>
+- [ ] `0191` A conflict marker can be committed and shipped <sup>bug · p2 · packaging</sup>
+
+### in progress
+
+- [ ] `0182` main.rs is five thousand lines and one unit test <sup>chore · p2 · mux</sup>
 
 ### done
 
@@ -305,8 +308,9 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0179` The manual page has fallen behind the commands <sup>docs · p2 · docs</sup>
 - [x] `0180` Two hand-rolled gethostname wrappers <sup>chore · p3 · config</sup>
 - [x] `0181` The hot path runs the diagnostic path <sup>chore · p3 · perf</sup>
-- [x] `0182` main.rs is five thousand lines and one unit test <sup>chore · p2 · mux</sup>
 - [x] `0184` The smoke suite's git fixture trusts the environment <sup>bug · p2 · mux</sup>
 - [x] `0185` Three overlays, three copies of one renderer <sup>chore · p3 · chrome</sup>
 - [x] `0186` A poisoned lock is silently a missing frame <sup>chore · p3 · mux</sup>
+- [x] `0187` Pick the pedantic lints worth keeping <sup>chore · p3 · packaging</sup>
+- [x] `0189` NEWS stops four milestones ago <sup>docs · p1 · docs</sup>
 

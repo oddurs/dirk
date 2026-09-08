@@ -22,6 +22,10 @@
 //! test gets a session of its own, because they would otherwise all attach to
 //! whichever server started first.
 
+//! `unwrap` here is an assertion. `clippy.toml` says so for `#[cfg(test)]`
+//! modules; a suite is its own crate and has to say it itself.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod fixture;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};

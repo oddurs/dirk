@@ -1,0 +1,9 @@
+# `unwrap` in a test is an assertion, not a risk: the test fails, which is what
+# a failing assertion is for. Denying it there would mean a `#[allow]` on every
+# test module, which is how a lint stops being read.
+#
+# This covers `#[cfg(test)]` modules only. The suites under `tests/` and the
+# example are separate crates and say so at the top of each.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

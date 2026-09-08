@@ -62,7 +62,7 @@ impl Palette {
         for &action in Action::ALL {
             entries.push(Entry {
                 label: action.title().to_string(),
-                key: keys.key(action).unwrap_or_default().to_string(),
+                key: keys.key(action).unwrap_or_default().clone(),
                 why_not: action.why_not(session).map(str::to_string),
                 what: What::Do(action),
             });
