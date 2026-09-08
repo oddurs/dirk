@@ -99,7 +99,7 @@ single intent. If you split a workspace, its name stops tracking the work.
 approval prompt on screen and a human is being waited for. `working` means
 output recently. `done` means stopped and unseen; `idle` means stopped and seen.
 
-**A pane you did not create may be a human's.** `pane send-keys` types into it.
+**A pane you did not create may be a human's.** `pane run` types into it.
 Check `available` before starting anything in a pane: it is true only for a
 shell sitting at its prompt.
 

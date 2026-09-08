@@ -111,7 +111,7 @@ Asking a running session, from a shell or from inside a pane.  Answers are
 JSON; `--current` means the pane you are in.
 
   workspace list|focus|create|rename|close
-  pane      list|focus|split|read|send-keys|close
+  pane      list|focus|split|read|run|send-text|send-keys|close
   layout    list|open
   agent     list|start|state|wait|hooks
   worktree  list|add|remove
@@ -1657,14 +1657,56 @@ impl App {
                 }
             }
 
+            // Three verbs where there was one. A command, literal text and a
+            // keystroke fail in different ways -- text can be pasted, a key
+            // cannot, and a command needs both in an order that is guaranteed
+            // -- so a single verb meant every caller wrote the ordering itself
+            // and got it wrong against anything slow to read.
+            "pane.run" | "pane.send-text" => {
+                let Some(id) = api::target_pane(&self.session, &arg(0)) else {
+                    return Reply::err("no such pane");
+                };
+                if self.session.pane_alive(id) == Some(false) {
+                    return Reply::err("that pane's program has exited");
+                }
+                let text = req.args[1..].join(" ");
+                if text.is_empty() {
+                    return Reply::err(format!("{} needs something to send", req.cmd));
+                }
+                // The submitting return goes in the same write as the command.
+                // Two writes is two chances for a program reading slowly to
+                // see a bare newline and run whatever it had, which is how a
+                // caller ends up having typed half a command.
+                let mut bytes = text.clone().into_bytes();
+                if req.cmd == "pane.run" {
+                    bytes.push(b'\r');
+                }
+                match self.session.write_to(id, &bytes) {
+                    true => Reply::ok(serde_json::json!({ "sent": text })),
+                    false => Reply::err("no such pane"),
+                }
+            }
+
             "pane.send-keys" => {
                 let Some(id) = api::target_pane(&self.session, &arg(0)) else {
                     return Reply::err("no such pane");
                 };
-                let text = req.args[1..].join(" ");
-                match self.session.write_to(id, text.as_bytes()) {
-                    true => Reply::ok(serde_json::json!({ "sent": text.len() })),
-                    false => Reply::err("no such pane"),
+                if self.session.pane_alive(id) == Some(false) {
+                    return Reply::err("that pane's program has exited");
+                }
+                if req.args.len() < 2 {
+                    return Reply::err("pane.send-keys needs a key");
+                }
+                let mut keys = Vec::new();
+                for name in &req.args[1..] {
+                    match crate::keys::named(name) {
+                        Some(k) => keys.push(k),
+                        None => return Reply::err(format!("no such key: {name}")),
+                    }
+                }
+                match self.session.keys_to(id, &keys) {
+                    true => Reply::ok(serde_json::json!({ "sent": req.args[1..] })),
+                    false => Reply::err("that key has no sequence on this terminal"),
                 }
             }
 
