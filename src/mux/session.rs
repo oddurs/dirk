@@ -1902,6 +1902,70 @@ impl Session {
         }
     }
 
+    /// Is this pane a full-screen program that keeps its own history?
+    ///
+    /// The alternate screen is where a program draws something that is not a
+    /// log — an agent's transcript, an editor, a pager — and dirk's scrollback
+    /// holds none of it, because none of it ever scrolled. Mouse reporting is
+    /// the other half: without it there is no way to ask the program to move,
+    /// and a read that cannot ask should say so rather than pretend.
+    pub fn keeps_its_own_history(&mut self, id: PaneId) -> bool {
+        let Some(pane) = self.pane_anywhere_mut(id) else {
+            return false;
+        };
+        pane.term.lock().is_ok_and(|t| {
+            t.screen().alternate_screen()
+                && t.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
+        })
+    }
+
+    /// The visible screen of a pane, as plain text.
+    pub fn pane_visible(&mut self, id: PaneId) -> Option<String> {
+        let pane = self.pane_anywhere_mut(id)?;
+        let term = pane.term.lock().ok()?;
+        Some(term.screen().contents())
+    }
+
+    /// Ask the program in a pane to scroll, in the language it asked for.
+    ///
+    /// Its own mouse-wheel input, which it turned on itself. dirk is not
+    /// scrolling anything here — it is pressing the same key somebody with a
+    /// wheel would, and the program does the rest.
+    pub fn wheel(&mut self, id: PaneId, up: bool, times: usize) -> bool {
+        use crossterm::event::{MouseEvent, MouseEventKind};
+        let Some(pane) = self.pane_anywhere_mut(id) else {
+            return false;
+        };
+        if pane.dead {
+            return false;
+        }
+        let kind = match up {
+            true => MouseEventKind::ScrollUp,
+            false => MouseEventKind::ScrollDown,
+        };
+        let event = MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        // The same encoder a real wheel goes through, so what the program
+        // receives is indistinguishable from somebody scrolling it.
+        let mut bytes = Vec::new();
+        if let Ok(term) = pane.term.lock() {
+            for _ in 0..times {
+                if let Some(more) = crate::ui::pane::encode_mouse(term.screen(), &event, 0, 0) {
+                    bytes.extend_from_slice(&more);
+                }
+            }
+        }
+        if bytes.is_empty() {
+            return false;
+        }
+        pane.write(&bytes);
+        true
+    }
+
     /// Record, or clear, something an outside program wants shown about a pane.
     ///
     /// An empty value clears rather than setting an empty one: a token that is

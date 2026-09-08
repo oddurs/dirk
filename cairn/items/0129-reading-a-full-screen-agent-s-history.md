@@ -2,10 +2,10 @@
 id: 129
 title: Reading a full-screen agent's history
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: agents
 effort: l
@@ -34,9 +34,34 @@ of those returns what it can and says so, rather than moving somebody's viewport
 as a side effect of a read.
 
 ## Acceptance criteria
-- [ ] Only for an idle recognised agent, at the bottom, when `--lines` exceeds the screen
-- [ ] Pages overlap and are stitched on the overlap
-- [ ] The viewport is returned to the bottom before the answer
-- [ ] A working, blocked or scrolled agent is refused with a distinct error
-- [ ] A program that does not report mouse input falls back to the plain read
-- [ ] No other read path moves a viewport
+- [x] Only for an idle recognised agent, at the bottom, when `--lines` exceeds the screen
+- [x] Pages overlap and are stitched on the overlap
+- [x] The viewport is returned to the bottom before the answer
+- [x] A working, blocked or scrolled agent is refused with a distinct error
+- [x] A program that does not report mouse input falls back to the plain read
+- [x] No other read path moves a viewport
+
+## 2026-09-08
+
+Built on the held-question machinery from `0117`, and it is the only held
+question that *acts*. It has to be: a read that drives another program and waits
+for it cannot be answered on the turn it was asked, because that turn is also
+the one that would have to process the redraw.
+
+Two things this shook out.
+
+The wheel step is three events, not a screenful. How far a program moves for one
+wheel event is its own business — three lines is common and nothing guarantees
+it — so asking for a screenful at a time gave pages that did not overlap
+whenever the guess was high, and a transcript with holes in it. A short step
+overlaps under every guess, and the overlap is the whole safety of the join.
+
+And a real bug, found because the stand-in is a Python program: `python3` on a
+Homebrew mac is a shim that execs `.../Python.framework/.../MacOS/Python`, so
+the name in the process table is capitalised and nothing matched it. Every agent
+written in Python was invisible there — aider included, which dirk ships rules
+for.
+
+The viewport is put back before the answer in every exit from this, including a
+timeout, whose message says so. A read that leaves somebody's agent scrolled
+into its own past is worse than a read that failed.

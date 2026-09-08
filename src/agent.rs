@@ -200,7 +200,14 @@ pub fn defaults() -> Vec<Kind> {
 /// most likely to be left running unattended. They are configuration rather
 /// than a constant because the field adds one a month and dirk cannot ship
 /// them all.
-pub const INTERPRETERS: &[&str] = &["node", "python", "python3", "deno", "bun", "ruby", "perl"];
+pub const INTERPRETERS: &[&str] = &[
+    "node", "python", "python3",
+    // What a Homebrew python actually is in the process table: `python3` is a
+    // shim that execs `.../Python.framework/.../MacOS/Python`, so the name that
+    // reaches `ps` is capitalised and nothing matched it. Every agent written
+    // in Python was therefore invisible on a Mac with Homebrew, aider included.
+    "Python", "deno", "bun", "ruby", "perl",
+];
 
 /// Shells, so that "at a prompt" is a state rather than an unrecognised
 /// program. `agent start` will need to know a pane is free.
@@ -709,6 +716,22 @@ mod tests {
             &defaults(),
             &wrappers,
         )
+    }
+
+    #[test]
+    fn a_python_agent_is_found_under_whichever_python_ran_it() {
+        // `python3` is a shim on a Homebrew mac and execs a binary called
+        // `Python`, so the name in the process table is capitalised. Every
+        // agent written in Python was invisible there.
+        for interpreter in ["python3", "/opt/homebrew/.../MacOS/Python"] {
+            assert_eq!(
+                with_args(interpreter, "/usr/local/lib/aider/main.py")
+                    .agent()
+                    .map(|k| k.name.as_str()),
+                Some("aider"),
+                "{interpreter} did not identify what it was running"
+            );
+        }
     }
 
     #[test]

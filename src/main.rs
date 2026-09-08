@@ -1863,6 +1863,63 @@ impl App {
     /// expires.
     fn begin(&mut self, req: &wire::Request) -> Result<Begin, String> {
         let (words, opts) = wait::options(&req.args);
+        // A read of more lines than the screen holds, from a pane whose program
+        // keeps its history to itself. Everything else about `pane.read` is
+        // unchanged and answered where it always was -- this is narrow on
+        // purpose, because it is the only read that moves anything.
+        if req.cmd == "pane.read"
+            && let Some(target) = words.first()
+            && let Some(pane) = api::target_pane(&self.session, target)
+        {
+            let want: u16 = words
+                .get(1)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(api::READ_LINES);
+            let rows = self
+                .session
+                .pane_visible(pane)
+                .map_or(0, |s| s.lines().count());
+            if usize::from(want) > rows && self.session.keeps_its_own_history(pane) {
+                // Only an agent, and only one that has stopped. A screen
+                // redrawing under this would be stitched out of two different
+                // moments, and a caller would never know which.
+                let at = api::locate(&self.session, pane);
+                let state = at
+                    .and_then(|(p, w)| self.session.workspace(p, w))
+                    .map(|ws| ws.state);
+                let known = at
+                    .and_then(|(p, w)| api::agent_json(&self.session, p, w))
+                    .is_some();
+                if !known {
+                    return Err(
+                        "that pane keeps its own history and holds no agent dirk recognises; \
+                         read it with --lines inside the screen"
+                            .into(),
+                    );
+                }
+                if !matches!(
+                    state,
+                    Some(agent::State::Idle) | Some(agent::State::Done) | Some(agent::State::None)
+                ) {
+                    return Err(
+                        "that agent is not idle; its screen would be read from two moments".into(),
+                    );
+                }
+                if self.session.scrolled_at(pane) != 0 {
+                    return Err(
+                        "that pane is being read from the past; nothing will move its viewport"
+                            .into(),
+                    );
+                }
+                return Ok(Begin::Waiting(wait::What::Transcript {
+                    pane,
+                    want,
+                    pages: Vec::new(),
+                    sent: 0,
+                    ready: None,
+                }));
+            }
+        }
         if req.cmd == "pane.wait-output" {
             if let Some(bad) = wait::unknown(&opts, &["regex", "lines", "timeout"]) {
                 return Err(format!("pane.wait-output takes no --{bad}"));
@@ -1986,7 +2043,7 @@ impl App {
 
     /// Has this happened, become impossible, or run out of time?
     fn verdict(
-        &self,
+        &mut self,
         what: &mut wait::What,
         deadline: Option<Instant>,
         now: Instant,
@@ -2007,6 +2064,70 @@ impl App {
                     .is_some_and(|s| until.contains(&s))
                     .then_some(serde_json::json!({ "agent": agent }))
             }
+            // The one held question that acts. It presses the same key
+            // somebody with a wheel would, waits for the program to redraw,
+            // and does it again -- so the whole of it lives on the loop that
+            // would otherwise be the thing processing that redraw.
+            wait::What::Transcript {
+                pane,
+                want,
+                pages,
+                sent,
+                ready,
+            } => {
+                let Some(screen) = self.session.pane_visible(*pane) else {
+                    return Some(wait::Settled::Gone("that pane is gone"));
+                };
+                match ready {
+                    // Nothing asked for yet: take what is on the screen, and
+                    // ask for the page above it.
+                    None => {
+                        pages.push(screen);
+                        self.session.wheel(*pane, true, wait::WHEEL);
+                        *sent += wait::WHEEL;
+                        *ready = Some(now + wait::REDRAW);
+                        return None;
+                    }
+                    Some(at) if now < *at => return None,
+                    Some(_) => {}
+                }
+
+                // A page identical to the one before it means the program did
+                // not move: either there is no more history, or it is not
+                // listening. Either way this is the end, and stopping here is
+                // what keeps `stitch` from being handed a duplicate.
+                let ended = pages.last().is_some_and(|last| *last == screen);
+                if !ended {
+                    pages.push(screen);
+                }
+                let have = wait::stitch(pages).lines().count();
+                if ended || have >= usize::from(*want) || pages.len() >= wait::PAGES {
+                    // Put it back before answering, always. A caller's read
+                    // must not leave somebody's agent scrolled into its own
+                    // past.
+                    self.session.wheel(*pane, false, *sent);
+                    let text = wait::stitch(pages);
+                    let text = match text.lines().count() > usize::from(*want) {
+                        // The oldest lines are the ones nobody asked for: a
+                        // read of forty lines means the last forty.
+                        true => text
+                            .lines()
+                            .skip(text.lines().count() - usize::from(*want))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        false => text,
+                    };
+                    return Some(wait::Settled::Reached(serde_json::json!({
+                        "text": text,
+                        "pages": pages.len(),
+                    })));
+                }
+                self.session.wheel(*pane, true, wait::WHEEL);
+                *sent += wait::WHEEL;
+                *ready = Some(now + wait::REDRAW);
+                return None;
+            }
+
             wait::What::Prompt {
                 pane,
                 until,

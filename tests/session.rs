@@ -4090,3 +4090,188 @@ fn what_was_said_about_a_pane_does_not_survive_the_process_it_described() {
 
     drop(client);
 }
+
+/// A stand-in for a full-screen agent: alternate screen on, mouse reporting on,
+/// and a transcript it redraws itself when it is scrolled.
+///
+/// Written out by the test rather than checked in because it is scaffolding for
+/// one thing, and because what it has to be is exactly what the feature reads —
+/// a program whose history is inside it and reachable only by asking.
+fn a_transcript_program() -> std::path::PathBuf {
+    let path = config_home().join("zztranscript.py");
+    std::fs::write(
+        &path,
+        r#"
+import sys, os, tty, termios
+# Raw mode, as any full-screen program does: without it the pty echoes what
+# dirk writes and the transcript comes back with the scrolling in it.
+tty.setraw(sys.stdin.fileno())
+out = sys.stdout
+top = 0
+def draw():
+    out.write("\x1b[H\x1b[2J")
+    for i in range(20):
+        out.write("zzLINE%03d\r\n" % (top + i))
+    out.write("zzEND")
+    out.flush()
+out.write("\x1b[?1049h\x1b[?1000h")
+draw()
+# X10 mouse reports: ESC [ M Cb Cx Cy, with Cb 96 for a wheel up and 97 down.
+fd = sys.stdin.fileno()
+while True:
+    b = os.read(fd, 1)
+    if not b:
+        break
+    if b[0] == 96:
+        top = max(0, top - 1); draw()
+    elif b[0] == 97:
+        top = top + 1; draw()
+"#,
+    )
+    .expect("write the stand-in");
+    path
+}
+
+#[test]
+fn an_agent_that_keeps_its_history_to_itself_can_still_be_read() {
+    // A full-screen agent draws its transcript in the alternate screen, so
+    // dirk's scrollback holds none of it — none of it ever scrolled. A read of
+    // two hundred lines quietly returned twenty, with nothing to say that the
+    // rest existed.
+    let session = unique("transcript");
+    let dir = config_home().join("cfg-transcript");
+    std::fs::create_dir_all(dir.join("dirk").join("agents")).expect("agents dir");
+    std::fs::write(
+        dir.join("dirk").join("agents").join("zztranscript.toml"),
+        "argv = [\"zztranscript\"]\n",
+    )
+    .expect("rule file");
+    let program = a_transcript_program();
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, out) = ask(
+        &session,
+        &[
+            "pane",
+            "run",
+            &pane,
+            &format!("python3 {}", program.display()),
+        ],
+    );
+    assert!(ok, "pane run failed: {out}");
+
+    // Wait until dirk sees the harness, which is what makes this path apply.
+    let deadline = Instant::now() + START;
+    let mut seen = false;
+    while Instant::now() < deadline && !seen {
+        seen = ask(&session, &["agent", "list"]).1.contains("zztranscript");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(seen, "the stand-in was never recognised as an agent");
+
+    // Wait until it has stopped drawing. A screen being redrawn under this
+    // would be stitched out of two different moments, which is the reason the
+    // read refuses a working agent at all.
+    let (ok, out) = ask(
+        &session,
+        &[
+            "agent",
+            "wait",
+            &pane,
+            "--until",
+            "idle",
+            "--until",
+            "done",
+            "--timeout",
+            "30000",
+        ],
+    );
+    assert!(ok, "the agent never settled: {out}");
+
+    // A read that fits on the screen is the read it always was, and moves
+    // nothing.
+    let (ok, said) = ask(&session, &["pane", "read", &pane, "10"]);
+    assert!(ok, "the ordinary read failed: {said}");
+    assert!(said.contains("zzEND"), "the ordinary read is wrong: {said}");
+
+    // A read of more than the screen holds goes and gets it.
+    let (ok, said) = ask(&session, &["pane", "read", &pane, "60"]);
+    assert!(ok, "the transcript read failed: {said}");
+    assert!(
+        said.contains("zzLINE000"),
+        "it did not reach the top of the transcript: {said}"
+    );
+    assert!(
+        said.contains("zzEND"),
+        "it lost the bottom of the transcript: {said}"
+    );
+    // Stitched, not concatenated: every line appears once.
+    let twice = said.matches("zzLINE005").count();
+    assert_eq!(twice, 1, "a line appeared {twice} times: {said}");
+
+    // And the agent was put back where it was, so the next person to look at
+    // it is not looking at its past.
+    let deadline = Instant::now() + START;
+    let mut back = false;
+    while Instant::now() < deadline && !back {
+        back = ask(&session, &["pane", "read", &pane, "5"])
+            .1
+            .contains("zzEND");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        back,
+        "the read left the agent scrolled into its own history\n{}",
+        ask(&session, &["pane", "read", &pane, "25"]).1
+    );
+
+    drop(client);
+}
+
+#[test]
+fn nothing_else_moves_an_agents_viewport() {
+    // The narrowness is the feature. A pane that is not an agent, or one that
+    // is being read from the past, is refused rather than driven — and a read
+    // that fits on the screen never takes this path at all.
+    let session = unique("noscroll");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let program = a_transcript_program();
+    let (ok, out) = ask(
+        &session,
+        &[
+            "pane",
+            "run",
+            &pane,
+            &format!("python3 {}", program.display()),
+        ],
+    );
+    assert!(ok, "pane run failed: {out}");
+    // Long enough for the program to be drawing and for dirk to have sampled.
+    std::thread::sleep(Duration::from_secs(3));
+
+    // No rules name this one, so dirk holds no agent here — and a read that
+    // would have to drive an unrecognised program says so instead.
+    let (ok, said) = ask(&session, &["pane", "read", &pane, "60"]);
+    assert!(!ok, "it drove a program it does not recognise: {said}");
+    assert!(
+        said.contains("holds no agent"),
+        "the refusal did not say why: {said}"
+    );
+
+    // A read inside the screen is unaffected.
+    let (ok, said) = ask(&session, &["pane", "read", &pane, "10"]);
+    assert!(ok, "an ordinary read was refused: {said}");
+    assert!(said.contains("zzEND"), "the ordinary read is wrong: {said}");
+
+    drop(client);
+}

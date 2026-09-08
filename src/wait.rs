@@ -57,6 +57,7 @@ impl What {
     pub fn on_timeout(&self) -> &'static str {
         match self {
             What::Prompt { .. } => "the prompt was sent; read the agent before sending it again",
+            What::Transcript { .. } => "the agent's viewport has been put back",
             _ => "",
         }
     }
@@ -70,6 +71,29 @@ pub enum What {
         pane: PaneId,
         looking_for: Match,
         lines: u16,
+    },
+    /// An agent's transcript, being collected a screen at a time.
+    ///
+    /// The only held question that *acts*: it sends the agent the mouse-wheel
+    /// input it already understands, waits for it to redraw, and does it again.
+    /// Held for exactly that reason — a read that drives another program and
+    /// waits for it cannot be answered on the turn it was asked, because that
+    /// turn is also the one that would have to process the redraw.
+    Transcript {
+        pane: PaneId,
+        /// How many lines the caller asked for.
+        want: u16,
+        /// Screens collected so far, newest first.
+        pages: Vec<String>,
+        /// How many wheel-ups have been sent, so exactly that many downs put
+        /// the agent back where it was.
+        sent: usize,
+        /// When the page now being waited for should be readable.
+        ///
+        /// A program redraws when it feels like it and the alternate screen is
+        /// a picture rather than a stream, so this is a settling time and not a
+        /// signal. `None` means nothing has been asked for yet.
+        ready: Option<Instant>,
     },
     /// A prompt that has been submitted, settling.
     ///
@@ -117,6 +141,29 @@ impl Match {
         })
     }
 }
+
+/// How long to give a full-screen program to redraw after being scrolled.
+///
+/// There is no signal to wait on: the alternate screen is a picture, not a
+/// stream. Long enough that a busy program has drawn, short enough that a
+/// hundred lines is about a second.
+pub const REDRAW: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// How many wheel events to send before reading the screen again.
+///
+/// Small on purpose. How far a program moves for one wheel event is its own
+/// business — three lines is common and nothing guarantees it — so asking for a
+/// screenful at a time would mean pages that do not overlap whenever the guess
+/// was high, and a transcript with holes in it. A short step overlaps under
+/// every guess, and the overlap is what makes the join safe.
+pub const WHEEL: usize = 3;
+
+/// The most screens one read will collect.
+///
+/// A bound rather than a preference. Without one, an agent whose transcript
+/// never stops scrolling would be walked to the top of its history by somebody
+/// who asked for two hundred lines.
+pub const PAGES: usize = 40;
 
 /// How long a prompt has to visibly start something before it is called stalled.
 ///
@@ -245,6 +292,27 @@ pub fn deadline(opts: &[(String, String)]) -> Result<Option<Instant>, String> {
     }
 }
 
+/// Join screens collected while scrolling upward into one transcript.
+///
+/// Pages come newest first and overlap, because a wheel-up moves by less than a
+/// screen and because a program may not scroll by the amount it was asked to.
+/// The overlap is what makes this safe: the join is at the longest run of lines
+/// that ends one page and begins the next, so a page that did not move at all
+/// adds nothing rather than duplicating everything.
+pub fn stitch(pages: &[String]) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    // Oldest first, which is reading order.
+    for page in pages.iter().rev() {
+        let lines: Vec<&str> = page.lines().collect();
+        let overlap = (1..=lines.len().min(out.len()))
+            .rev()
+            .find(|n| out[out.len() - n..] == lines[..*n])
+            .unwrap_or(0);
+        out.extend_from_slice(&lines[overlap..]);
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +380,32 @@ mod tests {
         // which is what a silently ignored `--until` would produce.
         let opts = vec![("until".to_string(), "finished".to_string())];
         assert!(until(&opts).is_err());
+    }
+
+    #[test]
+    fn pages_are_joined_where_they_overlap() {
+        // Collected newest first, and joined into reading order.
+        let pages = vec!["c\nd\ne".to_string(), "a\nb\nc\nd".to_string()];
+        assert_eq!(stitch(&pages), "a\nb\nc\nd\ne");
+    }
+
+    #[test]
+    fn a_page_that_did_not_move_adds_nothing() {
+        // A program may not scroll by the amount it was asked to, or at all --
+        // and not noticing that is a transcript with a screenful of itself
+        // repeated through the middle of it.
+        let same = "a\nb\nc".to_string();
+        assert_eq!(stitch(&[same.clone(), same.clone()]), "a\nb\nc");
+        assert_eq!(stitch(&[same]), "a\nb\nc");
+        assert_eq!(stitch(&[]), "");
+    }
+
+    #[test]
+    fn pages_that_do_not_overlap_are_still_all_there() {
+        // A jump too big to overlap loses the join but must not lose the text:
+        // a gap is a worse answer than a seam, and silence is worse than both.
+        let pages = vec!["e\nf".to_string(), "a\nb".to_string()];
+        assert_eq!(stitch(&pages), "a\nb\ne\nf");
     }
 
     #[test]
