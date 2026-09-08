@@ -2200,3 +2200,45 @@ fn a_folded_row_says_whether_opening_it_would_show_you_anything() {
 
     drop(client);
 }
+
+#[test]
+fn a_chosen_glyph_set_reaches_the_column() {
+    // A set that resolves correctly and is never asked for is not a set
+    // anybody has. This is the only thing the unit tests cannot say: that the
+    // name in the file is the name the nav draws with.
+    let home = config_home().join("round");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("dirk")).expect("config dir");
+    std::fs::write(
+        home.join("dirk").join("config.toml"),
+        "[nav]\nglyphs = \"round\"\n",
+    )
+    .expect("config");
+
+    let session = unique("round");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let home = home.clone();
+        move |cmd| {
+            cmd.env("XDG_CONFIG_HOME", &home);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    // A state has to exist before a state mark can be drawn: a shell at a
+    // prompt draws nothing in either set, which is correct and proves nothing.
+    let (ok, out) = ask(&session, &["agent", "state", "blocked"]);
+    assert!(ok, "the report was refused: {out}");
+    assert!(
+        client.wait_for("●", START),
+        "the round set was configured and the nav drew something else\n{}",
+        client.drawn()
+    );
+    assert!(
+        !client.drawn().contains('!'),
+        "the unicode mark for blocked was drawn as well\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&home);
+}

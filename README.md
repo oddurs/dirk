@@ -434,6 +434,13 @@ dirk cannot choose your font; your terminal does. What it can do is not assume
 one. `glyphs = "ascii"` draws the whole interface in ASCII, for a terminal or a
 font that cannot manage `▾ ⑂ ▊ ✕`.
 
+`glyphs = "round"` keeps the rest and redraws the four states as a progression:
+`○` at rest, `◐` working, `●` waiting on you, `✓` finished. It is not the
+default. `! * + ·` are legible to somebody who has never seen dirk — an
+exclamation mark means attention wherever you have met one before — and `✓` for
+`done` competes with the tick a test suite prints, which is the one thing it is
+most likely to be sitting beside.
+
 There is deliberately no Nerd Font set. Those glyphs live in the Private Use
 Area, where Unicode assigns no width and terminals disagree — and the nav's
 column arithmetic is exact, so disagreeing about width does not look slightly
@@ -469,7 +476,7 @@ default_agent = "claude"     # what `a` starts, when a project does not say
 clipboard     = []           # empty finds pbcopy, wl-copy or xclip
 
 [nav]
-glyphs    = "unicode"        # unicode | ascii
+glyphs    = "unicode"        # unicode | ascii | round
 attention = "when-needed"    # when-needed | always | never
 rows      = "tall"           # tall gives a workspace its branch on a second line
 

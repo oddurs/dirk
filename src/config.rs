@@ -343,7 +343,7 @@ impl Default for BlockedDef {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Nav {
-    /// Which shipped set of marks to draw with: `unicode` or `ascii`.
+    /// Which shipped set of marks to draw with: `unicode`, `ascii` or `round`.
     pub glyphs: String,
     /// Marks to replace, for a font dirk cannot check the presence of.
     #[serde(rename = "glyph")]
@@ -864,12 +864,15 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
     // A set that does not exist is drawn as the default one, and a mark that
     // does not exist is not drawn at all -- both silently, and both looking
     // exactly like a setting that did not take.
-    const SETS: &[&str] = &["unicode", "ascii"];
-    if !SETS.contains(&cfg.nav.glyphs.as_str()) {
+    //
+    // The list lives with the sets rather than here: a second copy of it is a
+    // copy that goes stale the day a third set is added, and it did.
+    let sets = crate::glyph::Glyphs::SETS;
+    if !sets.contains(&cfg.nav.glyphs.as_str()) {
         out.push(format!(
             "nav: no glyph set {:?}; using unicode. One of {}",
             cfg.nav.glyphs,
-            SETS.join(", ")
+            sets.join(", ")
         ));
     }
     for def in &cfg.nav.glyphs_override {

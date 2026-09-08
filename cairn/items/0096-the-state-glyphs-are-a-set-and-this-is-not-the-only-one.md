@@ -22,6 +22,9 @@ current set is legible to somebody who has never seen dirk, and a tick for
 `done` competes with the check somebody might read as "passed".
 
 ## Acceptance criteria
-- [ ] A second shipped set, chosen by name
-- [ ] Both sets are one cell per mark, and the ascii set still is too
-- [ ] The default does not change without a reason written down
+- [x] A second shipped set, chosen by name
+- [x] Both sets are one cell per mark, and the ascii set still is too
+      — the state marks are, in all three sets. The ascii set's `^M` for
+        enter is two, and always was: a shipped set is now budgeted at the
+        width it actually draws rather than at one
+- [x] The default does not change without a reason written down
