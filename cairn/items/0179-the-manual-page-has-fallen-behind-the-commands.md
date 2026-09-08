@@ -2,7 +2,7 @@
 id: 179
 title: The manual page has fallen behind the commands
 type: docs
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
@@ -40,6 +40,21 @@ failure should name the command that is missing.
 
 ## Acceptance criteria
 
-- [ ] `tab` and `worktree` are documented, with their verbs
-- [ ] `pane move` and `session quit` are documented
-- [ ] A test fails when a command is added to `COMMANDS` and not to the page
+- [x] `tab` and `worktree` are documented, with their verbs
+- [x] `pane move` and `session quit` are documented
+- [x] A test fails when a command is added to `COMMANDS` and not to the page
+
+## 2026-09-08
+
+Scoped to the page's own COMMANDS section, which is the part that matters.
+Searching the whole page would pass on nothing: `tab` is also a key, `close` is
+also prose, and a word appearing somewhere in a manual is not a command being
+documented in it. Both halves of a name are checked, so a noun that arrives with
+five verbs cannot be half-documented either.
+
+Just enough roff is undone to find a word: `send\-keys` is written with the
+hyphen escaped so it is not a line break, and a scan looking for `send-keys`
+would not find it.
+
+Confirmed the other way round — the entry for `tab` was renamed and the test
+failed, naming the command it could not find.
