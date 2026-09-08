@@ -6,6 +6,165 @@ See the end of the file for copying conditions.
 Please send bug reports and suggestions through the project's issue tracker.
 
 
+* Noteworthy changes in release 0.5.0 (2026-09-08)
+
+Four milestones of work, and the theme running through them is that dirk
+stopped being a thing you look at and became a thing you can drive.  A session
+can now be read, searched, rearranged and copied out of; started, prompted and
+waited on from a script; and watched from two terminals at once.
+
+** Reading what has gone past
+
+Scrollback, at last.  The wheel and the keys scroll the focused pane, the rail
+says how far back you are, and copy mode selects by character, word, line and
+paragraph with the pointer or without it.  What you select goes to the system
+clipboard through OSC 52, so it works over ssh.
+
+`/` searches the pane you are reading, incrementally, with the matches
+highlighted and next and previous bound.  Leaving a search puts you back where
+you were rather than at the bottom, because a search you abandoned should not
+cost you your place.  A wider search reads every pane in the session and names
+the pane each hit came from.
+
+** Tabs, and moving panes between them
+
+A workspace holds tabs; a tab holds a split tree.  An editor and a test runner
+can live in one space without being on screen together, and `pane move` sends a
+pane to another tab.  Tabs are named by hand and by the naming policy, like
+everything else with a name in dirk.
+
+A pane can be zoomed to fill its workspace and put back, and two panes can be
+swapped without closing either.  Splits resize from the keyboard as well as by
+dragging the edge between them.
+
+** Two terminals, one session
+
+A second client no longer takes the session over.  Each gets its own view: its
+own focus, its own sidebar state, its own idea of what is on screen.  The
+session is one thing and looking at it is not.
+
+** Driving a session from outside
+
+The socket API grew the half that acts rather than reports.  `pane run` submits
+a command, `pane send-text` and `pane send-keys` type into a pane, and `pane
+wait-output` blocks until something appears rather than sleeping and hoping.
+`agent prompt` gives an agent work; `agent wait` blocks until it reaches a
+state.  Waits are answered on the turn the state actually changed, so a wait
+for `blocked` ends when the agent blocks and not on the next poll.
+
+`pane attach` puts one pane in your terminal with no interface around it, which
+is what a script driving a single program wants.  `dirk api schema` prints the
+whole surface as data, `dirk session notify` raises an interruption from a
+script, and there are completions for bash, zsh and fish generated from the
+same table so they cannot describe a command that no longer exists.
+
+** Agents you can start, and that tell you what they are doing
+
+`agent start` launches one rather than merely recognising it, and reports
+`starting` for a pane whose process has not appeared in the table yet — which
+is exactly the moment the state is most worth having.  `n` from the nav starts
+an agent rather than a shell, because a workspace with a shell in it has no
+intent and never gets a name.
+
+Harnesses are configuration now, not a table compiled into the program: a row
+in `config.toml` adds one, and the shipped rules are files you can replace one
+at a time.  `wrappers` tells dirk what is behind `uv run` or `poetry run`.  An
+agent can report its own state through a hook rather than being inferred at,
+and `agent explain` says which signal decided the state it is in and why — the
+same pass that decided it, not a second account of it.
+
+`agent hooks install` edits the harness's own settings file instead of printing
+something to paste.  Conversations resume where they were rather than merely in
+the right directory, and a full-screen agent's history can be read out of a
+pane that redraws over itself.
+
+** The sidebar at forty projects
+
+The tree was right at five workspaces and wrong at forty.  Rows are one line
+now, with `[nav] rows` choosing whether that line leads with what a workspace
+*is* — its branch — or with what it is *doing*, which is the arrangement for
+somebody whose projects are one checkout each.  A collapsed project still says
+what is inside it.
+
+The rail was rebuilt around the same question.  Its first cells say whose
+account, which session and which machine, rather than repeating the name of the
+program you just started.  Four levels of emphasis replaced one flat dim.  What
+it gives up as the terminal narrows is a ladder now — the clock goes first,
+then the pane counter, then the project — rather than whatever happened to be
+measured last, so it can no longer keep the clock and drop the count of agents
+waiting for a human.  The corner belongs to detach, which is the safe thing you
+do several times a day; quit is not something the pointer can land on by
+overshooting.
+
+Elision keeps the end of a label rather than the start, because the end is
+where the distinguishing word usually is.
+
+** Attention, and hearing about it
+
+The permanent agents section is gone; what is owed appears when something is
+owed and takes no room when nothing is.  There is a sound when an agent blocks
+and a different one when it is done — the two events worth hearing, since
+working and idle are conditions rather than news.  Per-agent rules turn either
+off for a particular harness.
+
+Boards report without being opened: a layout row can run a command and wear its
+answer as a badge, which is the difference between a link called "git" and a
+row that says the tree is dirty and two commits behind.
+
+** Worktrees, from the nav
+
+Making a worktree used to mean leaving dirk, running `git worktree add`, coming
+back and opening the project.  It is one action now, from the project row or
+over the socket, and it leaves you in a workspace on the new branch.
+
+** Images in a pane
+
+A program that draws a picture — a plot, a diagram, a screenshot an agent just
+took — used to have it vanish the moment it was inside dirk.  Kitty graphics
+now pass through: sent once and placed many times, anchored to a line of the
+pane's history so they scroll with the text they belong to, clipped to their
+pane, and not redrawn when nothing about them has changed.  A terminal that
+cannot draw one ignores what dirk sends, so there is nothing to configure;
+`[terminal] graphics = false` is for a terminal that does something worse than
+ignore it.
+
+** The terminal dirk is running in
+
+dirk sets its window title from `[ui] window_title`, so a tabbed terminal says
+which session, machine and workspace each tab holds.  `[terminal] shell_mode`
+decides whether a new pane gets a login shell, `[terminal] new_cwd` decides
+where it starts, and `[ui] mouse = false` gives the terminal's own selection
+back to anyone who wants it.  Panes can carry a rule across the top with a
+label, which is what tells two shells side by side apart.
+
+** Keys
+
+Everything bindable from `[keys]`, with or without the prefix: a chord like
+`ctrl+alt+d` reaches an action directly, and a binding can have both forms.
+dirk complains about a binding that will never arrive — a chord the terminal
+takes first, or one a shell has already spent — rather than accepting it and
+doing nothing.  The command palette lists every action, filtered by typing, so
+finding out what dirk can do no longer means reading its source.
+
+** Fixes
+
+A CLI answer through a closed pipe used to end in a backtrace.  `dirk session
+list | head -1` now ends the way every other program on the system ends.
+
+`dirk session prune` removes sockets nothing is listening on, which used to
+accumulate until the list was mostly things you could not attach to.
+
+A session test that failed used to leave its session running; a red run left
+one daemon per failed test on the machine.
+
+Glyphs come from one table with their cell widths declared, so a terminal that
+renders them double-width no longer shifts everything to their right, and
+`[nav] glyphs = "ascii"` runs dirk somewhere none of them render.
+
+A session with nobody attached has a size that is configuration rather than a
+guess, so panes made by a script are not built for a placeholder.
+
+
 * Noteworthy changes in release 0.4.0 (2026-09-07)
 
 Sessions.  Until now dirk was a program you ran in a terminal, which meant
