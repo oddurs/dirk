@@ -2,7 +2,7 @@
 id: 116
 title: 'agent prompt: give an agent work over the socket'
 type: feature
-status: backlog
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
