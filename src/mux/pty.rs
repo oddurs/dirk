@@ -448,6 +448,35 @@ impl Pane {
         self.child.pid()
     }
 
+    /// Can this pane's grid still be read?
+    ///
+    /// A `Mutex` fails to lock for exactly one reason: a thread panicked while
+    /// holding it. For `term` that thread is this pane's reader, so the grid is
+    /// frozen at whatever it held and nothing will ever add to it again.
+    ///
+    /// Every place that reads it handles the failure the same way — do nothing
+    /// this time — which is right at each of the twenty-five of them and adds up
+    /// to something wrong: a pane that stays on screen, keeps its row and its
+    /// place in the attention column, and says nothing at all about why it
+    /// stopped. It looks exactly like a program that has gone quiet.
+    pub fn unreadable(&self) -> bool {
+        self.term.is_poisoned()
+    }
+
+    /// The grid can no longer be read, so this pane is over.
+    ///
+    /// Ended rather than merely marked. Nothing it writes from here on can
+    /// reach a screen, so leaving the program running leaves it talking into a
+    /// closed pipe — the same argument `finish` makes about a pty whose other
+    /// end has gone, and the same treatment.
+    pub fn give_up(&mut self) {
+        self.finish();
+        // Said plainly, because this is not how a program usually ends and the
+        // difference is the whole of what somebody needs in order to work out
+        // what happened.
+        self.exit = Some("stopped: dirk could no longer read it".into());
+    }
+
     /// Close this pane for good. The child's exit arrives as an event like any
     /// other; `closing` is what tells that event this was deliberate.
     pub fn close(&mut self) {
@@ -486,5 +515,69 @@ impl Drop for Pane {
         if !self.dead {
             let _ = self.child.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pane running something that will sit still, and its grid.
+    fn a_pane() -> (Pane, Arc<Mutex<Term>>) {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let pane = Pane::spawn(
+            1,
+            &["sleep".into(), "30".into()],
+            Path::new("."),
+            Setup {
+                rows: 24,
+                cols: 80,
+                scrollback: 100,
+                login: false,
+            },
+            tx,
+        )
+        .expect("spawn");
+        let grid = Arc::clone(&pane.term);
+        (pane, grid)
+    }
+
+    #[test]
+    fn a_pane_whose_grid_cannot_be_read_is_a_pane_that_has_ended() {
+        let (mut pane, grid) = a_pane();
+        assert!(!pane.unreadable(), "a working pane reads as broken");
+
+        // The one thing that poisons a lock, done deliberately. The hook is
+        // swapped out first because the panic is the point of the test and its
+        // backtrace is not something anybody reading the output wants.
+        let was = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = std::thread::spawn(move || {
+            let _held = grid.lock().unwrap();
+            panic!("the reader fell over");
+        })
+        .join();
+        std::panic::set_hook(was);
+
+        assert!(pane.unreadable(), "a poisoned grid did not read as broken");
+        // Before: alive, silent, and indistinguishable from an idle agent.
+        assert!(!pane.dead);
+
+        pane.give_up();
+        assert!(pane.dead, "the pane was left alive with no way to read it");
+        let said = pane.exit.as_deref().unwrap_or_default();
+        assert!(
+            said.contains("could no longer read"),
+            "it ended without saying why: {said:?}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_pane_is_left_alone() {
+        // The sweep runs on every turn of the event loop, so it has to be sure
+        // about the panes it does not touch as well as the ones it does.
+        let (pane, _grid) = a_pane();
+        assert!(!pane.unreadable());
+        assert!(!pane.dead);
     }
 }
