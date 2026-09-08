@@ -4395,3 +4395,104 @@ fn a_shell_mode_nobody_understands_is_complained_about() {
 
     drop(client);
 }
+
+#[test]
+fn a_pane_moves_and_takes_its_process_with_it() {
+    // A pane was created in a workspace and stayed there. Splitting was the
+    // only way to organise, so a workspace holding logs, a server, a test
+    // watcher and an agent was four panes competing for one screen.
+    let session = unique("movepane");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let first = first_id(&panes);
+    let (ok, out) = ask(&session, &["pane", "split", &first, "cols"]);
+    assert!(ok, "split failed: {out}");
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let moving = ids(&panes).last().expect("the new pane").clone();
+
+    // Something running in it, and something in its scrollback, so the move can
+    // be seen to have carried both.
+    let (ok, out) = ask(&session, &["pane", "run", &moving, "printf 'zzCARRIED\\n'"]);
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &moving, "zzCARRIED", START),
+        "the pane never printed"
+    );
+
+    // Out into a workspace of its own.
+    let (ok, said) = ask(&session, &["pane", "move", &moving, "--new-workspace"]);
+    assert!(ok, "the move failed: {said}");
+    assert!(
+        said.contains("\"previous\""),
+        "it did not say where it came from: {said}"
+    );
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    assert_eq!(ids(&list).len(), 2, "no second workspace: {list}");
+
+    // The scrollback came with it, and so did the shell: the pane is the same
+    // pane, and dirk's ids are session-wide so its own handle did not change.
+    assert!(
+        ask(&session, &["pane", "read", &moving, "20"])
+            .1
+            .contains("zzCARRIED"),
+        "the scrollback did not travel"
+    );
+    let (ok, out) = ask(&session, &["pane", "run", &moving, "printf 'zzALIVE\\n'"]);
+    assert!(ok, "pane run failed after the move: {out}");
+    assert!(
+        appears_in_pane(&session, &moving, "zzALIVE", START),
+        "the process did not survive the move"
+    );
+
+    // And into a tab of its own, back where it started.
+    let (ok, tabs) = ask(&session, &["tab", "list"]);
+    assert!(ok, "tab list failed");
+    let home = first_id(&tabs);
+    let (ok, said) = ask(&session, &["pane", "move", &moving, "--tab", &home]);
+    assert!(ok, "the move back failed: {said}");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    assert_eq!(
+        ids(&list).len(),
+        1,
+        "the workspace it left behind was not closed: {list}"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_move_that_cannot_happen_is_refused_rather_than_attempted() {
+    let session = unique("movebad");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let only = first_id(&panes);
+
+    // A workspace's only pane has nowhere to go that is not where it is, and
+    // taking it out would close the workspace under it.
+    let (ok, said) = ask(&session, &["pane", "move", &only, "--new-workspace"]);
+    assert!(!ok, "it moved a workspace's only pane out: {said}");
+    let (ok, said) = ask(&session, &["pane", "move", &only, "--tab", "w1:t99"]);
+    assert!(!ok, "it moved a pane to a tab that does not exist: {said}");
+    let (ok, said) = ask(&session, &["pane", "move", &only]);
+    assert!(!ok, "it moved a pane nowhere in particular: {said}");
+
+    // And the pane is still there and still works.
+    let (ok, out) = ask(&session, &["pane", "run", &only, "printf 'zzSTILL\\n'"]);
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &only, "zzSTILL", START),
+        "a refused move disturbed the pane"
+    );
+
+    drop(client);
+}

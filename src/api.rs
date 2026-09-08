@@ -470,6 +470,11 @@ pub const COMMANDS: &[Command] = &[
         answer: "pane, said",
     },
     Command {
+        name: "pane.move",
+        args: "<pane> --tab <tab> | --new-tab | --new-workspace",
+        answer: "pane, previous",
+    },
+    Command {
         name: "pane.attach",
         args: "<pane> [--takeover]",
         answer: "pane, rows, cols, then that pane's screen until you detach",
