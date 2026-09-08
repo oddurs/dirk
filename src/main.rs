@@ -116,6 +116,7 @@ JSON; `--current` means the pane you are in.
 
   workspace list|focus|create|rename|close
   pane      list|focus|split|read|run|send-text|send-keys|close
+            attach|observe|control   one pane: a terminal, a stream, or both
   layout    list|open
   agent     list|rules|explain|start|state|prompt|wait|hooks
   worktree  list|add|remove
@@ -501,6 +502,36 @@ fn main() -> io::Result<()> {
         }
         let takeover = args.iter().any(|a| a == "--takeover");
         return match client::watch(&path, &target, takeover) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("dirk: {e}");
+                std::process::exit(1);
+            }
+        };
+    }
+
+    // Streams rather than answers, so they are handled here beside `pane
+    // attach` rather than through the request/reply path: what comes back is
+    // that pane, again, until somebody stops.
+    for (verb, control) in [("observe", false), ("control", true)] {
+        if !command_args_are(&args, "pane", verb) {
+            continue;
+        }
+        let words = words(&args);
+        let Some(target) = words.get(2) else {
+            eprintln!("dirk: pane {verb} needs a pane");
+            std::process::exit(1);
+        };
+        let target = match *target {
+            "--current" => std::env::var("DIRK_PANE_ID").unwrap_or_else(|_| target.to_string()),
+            other => other.to_string(),
+        };
+        if !server::is_running(&path) {
+            eprintln!("dirk: no session {session:?} is running");
+            std::process::exit(1);
+        }
+        let takeover = args.iter().any(|a| a == "--takeover");
+        return match client::stream(&path, &target, control, takeover) {
             Ok(()) => Ok(()),
             Err(e) => {
                 eprintln!("dirk: {e}");
@@ -1963,7 +1994,14 @@ impl App {
         // One writer at a time. Two terminals typing into one shell is not a
         // feature anybody asked for, and the character interleaving would be
         // blamed on the program rather than on this.
-        if let Some(held) = self.watchers.iter().position(|w| w.pane == pane) {
+        //
+        // Observers are not writers and are not counted here: any number may
+        // watch one pane, and none of them takes it from whoever is typing.
+        if let Some(held) = self
+            .watchers
+            .iter()
+            .position(|w| w.pane == pane && !w.observe && !watcher.observe)
+        {
             if !watcher.takeover {
                 return refuse(
                     &mut watcher,
@@ -1985,8 +2023,13 @@ impl App {
             return false;
         }
         // The attached terminal owns the size, which is what makes this a
-        // terminal for that pane rather than a window onto somebody else's.
-        self.session.resize_pane(pane, watcher.rows, watcher.cols);
+        // terminal for that pane rather than a window onto somebody else's. An
+        // observer is the window: it takes the pane at whatever size the pane
+        // is, because resizing somebody else's shell to fit a recorder would be
+        // the recorder changing what it is recording.
+        if !watcher.observe {
+            self.session.resize_pane(pane, watcher.rows, watcher.cols);
+        }
         self.watchers.push(watcher);
         // The current screen follows the acceptance rather than waiting for the
         // pane to say something next: attaching to a quiet pane should show you

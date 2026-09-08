@@ -239,6 +239,8 @@ pub struct Watcher {
     pub cols: u16,
     pub rows: u16,
     pub takeover: bool,
+    /// Watching without owning: takes no input and does not resize the pane.
+    pub observe: bool,
     /// Set once the loop has accepted it and resolved the pane.
     pub pane: crate::mux::PaneId,
     /// What was last posted, so an unchanged screen is not sent again.
@@ -345,6 +347,7 @@ fn watch(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>, body: &[u8]) {
         cols: want.cols,
         rows: want.rows,
         takeover: want.takeover,
+        observe: want.observe,
         pane: 0,
         last: Vec::new(),
     };
@@ -372,6 +375,18 @@ fn watch(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>, body: &[u8]) {
 
     while let Ok(Some((kind, body))) = wire::recv(&mut reader) {
         if kind != Kind::Input {
+            continue;
+        }
+        // An observer that sends input is not obeyed and not disconnected: it
+        // is a program with a bug, and taking its stream away is a worse way to
+        // say so than ignoring the thing it should not have sent.
+        if want.observe {
+            continue;
+        }
+        // An observer that sends input is not obeyed and not disconnected: it
+        // is a program with a bug, and taking its stream away is a worse way to
+        // tell it so than ignoring the thing it should not have sent.
+        if want.observe {
             continue;
         }
         let Ok(input) = serde_json::from_slice::<Input>(&body) else {

@@ -2,10 +2,10 @@
 id: 146
 title: Watching and driving a terminal over the socket
 type: feature
-status: backlog
+status: done
 milestone: v0.9
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: api
 effort: m
@@ -31,8 +31,8 @@ different front end for dirk needs bytes out and bytes in, not a manifest
 format.
 
 ## Acceptance criteria
-- [ ] `pane observe` streams frames; many observers, no ownership
-- [ ] `pane control` accepts input, resize, scroll and release on stdin
-- [ ] One controller at a time; `--takeover` replaces it
-- [ ] A closing record when the pane ends, distinguishable from a dropped connection
-- [ ] Backpressure handled: a slow reader is dropped, not allowed to stall the session
+- [x] `pane observe` streams frames; many observers, no ownership
+- [x] `pane control` accepts input, resize, scroll and release on stdin
+- [x] One controller at a time; `--takeover` replaces it
+- [x] A closing record when the pane ends, distinguishable from a dropped connection
+- [x] Backpressure handled: a slow reader is dropped, not allowed to stall the session

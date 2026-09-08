@@ -4841,3 +4841,221 @@ fn pane_pid(session: &str, pane: &str) -> i64 {
         .and_then(|p| p.get("pid").and_then(|v| v.as_i64()))
         .unwrap_or(0)
 }
+
+#[test]
+fn a_pane_can_be_watched_as_data_by_more_than_one_reader() {
+    // `pane read` answers at a moment, so following a pane meant polling and
+    // rendering one was impossible: the escapes are stripped and there is no
+    // stream. Observers do not own the pane, so a recorder and a bridge can
+    // both watch what somebody is typing into.
+    let session = unique("observe");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+
+    let watchers: Vec<_> = (0..2)
+        .map(|_| {
+            std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+                .args(["--session", &session, "pane", "observe", &pane])
+                .env("XDG_CONFIG_HOME", config_home())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn observer")
+        })
+        .collect();
+
+    std::thread::sleep(Duration::from_millis(600));
+    let (ok, why) = ask(&session, &["pane", "run", &pane, "printf", "zzSTREAM"]);
+    assert!(ok, "pane run failed: {why}");
+    std::thread::sleep(Duration::from_secs(2));
+
+    for (i, mut w) in watchers.into_iter().enumerate() {
+        let _ = w.kill();
+        let out = w.wait_with_output().expect("observer output");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut opened = false;
+        let mut saw = false;
+        for line in text.lines() {
+            let doc: serde_json::Value = match serde_json::from_str(line) {
+                Ok(d) => d,
+                Err(e) => panic!("observer {i} wrote a line that is not JSON: {line:?} ({e})"),
+            };
+            if doc.get("open").is_some() {
+                opened = true;
+            }
+            if let Some(b64) = doc.get("bytes").and_then(|v| v.as_str()) {
+                saw |= decode_b64(b64).windows(8).any(|w| w == b"zzSTREAM");
+            }
+        }
+        assert!(opened, "observer {i} never got an opening record:\n{text}");
+        assert!(saw, "observer {i} never saw what the pane printed:\n{text}");
+    }
+
+    // And the pane is still somebody's to type in: observing took nothing.
+    let (ok, _) = ask(&session, &["pane", "run", &pane, "printf", "zzAFTER"]);
+    assert!(ok, "the pane was taken away by watching it");
+    assert!(
+        client.wait_for("zzAFTER", START),
+        "the pane stopped working after being observed\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    end(&session);
+}
+
+/// Base64, for reading what the stream carries.
+fn decode_b64(text: &str) -> Vec<u8> {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bits = 0u32;
+    let mut have = 0u32;
+    let mut out = Vec::new();
+    for c in text.bytes().filter(|c| *c != b'=') {
+        let Some(v) = A.iter().position(|a| *a == c) else {
+            continue;
+        };
+        bits = (bits << 6) | v as u32;
+        have += 6;
+        if have >= 8 {
+            have -= 8;
+            out.push((bits >> have) as u8);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_pane_can_be_driven_from_outside_by_one_caller_at_a_time() {
+    // Bytes out and bytes in, which is what somebody building a different front
+    // end needs -- and one writer, because two things typing into one shell
+    // interleave characters and the program gets the blame.
+    use std::io::Write;
+    let session = unique("control");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+
+    let mut driver = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--session", &session, "pane", "control", &pane])
+        .env("XDG_CONFIG_HOME", config_home())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn controller");
+    std::thread::sleep(Duration::from_millis(600));
+
+    // A second controller is refused while the first holds it.
+    let second = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--session", &session, "pane", "control", &pane])
+        .env("XDG_CONFIG_HOME", config_home())
+        .output()
+        .expect("second controller");
+    assert!(
+        !second.status.success(),
+        "two controllers were allowed at once"
+    );
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        said.contains("takeover"),
+        "the refusal did not say how to replace it: {said}"
+    );
+
+    // Typing through the stream reaches the program.
+    let mut stdin = driver.stdin.take().expect("stdin");
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({"input": "printf zzDRIVEN\r"})
+    )
+    .expect("write");
+    stdin.flush().expect("flush");
+    assert!(
+        client.wait_for("zzDRIVEN", START),
+        "what was typed through the stream never reached the pane\n{}",
+        client.drawn()
+    );
+
+    // And letting go hands it back, so the next caller is not refused.
+    writeln!(stdin, "{}", serde_json::json!({"release": true})).expect("write");
+    stdin.flush().expect("flush");
+    drop(stdin);
+    let _ = driver.wait();
+    std::thread::sleep(Duration::from_millis(600));
+    let mut third = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--session", &session, "pane", "observe", &pane])
+        .env("XDG_CONFIG_HOME", config_home())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn after release");
+    std::thread::sleep(Duration::from_millis(600));
+    let _ = third.kill();
+    let out = third.wait_with_output().expect("output");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("\"open\""),
+        "the pane was not given back: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    drop(client);
+    end(&session);
+}
+
+#[test]
+fn a_reader_that_stops_reading_is_dropped_rather_than_holding_the_session() {
+    // One stalled observer must not be able to stop the loop that owns every
+    // other pane. The write timeout turns a full pipe into an error and the
+    // watcher is dropped on it; this is the test that says so, because the
+    // failure it prevents is the whole session going quiet.
+    let session = unique("slow");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+
+    let watcher = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(["--session", &session, "pane", "observe", &pane])
+        .env("XDG_CONFIG_HOME", config_home())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn observer");
+    std::thread::sleep(Duration::from_millis(600));
+
+    // Stopped, not killed: a killed process closes its socket and is dropped
+    // immediately, which is the easy case. A stopped one holds the connection
+    // open and never drains it, which is the case that could stall the loop.
+    unsafe { libc::kill(watcher.id() as i32, libc::SIGSTOP) };
+
+    // Enough output to fill anything buffering it.
+    for _ in 0..40 {
+        let (ok, _) = ask(&session, &["pane", "run", &pane, "seq", "1", "500"]);
+        assert!(
+            ok,
+            "the session stopped answering while a reader was stalled"
+        );
+    }
+
+    // The session is still answering, promptly, with a stalled reader attached.
+    let began = Instant::now();
+    let (ok, out) = ask(&session, &["session", "info"]);
+    assert!(ok, "the session stopped answering: {out}");
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "answering took {:?} with one stalled reader",
+        began.elapsed()
+    );
+
+    unsafe { libc::kill(watcher.id() as i32, libc::SIGKILL) };
+    let mut watcher = watcher;
+    let _ = watcher.wait();
+    drop(client);
+    end(&session);
+}

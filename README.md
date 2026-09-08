@@ -1176,6 +1176,36 @@ attached from owns that pane's size. One writer at a time — `--takeover`
 replaces the current one, because the usual reason for asking is that the other
 end is a terminal you have already closed.
 
+**`dirk pane observe` and `dirk pane control` are the same pane as data.**
+`pane read` answers with text at a moment, so anything that wants to follow a
+pane has to poll — and anything that wants to *render* one cannot, because the
+escapes are stripped and there is no stream.
+
+Both write newline-delimited JSON, one object per line, each carrying the
+terminal's own bytes base64'd, and both end with a record saying why: a stream
+that simply stops is indistinguishable from a connection that dropped, and those
+mean opposite things to whatever is reading.
+
+`observe` takes nothing. Any number of readers can watch one pane, none of them
+owns it, none of them changes its size, and none of them takes it from whoever
+is typing — a recorder and a bridge can both watch the same shell. `control` is
+the same stream plus commands read from standard input:
+
+```console
+$ echo '{"input": "make check\r"}' | dirk pane control w7:p12
+$ echo '{"scroll": 2}'              # two pages back through what has gone past
+$ echo '{"resize": {"rows": 40, "cols": 120}}'
+$ echo '{"release": true}'          # hand the pane back
+```
+
+One controller at a time, `--takeover` to replace it. A reader that stops
+reading is dropped rather than allowed to hold up the session that owns every
+other pane.
+
+This is the honest version of a plugin API. Somebody who wants to build a
+different front end for dirk needs bytes out and bytes in, not a manifest
+format.
+
 `dirk session notify <target> <text>` puts a build, a deploy or a cron job
 through the same path an agent's blocking takes, and therefore through the same
 rules: nothing about the workspace you are looking at, not more often than the

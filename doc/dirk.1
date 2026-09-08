@@ -47,6 +47,24 @@ A session on standard input and output. What
 .B \-\-remote
 runs on the far side.
 .
+.SS Watching one pane
+.TP
+.B pane observe \fIPANE\fR
+Stream that pane as newline-delimited JSON: one object per line carrying the
+terminal's bytes base64\(aqd, and a closing record saying why it stopped. Takes
+nothing \(em any number of readers, none owning the pane or its size.
+.TP
+.B pane control \fIPANE\fR \fR[\fB\-\-takeover\fR]
+The same stream, plus commands on standard input:
+.B {"input": "..."}
+,
+.B {"scroll": \fIN\fB}
+(positive is backwards),
+.B {"resize": {"rows": \fIN\fB, "cols": \fIN\fB}}
+and
+.B {"release": true}\fR.
+One controller at a time.
+.
 .SS Asking a running session
 From a shell or from inside a pane. Answers are JSON, including the failures,
 because the caller is a program and prose on standard error is not something a

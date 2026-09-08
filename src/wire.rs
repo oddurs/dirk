@@ -178,6 +178,15 @@ pub struct Watch {
     /// have already closed, so refusing outright would leave a pane nobody can
     /// reach until the session is restarted.
     pub takeover: bool,
+    /// Watch without owning: no input, no say over the size, and any number at
+    /// once.
+    ///
+    /// The difference between a terminal for a pane and a window onto one. A
+    /// recorder, a bridge or a second pair of eyes wants the second, and making
+    /// them take the pane away from whoever is typing in it would mean only one
+    /// of those things could exist at a time.
+    #[serde(default)]
+    pub observe: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
