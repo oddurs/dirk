@@ -577,7 +577,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "session.info",
         args: "",
-        answer: "version, workspaces, layouts, clients, attached",
+        answer: "version, workspaces, layouts, clients, attached, waiting",
     },
     Command {
         name: "session.commands",

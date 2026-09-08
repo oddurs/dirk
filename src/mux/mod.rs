@@ -47,10 +47,7 @@ pub enum Ev {
     /// Answered on the loop that owns the state rather than from the socket
     /// thread, so a command sees the session between frames rather than halfway
     /// through one.
-    Command(
-        crate::wire::Request,
-        std::sync::mpsc::SyncSender<crate::wire::Reply>,
-    ),
+    Command(crate::wire::Request, crate::wire::Answer),
     /// The id is unused while dirk redraws whole frames; it is what a
     /// damage-tracked renderer would key on.
     Output(#[allow(dead_code)] PaneId),

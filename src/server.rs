@@ -283,13 +283,13 @@ fn client(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>) {
         Kind::Watch => watch(out, reader, tx, &body),
         Kind::Command => {
             let mut out = out;
-            if answer(&mut out, &tx, &body).is_err() {
+            if answer(&mut out, &reader, &tx, &body).is_err() {
                 return;
             }
             // The connection stays open for more, so a caller making several
             // requests pays for one connection rather than one each.
             while let Ok(Some((Kind::Command, body))) = wire::recv(&mut reader) {
-                if answer(&mut out, &tx, &body).is_err() {
+                if answer(&mut out, &reader, &tx, &body).is_err() {
                     return;
                 }
             }
@@ -397,20 +397,94 @@ fn next_client_id() -> u64 {
 ///
 /// Answered there rather than here so a command sees the session between
 /// frames, never halfway through one.
-fn answer(out: &mut UnixStream, tx: &Sender<Ev>, body: &[u8]) -> io::Result<()> {
+fn answer(
+    out: &mut UnixStream,
+    reader: &UnixStream,
+    tx: &Sender<Ev>,
+    body: &[u8],
+) -> io::Result<()> {
     let reply = match serde_json::from_slice::<wire::Request>(body) {
         Ok(req) => {
             let (back, wait) = std::sync::mpsc::sync_channel(1);
-            match tx.send(Ev::Command(req, back)) {
-                Ok(()) => wait
-                    .recv()
-                    .unwrap_or_else(|_| wire::Reply::err("the session went away")),
+            let (answer, caller) = wire::Answer::pair(back);
+            match tx.send(Ev::Command(req, answer)) {
+                Ok(()) => await_reply(&wait, reader, caller)?,
                 Err(_) => wire::Reply::err("the session went away"),
             }
         }
         Err(e) => wire::Reply::err(format!("not a request: {e}")),
     };
     wire::send_json(out, Kind::Reply, &reply)
+}
+
+/// How often a thread waiting on the session looks up to see if its caller is
+/// still there. Cheap: one syscall, and only while an answer is outstanding.
+const LOOK_UP: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Wait for the session's answer, or for the caller to stop wanting it.
+///
+/// `pane wait-output` with no `--timeout` waits for as long as it takes, which
+/// is what it is for. Before this, a caller that gave up — Ctrl-C, or the
+/// script that ran it dying — left the thread blocked here for the life of the
+/// session, holding its socket, and left the session holding a question it
+/// re-examined on every turn of its loop for an answer nobody would read.
+///
+/// So the wait is in steps, and between them the socket is asked whether the
+/// far end is still open. Returning drops `caller`, which is how the session
+/// finds out.
+fn await_reply(
+    wait: &std::sync::mpsc::Receiver<wire::Reply>,
+    reader: &UnixStream,
+    caller: std::sync::Arc<()>,
+) -> io::Result<wire::Reply> {
+    loop {
+        match wait.recv_timeout(LOOK_UP) {
+            Ok(reply) => return Ok(reply),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Ok(wire::Reply::err("the session went away"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if hung_up(reader) {
+                    drop(caller);
+                    return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+                }
+            }
+        }
+    }
+}
+
+/// Has the far end of this connection closed?
+///
+/// Peeked rather than read: anything already there is the caller's next
+/// request, and this connection stays open for more. Zero bytes is the end of
+/// the stream and nothing else is — `WouldBlock` is an idle caller, which is
+/// the ordinary state of one that is waiting.
+///
+/// `libc::recv` rather than `UnixStream::peek`, which is still unstable, and
+/// `MSG_DONTWAIT` rather than a read timeout: the timeout is a property of the
+/// socket, so setting one here would mean putting it back before the blocking
+/// read that follows, and forgetting to would end that read early.
+fn hung_up(sock: &UnixStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut byte = [0u8; 1];
+    // SAFETY: the descriptor belongs to `sock` and outlives the call; the
+    // buffer is ours and the length passed is its own.
+    let seen = unsafe {
+        libc::recv(
+            sock.as_raw_fd(),
+            byte.as_mut_ptr().cast(),
+            byte.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    match seen {
+        0 => true,
+        n if n > 0 => false,
+        _ => !matches!(
+            io::Error::last_os_error().kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ),
+    }
 }
 
 /// Ask a running session something, from outside it.

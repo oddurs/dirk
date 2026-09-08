@@ -2,7 +2,7 @@
 id: 178
 title: An abandoned wait leaks a thread and a socket
 type: bug
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
@@ -63,7 +63,43 @@ open for more.
 
 ## Acceptance criteria
 
-- [ ] A client that dies while waiting releases the thread, the socket and the
+- [x] A client that dies while waiting releases the thread, the socket and the
       held question
-- [ ] `App::waits` does not grow across abandoned calls
-- [ ] A test that abandons a wait and asserts the session lets go of it
+- [x] `App::waits` does not grow across abandoned calls
+- [x] A test that abandons a wait and asserts the session lets go of it
+
+## 2026-09-08
+
+Both ends, as the item guessed, and neither is enough alone.
+
+The socket thread waits in steps now instead of one indefinite `recv`, and
+between them asks the connection whether the far end is still open — one
+`recv` with `MSG_PEEK | MSG_DONTWAIT`, peeked rather than read because anything
+already there is the caller's next request and the connection stays open for
+more. `UnixStream::peek` would have said it in one line and is still unstable;
+a read timeout would have meant putting the socket's timeout back before the
+blocking read that follows, and forgetting to would end that read early.
+
+The session end needed something the sender could not tell it. A `SyncSender`
+learns its receiver has gone only by sending, and a question with no answer yet
+has nothing to send — so a caller that walked away was invisible. `wire::Answer`
+carries a token instead: the caller holds one end of it for exactly as long as
+it is waiting, and holding the last reference is what "nobody wants this" means.
+`settle()` asks that before it decides anything, because deciding a question for
+nobody is work done on every turn of the loop for the life of the session.
+
+`session info` reports `waiting` now. It is the same kind of fact as the other
+counts, it is the first thing to look at when a script seems hung, and it is
+what made this testable: the test starts a wait as its own process, kills it,
+and watches the count go back to zero. A thread on `Command::output` cannot be
+abandoned, so only a process would do.
+
+Measured the way it was found. Five clients waiting take the session from four
+threads to nine; four seconds after killing all five it is back to four.
+
+    before:                 4
+    while 5 wait:           9
+    4s after killing them:  4
+
+And checked the other way round: with the `settle()` guard disabled the test
+fails, so it is testing the fix rather than the weather.

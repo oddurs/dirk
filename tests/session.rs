@@ -4643,3 +4643,80 @@ fn turning_the_history_off_takes_away_what_was_already_kept() {
     );
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Start a request as its own process, so it can be killed rather than waited
+/// for.
+///
+/// `ask_later` runs on a thread, and a thread blocked in `Command::output` is
+/// not something a test can abandon. A caller giving up is the whole subject
+/// here, and only a process can give up.
+fn ask_and_abandon(session: &str, args: &[&str]) -> std::process::Child {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"));
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.args(["--session", session])
+        .args(args)
+        .env("XDG_CONFIG_HOME", config_home())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("run dirk")
+}
+
+/// How many questions the session is holding.
+fn waiting(session: &str) -> usize {
+    let (ok, out) = ask(session, &["session", "info"]);
+    assert!(ok, "session info failed: {out}");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+    v["waiting"].as_u64().expect("a waiting count") as usize
+}
+
+/// Poll until it is true, or give up and say what it was.
+fn until(what: &str, mut f: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if f() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    panic!("{what}");
+}
+
+#[test]
+fn a_caller_that_gives_up_is_not_waited_for() {
+    // `pane wait-output` with no `--timeout` waits for as long as it takes,
+    // which is what it is for -- and a caller that gave up used to leave the
+    // session holding the question for the rest of its life, re-deciding it on
+    // every turn of the loop, with a thread and a socket parked behind it.
+    //
+    // Ctrl-C on a script is the ordinary way to produce this, and a script
+    // written to time itself out produces it every time it does.
+    let session = unique("gaveup");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = ids(&list).first().expect("a pane").clone();
+    assert_eq!(waiting(&session), 0, "something was already waiting");
+
+    let mut gone = ask_and_abandon(
+        &session,
+        &["pane", "wait-output", &pane, "zzz-never-happens-zzz"],
+    );
+    until("the wait was never taken up", || waiting(&session) == 1);
+
+    // The caller gives up. Nothing tells the session; it has to notice.
+    let _ = gone.kill();
+    let _ = gone.wait();
+    until("the session kept a question nobody was waiting for", || {
+        waiting(&session) == 0
+    });
+}
