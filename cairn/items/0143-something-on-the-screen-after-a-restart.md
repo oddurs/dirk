@@ -28,9 +28,9 @@ that to disk is a decision the person running it should make deliberately. The
 documentation says so where the setting is, not in a footnote.
 
 ## Acceptance criteria
-- [ ] `[session] pane_history = false` by default
-- [ ] A bounded tail per pane, written beside the session file
-- [ ] Restored panes paint it before the new shell starts
-- [ ] The rail or the pane marks it as history, not live output
-- [ ] Turning it off deletes what was already stored
-- [ ] The security trade-off documented at the setting
+- [x] `[session] pane_history = false` by default
+- [x] A bounded tail per pane, written beside the session file
+- [x] Restored panes paint it before the new shell starts
+- [x] The rail or the pane marks it as history, not live output
+- [x] Turning it off deletes what was already stored
+- [x] The security trade-off documented at the setting

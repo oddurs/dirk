@@ -1370,6 +1370,10 @@ pub struct Change {
 /// reading the last rows of the grid answers with blank lines — which is what
 /// `pane read` did, and what the blocked check did before it was fixed for the
 /// same reason.
+pub fn screen_text(pane: &Pane, lines: u16) -> Option<String> {
+    viewport(pane, lines)
+}
+
 fn viewport(pane: &Pane, lines: u16) -> Option<String> {
     let term = pane.term.lock().ok()?;
     let screen = term.screen();

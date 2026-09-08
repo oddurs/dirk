@@ -4496,3 +4496,177 @@ fn a_move_that_cannot_happen_is_refused_rather_than_attempted() {
 
     drop(client);
 }
+
+#[test]
+fn what_a_pane_last_said_can_come_back_with_it() {
+    // The shape without the output is a set of empty shells. What was on the
+    // screen -- the error, the summary you had not copied -- is usually the
+    // reason you were coming back at all.
+    let home = config_home().join("history-on");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("dirk")).expect("config dir");
+    std::fs::write(
+        home.join("dirk").join("config.toml"),
+        "[session]\npane_history = true\n",
+    )
+    .expect("config");
+
+    let session = unique("history");
+    let spawn = || {
+        let home = home.clone();
+        Client::spawn(&session, COLS, ROWS, &move |cmd| {
+            cmd.env("XDG_CONFIG_HOME", &home);
+        })
+    };
+
+    let client = spawn();
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let (ok, why) = ask(&session, &["pane", "run", &pane, "printf", "zzTRACE"]);
+    assert!(ok, "pane run failed: {why}");
+    assert!(
+        client.wait_for("zzTRACE", START),
+        "the pane never printed it\n{}",
+        client.drawn()
+    );
+
+    // Written when the session is, so give it a shape change to write on.
+    let (ok, _) = ask(&session, &["workspace", "rename", &first_id(&list), "kept"]);
+    assert!(ok, "rename failed");
+    drop(client);
+    end(&session);
+
+    let back = spawn();
+    assert!(back.wait_for(READY, START), "did not come back");
+    assert!(
+        back.wait_for("zzTRACE", START),
+        "what the pane last said did not come back\n{}",
+        back.drawn()
+    );
+    // And it says where the past stops, or it is a screenful pretending to be
+    // live -- which is the thing this was argued against being.
+    assert!(
+        back.drawn().contains("history"),
+        "nothing marked it as history\n{}",
+        back.drawn()
+    );
+
+    drop(back);
+    end(&session);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_pane_says_nothing_from_before_unless_it_was_asked_to() {
+    // Off, and off is the default: a pane's output holds tokens and keys and
+    // whatever was in the environment when something printed a debug line.
+    let session = unique("nohistory");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let (ok, why) = ask(&session, &["pane", "run", &pane, "printf", "zzSECRET"]);
+    assert!(ok, "pane run failed: {why}");
+    assert!(
+        client.wait_for("zzSECRET", START),
+        "the pane never printed it"
+    );
+    let (ok, wslist) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let (ok, _) = ask(
+        &session,
+        &["workspace", "rename", &first_id(&wslist), "kept"],
+    );
+    assert!(ok, "rename failed");
+    drop(client);
+    end(&session);
+
+    // Nothing on disk, and nothing on the screen.
+    let stored = config_home()
+        .join("dirk")
+        .join("sessions")
+        .join(format!("{session}.history.json"));
+    assert!(
+        !stored.exists(),
+        "a history file was written with the setting off: {}",
+        stored.display()
+    );
+
+    let back = Client::attach(&session);
+    assert!(back.wait_for(READY, START), "did not come back");
+    assert!(
+        back.wait_until(START, |c| c.drawn().contains("kept")),
+        "the session did not come back at all\n{}",
+        back.drawn()
+    );
+    assert!(
+        !back.drawn().contains("zzSECRET"),
+        "output came back with the setting off\n{}",
+        back.drawn()
+    );
+
+    drop(back);
+    end(&session);
+}
+
+#[test]
+fn turning_the_history_off_takes_away_what_was_already_kept() {
+    // Otherwise "off" describes the future and not the file, which is not what
+    // somebody turning it off is asking for.
+    let home = config_home().join("history-off");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("dirk")).expect("config dir");
+    let cfg = home.join("dirk").join("config.toml");
+    std::fs::write(&cfg, "[session]\npane_history = true\n").expect("config");
+
+    let session = unique("histoff");
+    let spawn = || {
+        let home = home.clone();
+        Client::spawn(&session, COLS, ROWS, &move |cmd| {
+            cmd.env("XDG_CONFIG_HOME", &home);
+        })
+    };
+    let stored = home
+        .join("dirk")
+        .join("sessions")
+        .join(format!("{session}.history.json"));
+
+    let client = spawn();
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let (ok, _) = ask(&session, &["workspace", "rename", &first_id(&list), "kept"]);
+    assert!(ok, "rename failed");
+    drop(client);
+    end(&session);
+    assert!(
+        stored.exists(),
+        "nothing was kept with the setting on: {}",
+        stored.display()
+    );
+
+    // Off, and a reason to write the session again.
+    std::fs::write(&cfg, "[session]\npane_history = false\n").expect("config");
+    let back = spawn();
+    assert!(back.wait_for(READY, START), "did not come back");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let (ok, _) = ask(
+        &session,
+        &["workspace", "rename", &first_id(&list), "later"],
+    );
+    assert!(ok, "rename failed");
+    drop(back);
+    end(&session);
+
+    assert!(
+        !stored.exists(),
+        "turning it off left what was already kept: {}",
+        stored.display()
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}

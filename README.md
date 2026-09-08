@@ -457,6 +457,21 @@ draw them at. A reference dirk cannot use — a harness with no template, a
 reference the harness has forgotten — restores a shell, which is what every
 restored pane used to be. `[session] resume_agents = false` turns it off.
 
+**What the pane last said, if you ask for it.** The shape without the output is
+a set of empty shells, and the error you were reading is usually why you came
+back. `[session] pane_history = true` keeps each pane's last screen and paints
+it into the pane that replaces it, under a rule saying where the past stops --
+because a screenful with nothing behind it is worse than an empty pane unless it
+says so.
+
+It is off, and it stays off unless you turn it on. A pane's output holds
+whatever went past in it: a token echoed by a failed request, keys from an
+environment somebody dumped while debugging, a file that should not have been
+catted. Turning this on writes that to `sessions/<name>.history.json` in plain
+text. That is a fair trade on a machine you alone use and a poor one on a shared
+host, and dirk cannot tell which it is on. Turning it off again deletes what was
+already kept.
+
 **Rank one is worth installing, so dirk installs it.** `install` adds two
 entries to the harness's own settings file and `uninstall` takes exactly those
 two back out; everything else in the file, including your other hooks and the
@@ -747,6 +762,8 @@ headless_rows = 24
 
 [session]
 resume_agents = true         # start a restored agent on the conversation it had
+pane_history = false         # keep each pane's last screen and paint it back;
+                             # off, because that output is written to disk
 
 # A non-login shell on macOS never reads /etc/zprofile, so it never runs
 # path_helper or Homebrew's initialisation — and PATH inside a pane was missing

@@ -29,6 +29,21 @@
 //! A name that naming worked out is kept along with whether it was held, so a
 //! session comes back reading the way it read — and a name you wrote by hand is
 //! still yours after a restart.
+//!
+//! ## What a pane last said
+//!
+//! The paragraph above says a screenful of text with nothing behind it is worse
+//! than an empty pane, and that is still true of text pretending to be live.
+//! What changed is that it need not pretend: history is painted with a rule
+//! under it saying where it ends, so the thing you can type into begins below a
+//! line that says so.
+//!
+//! It is off by default and stays off. A pane's output holds tokens, keys and
+//! whatever was in the environment when something printed a debug line, and
+//! writing that to disk is a decision for the person running dirk rather than
+//! one made for them. It also lives in its own file: the session file is small,
+//! read at every start, and worth keeping free of the one part of this that is
+//! a secret.
 
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -37,6 +52,27 @@ use std::path::{Path, PathBuf};
 /// On-disk format. A session written by a version that knew more than this one
 /// is not read, rather than half-read.
 const VERSION: u32 = 1;
+
+/// The most lines of one pane that are kept.
+///
+/// A screenful and a little more. What this is for is the error you were
+/// reading and the summary you had not copied, both of which were on the screen
+/// when you left; a scrollback's worth would be a different feature with a
+/// different argument about what it costs to store.
+const HISTORY_LINES: u16 = 200;
+
+/// What each pane last said, when the setting asks for it.
+///
+/// Its own file, keyed positionally against the session written beside it:
+/// project, then workspace, then tab. The two are written together, so the
+/// indices line up; if they ever do not, the miss is silent and a pane simply
+/// comes back empty, which is what it did before this existed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct History {
+    pub version: u32,
+    /// Per project, per workspace, per tab: what the focused pane last showed.
+    pub projects: Vec<Vec<Vec<String>>>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Saved {
@@ -96,9 +132,83 @@ pub fn path(base: &Path, session: &str) -> PathBuf {
         .join(format!("{session}.json"))
 }
 
+/// Where a session's history is written: beside the session, not inside it.
+pub fn history_path(base: &Path, session: &str) -> PathBuf {
+    base.join("dirk")
+        .join("sessions")
+        .join(format!("{session}.history.json"))
+}
+
 /// Where sessions live by default.
 pub fn base() -> PathBuf {
     crate::config::config_home()
+}
+
+/// Write the history out, or take it away when it is not wanted.
+///
+/// Turning the setting off deletes what was already stored rather than merely
+/// stopping the writing. Leaving it on disk would mean "off" describes the
+/// future and not the file, which is not what somebody turning it off is
+/// asking for.
+pub fn save_history(base: &Path, session: &str, history: Option<&History>) {
+    let target = history_path(base, session);
+    let Some(h) = history else {
+        let _ = std::fs::remove_file(&target);
+        return;
+    };
+    let Some(dir) = target.parent() else { return };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    // Not atomic, and deliberately not. This is a convenience, and half a
+    // history is worth nothing to protect: the session file next to it is what
+    // must survive, and it has its own rename.
+    if let Ok(body) = serde_json::to_vec(h) {
+        let _ = std::fs::write(&target, body);
+    }
+}
+
+/// Read it back, or nothing at all.
+///
+/// Any failure is nothing rather than an error. A history that cannot be read
+/// costs a pane its opening screen; a session that cannot be read costs the
+/// arrangement, and only the second is worth stopping for.
+pub fn read_history(base: &Path, session: &str) -> Option<History> {
+    let body = std::fs::read(history_path(base, session)).ok()?;
+    let h: History = serde_json::from_slice(&body).ok()?;
+    (h.version == VERSION).then_some(h)
+}
+
+/// What every pane is showing now, in the order `current` writes the session.
+///
+/// The two walk the same tree in the same order, which is what lets the file
+/// beside the session be positional instead of carrying a second copy of every
+/// name to match itself up by.
+pub fn history_of(session: &crate::mux::Session) -> History {
+    History {
+        version: VERSION,
+        projects: session
+            .projects
+            .iter()
+            .map(|p| {
+                p.workspaces
+                    .iter()
+                    .map(|w| {
+                        w.tabs
+                            .iter()
+                            .map(|t| {
+                                t.pane(t.focus)
+                                    .and_then(|pane| {
+                                        crate::mux::session::screen_text(pane, HISTORY_LINES)
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect(),
+    }
 }
 
 /// Write it out, atomically.
