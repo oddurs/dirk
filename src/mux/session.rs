@@ -228,6 +228,36 @@ impl Workspace {
     /// Where every pane goes, in draw order.
     /// The tab on screen. Never `None`: a workspace with no tabs is closed
     /// rather than kept, so the index is always one that exists.
+    /// A workspace with one tab holding one pane.
+    ///
+    /// Every workspace starts this way, whether the pane was just spawned or
+    /// has been moved out of somewhere else — so there is one place that says
+    /// what a new one is, rather than two that agree today.
+    pub fn around(id: u64, label: String, at: PathBuf, tab_id: u64, pane: Pane) -> Workspace {
+        Workspace {
+            id,
+            label,
+            at,
+            state: crate::agent::State::None,
+            seen: true,
+            notified: None,
+            state_since: Instant::now(),
+            intent_since: Instant::now(),
+            intent: None,
+            suggested: None,
+            asked: None,
+            turns: 0,
+            touched: Instant::now(),
+            reported: None,
+            source: crate::agent::Source::None,
+            agent_session: None,
+            expanded: false,
+            tabs: vec![Tab::new(tab_id, pane)],
+            tab: 0,
+            naming: NameState::default(),
+        }
+    }
+
     pub fn here(&self) -> &Tab {
         let at = self.tab.min(self.tabs.len().saturating_sub(1));
         &self.tabs[at]
@@ -660,28 +690,8 @@ impl Session {
         let tab_id = self.id();
         let proj = self.projects.get_mut(p)?;
         proj.expanded = true;
-        proj.workspaces.push(Workspace {
-            id,
-            label: name,
-            at: path.clone(),
-            state: crate::agent::State::None,
-            seen: true,
-            notified: None,
-            state_since: Instant::now(),
-            intent_since: Instant::now(),
-            intent: None,
-            suggested: None,
-            asked: None,
-            turns: 0,
-            touched: Instant::now(),
-            reported: None,
-            source: crate::agent::Source::None,
-            agent_session: None,
-            expanded: false,
-            tabs: vec![Tab::new(tab_id, pane)],
-            tab: 0,
-            naming: NameState::default(),
-        });
+        proj.workspaces
+            .push(Workspace::around(id, name, path.clone(), tab_id, pane));
         self.focus = Focus::Ws {
             p,
             w: proj.workspaces.len() - 1,
@@ -947,43 +957,9 @@ impl Session {
             return;
         }
 
-        for p in 0..self.projects.len() {
-            for w in 0..self.projects[p].workspaces.len() {
-                let ws = &mut self.projects[p].workspaces[w];
-                let Some(t) = ws.holding(id) else { continue };
-                let Some(k) = ws.tabs[t].panes.iter().position(|x| x.id == id) else {
-                    continue;
-                };
-                ws.tabs[t].panes.remove(k);
-                let empty = ws.tabs[t].tree.remove(id);
-
-                // A tab with nothing in it goes; a workspace with no tabs goes
-                // with it. Keeping an empty one would be a row in the nav you
-                // can select and that draws nothing.
-                if empty || ws.tabs[t].panes.is_empty() {
-                    ws.tabs.remove(t);
-                    ws.tab = ws.tab.min(ws.tabs.len().saturating_sub(1));
-                }
-                if ws.tabs.is_empty() {
-                    let at = self.projects[p].workspaces.remove(w).at;
-                    // A checkout with no spaces left in it is not worth asking
-                    // git about every fifteen seconds -- and once the worktree
-                    // is removed on disk, it is a directory that is not there.
-                    if !self.projects[p].workspaces.iter().any(|x| x.at == at) {
-                        self.projects[p].checkouts.retain(|c| c.path != at);
-                    }
-                    if self.projects[p].workspaces.is_empty() {
-                        self.projects.remove(p);
-                    }
-                    self.refocus();
-                    return;
-                }
-                let ws = &mut self.projects[p].workspaces[w];
-                ws.refocus();
-                ws.settle_zoom();
-                return;
-            }
-        }
+        // Taken out and dropped, which is what reaping is. Moving one is the
+        // same removal with the pane kept, so both go through one path.
+        self.take_pane(id);
     }
 
     /// Which workspace holds this pane, if any still does.
@@ -1602,6 +1578,17 @@ pub fn content_of(ruled: bool, r: Rect) -> Rect {
     }
 }
 
+/// Where a pane is being moved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Move {
+    /// An existing tab, anywhere in the session.
+    Tab(u64),
+    /// A new tab in the workspace it is already in.
+    NewTab,
+    /// A workspace of its own, in the same checkout.
+    NewWorkspace,
+}
+
 /// The bytes one prompt is submitted as.
 ///
 /// Bracketed when the program has asked for bracketed paste, which is what makes
@@ -2102,6 +2089,157 @@ impl Session {
             }
             _ => false,
         }
+    }
+
+    /// Take a pane out of a workspace, keeping it.
+    ///
+    /// The `Pane` itself moves — its pty, its scrollback, its agent identity
+    /// and the process inside it all travel with it, because none of them are
+    /// stored anywhere else. What changes is which tab's arena holds it.
+    ///
+    /// Boards are not included on purpose: a board's panels are its shape, and
+    /// taking one out would leave an arrangement nobody described.
+    ///
+    /// The tab it leaves is closed if that emptied it, and the workspace with
+    /// it if that was its last tab: a tab with no panes is a row in the nav you
+    /// can select and that draws nothing.
+    fn take_pane(&mut self, id: PaneId) -> Option<Pane> {
+        for p in 0..self.projects.len() {
+            for w in 0..self.projects[p].workspaces.len() {
+                let ws = &mut self.projects[p].workspaces[w];
+                let Some(t) = ws.holding(id) else { continue };
+                let Some(k) = ws.tabs[t].panes.iter().position(|x| x.id == id) else {
+                    continue;
+                };
+                let pane = ws.tabs[t].panes.remove(k);
+                let empty = ws.tabs[t].tree.remove(id);
+
+                if empty || ws.tabs[t].panes.is_empty() {
+                    ws.tabs.remove(t);
+                    ws.tab = ws.tab.min(ws.tabs.len().saturating_sub(1));
+                }
+                if ws.tabs.is_empty() {
+                    let at = self.projects[p].workspaces.remove(w).at;
+                    // A checkout with no spaces left in it is not worth asking
+                    // git about every fifteen seconds -- and once the worktree
+                    // is removed on disk, it is a directory that is not there.
+                    if !self.projects[p].workspaces.iter().any(|x| x.at == at) {
+                        self.projects[p].checkouts.retain(|c| c.path != at);
+                    }
+                    if self.projects[p].workspaces.is_empty() {
+                        self.projects.remove(p);
+                    }
+                    self.refocus();
+                    return Some(pane);
+                }
+                let ws = &mut self.projects[p].workspaces[w];
+                ws.refocus();
+                ws.settle_zoom();
+                return Some(pane);
+            }
+        }
+        None
+    }
+
+    /// Move a pane to another tab, a new tab, or a workspace of its own.
+    ///
+    /// Answers where it ended up. The pane's own handle does not change —
+    /// dirk's pane ids are session-wide counters rather than per-workspace ones
+    /// — so anything already holding `p12` keeps working, including a wait. The
+    /// qualified form `w7:p12` does change, because the workspace half of it is
+    /// a statement about where the pane is.
+    pub fn move_pane(&mut self, id: PaneId, to: Move, area: Rect) -> Result<PaneId, String> {
+        let Some((from_p, from_w)) = crate::api::locate(self, id) else {
+            return Err("no such pane".into());
+        };
+        // Resolved before the pane is taken out: a destination that does not
+        // exist should cost nothing, and taking it out first would have closed
+        // its tab by the time we found out.
+        let dest = match to {
+            Move::Tab(tab_id) => {
+                let found = self.flat().into_iter().find_map(|(p, w)| {
+                    let ws = self.workspace(p, w)?;
+                    let at = ws.tabs.iter().position(|t| t.id == tab_id)?;
+                    Some((p, w, at))
+                });
+                match found {
+                    Some(at) => Some(at),
+                    None => return Err("no such tab".into()),
+                }
+            }
+            Move::NewTab | Move::NewWorkspace => None,
+        };
+        if let Some((p, w, at)) = dest
+            && (p, w) == (from_p, from_w)
+            && self.workspace(p, w).is_some_and(|ws| {
+                ws.tabs
+                    .get(at)
+                    .is_some_and(|t| t.panes.iter().any(|x| x.id == id))
+            })
+        {
+            return Err("that pane is already in that tab".into());
+        }
+        // The last pane of a workspace has nowhere to go that is not where it
+        // already is, and taking it out would close the workspace under it.
+        if matches!(to, Move::NewWorkspace)
+            && self
+                .workspace(from_p, from_w)
+                .is_some_and(|ws| ws.panes().len() == 1)
+        {
+            return Err("that is the workspace's only pane".into());
+        }
+
+        let at = self.workspace(from_p, from_w).map(|ws| ws.at.clone());
+        let Some(pane) = self.take_pane(id) else {
+            return Err("no such pane".into());
+        };
+        match to {
+            Move::Tab(_) => {
+                // Found again: taking the pane out may have closed a tab before
+                // this one and moved its index.
+                let Some((p, w, _)) = dest else {
+                    return Err("no such tab".into());
+                };
+                let Some(ws) = self.workspace_mut(p, w) else {
+                    return Err("no such tab".into());
+                };
+                let Move::Tab(tab_id) = to else {
+                    return Err("no such tab".into());
+                };
+                let Some(tab) = ws.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                    return Err("no such tab".into());
+                };
+                let target = tab.focus;
+                tab.tree.split(target, Dir::Cols, id);
+                tab.panes.push(pane);
+                tab.focus = id;
+            }
+            Move::NewTab => {
+                let tab_id = self.id();
+                let Some(ws) = self.workspace_mut(from_p, from_w) else {
+                    return Err("its workspace is gone".into());
+                };
+                ws.tabs.push(Tab::new(tab_id, pane));
+                ws.tab = ws.tabs.len() - 1;
+            }
+            Move::NewWorkspace => {
+                let at = at.unwrap_or_else(crate::config::home);
+                let p = self.open_project(&at);
+                let tab_id = self.id();
+                let ws_id = self.id();
+                let Some(proj) = self.projects.get_mut(p) else {
+                    return Err("nowhere to put it".into());
+                };
+                let label = proj.name.clone();
+                proj.workspaces
+                    .push(Workspace::around(ws_id, label, at, tab_id, pane));
+                let w = proj.workspaces.len() - 1;
+                self.focus = Focus::Ws { p, w };
+            }
+        }
+        self.resize_visible(area);
+        self.refocus();
+        Ok(id)
     }
 
     /// Close one pane by handle, wherever it is.

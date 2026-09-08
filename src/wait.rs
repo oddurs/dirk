@@ -199,11 +199,15 @@ impl Settled {
 
 /// Which options take a value. Everything else is a switch.
 ///
+/// The whole surface's, not only the waits': this parser is what every command
+/// with options reads its arguments with, and an option missing from here is
+/// one whose value silently becomes a positional word.
+///
 /// Named rather than guessed. A parser that gave every option the next word
 /// turned `--regex --timeout 30000` into a pattern of `--timeout`, a positional
 /// `30000`, and a wait with no deadline at all — which is to say it hung, in
 /// the one place a hang is hardest to notice.
-const VALUED: &[&str] = &["until", "timeout", "lines"];
+const VALUED: &[&str] = &["until", "timeout", "lines", "tab"];
 
 /// Read the options out of the words a caller sent.
 ///

@@ -1009,6 +1009,18 @@ $ dirk session commands          # the whole surface
 $ dirk api schema                # the same, as data, with no session running
 ```
 
+**A pane can move.** `dirk pane move <pane> --tab <tab>`, `--new-tab` or
+`--new-workspace` takes it somewhere else and keeps everything about it: the
+`Pane` itself travels, so its process, its scrollback and its agent identity go
+with it because none of them live anywhere else. Its own handle does not change
+either — dirk's pane ids are session-wide rather than per-workspace — so
+anything already holding `p12`, an outstanding wait included, keeps working. The
+answer carries the new qualified id and the previous one, because the workspace
+half of `w7:p12` is a statement about where the pane is.
+
+A tab emptied by the move is closed, and its workspace with it if that was the
+last one: an empty tab is a row you can select that draws nothing.
+
 **Three ways in, because they fail differently.** `pane run` writes a command
 and the return that submits it, in one write — two writes is two chances for a
 program reading slowly to see a bare newline and run half of what you typed.

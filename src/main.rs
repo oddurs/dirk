@@ -2612,6 +2612,50 @@ impl App {
                 }
             }
 
+            // A pane keeps its process, its scrollback and its agent identity
+            // across the move: the `Pane` itself travels, because none of
+            // those live anywhere else. Its handle does not change either —
+            // dirk's pane ids are session-wide — so anything already holding
+            // `p12`, a wait included, keeps working.
+            "pane.move" => {
+                let (words, opts) = wait::options(&req.args);
+                if let Some(bad) = wait::unknown(&opts, &["tab", "new-tab", "new-workspace"]) {
+                    return Reply::err(format!("pane.move takes no --{bad}"));
+                }
+                let Some(target) = words.first() else {
+                    return Reply::err("pane.move needs a pane");
+                };
+                let Some(id) = api::target_pane(&self.session, target) else {
+                    return Reply::err("no such pane");
+                };
+                let was = api::pane_id_of(&self.session, id);
+                let to = match opts
+                    .iter()
+                    .find(|(k, _)| k.starts_with("tab") || k.starts_with("new"))
+                {
+                    Some((k, v)) if k == "tab" => match api::parse_tab(v) {
+                        Some(tab) => mux::session::Move::Tab(tab),
+                        None => return Reply::err(format!("not a tab id: {v}")),
+                    },
+                    Some((k, _)) if k == "new-tab" => mux::session::Move::NewTab,
+                    Some(_) => mux::session::Move::NewWorkspace,
+                    None => {
+                        return Reply::err("pane.move needs --tab, --new-tab or --new-workspace");
+                    }
+                };
+                let area = self.content;
+                match self.session.move_pane(id, to, area) {
+                    Ok(moved) => Reply::ok(serde_json::json!({
+                        "pane": api::pane_id_of(&self.session, moved),
+                        // The workspace half of the id is a statement about
+                        // where the pane is, so a caller holding the old one
+                        // is told rather than left to find out.
+                        "previous": was,
+                    })),
+                    Err(why) => Reply::err(why),
+                }
+            }
+
             "pane.close" => {
                 let Some(id) = api::target_pane(&self.session, &arg(0)) else {
                     return Reply::err("no such pane");

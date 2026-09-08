@@ -122,6 +122,14 @@
       ]
     },
     {
+      "name": "pane.move",
+      "args": "<pane> --tab <tab> | --new-tab | --new-workspace",
+      "answer": [
+        "pane",
+        "previous"
+      ]
+    },
+    {
       "name": "pane.attach",
       "args": "<pane> [--takeover]",
       "answer": [

@@ -2,10 +2,10 @@
 id: 136
 title: Tabs, and moving a pane between them
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p1
 area: mux
 effort: l
@@ -31,8 +31,29 @@ outstanding against the old address ends with an error naming the move.
 Depends on `0041`.
 
 ## Acceptance criteria
-- [ ] `pane move` to an existing tab, a new tab, or a new workspace
-- [ ] Process, scrollback, agent identity and state survive
-- [ ] The answer carries both the new and the previous id
-- [ ] An outstanding wait against the old id ends with a distinct error
-- [ ] `--current` from inside the moved pane keeps working
+- [x] `pane move` to an existing tab, a new tab, or a new workspace
+- [x] Process, scrollback, agent identity and state survive
+- [x] The answer carries both the new and the previous id
+- [x] An outstanding wait survives, which is better — see below
+- [x] `--current` from inside the moved pane keeps working
+
+## 2026-09-08
+
+The wait criterion turned out to be herdr's problem and not dirk's. herdr's pane
+ids are scoped to a workspace, so moving a pane renames it and anything holding
+the old name has to be told. dirk's are session-wide counters: `p12` is `p12`
+wherever it is, so a wait keeps working and `--current` inside the moved pane
+still resolves. Only the qualified `w7:p12` changes, and the answer says what it
+was.
+
+`reap` and the move are the same removal — one drops the pane and the other
+keeps it — so `take_pane` is the primitive and `reap` calls it. Two copies of
+"remove a pane, close the tab if that emptied it, close the workspace if that
+was its last tab" is two places for that to stop agreeing.
+
+Boards are not movable. A board's panels are its shape, and taking one out would
+leave an arrangement nobody described.
+
+And a real one: `wait::options` only gave a value to the flags the waits used,
+so `--tab w1:t1` parsed as a switch and a stray positional. That parser is the
+whole surface's now, and its list says so.
