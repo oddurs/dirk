@@ -47,6 +47,7 @@ mod agent;
 mod api;
 mod client;
 mod clipboard;
+mod complete;
 mod config;
 mod copy;
 mod find;
@@ -240,6 +241,9 @@ fn main() -> io::Result<()> {
                     std::process::exit(1);
                 }
             },
+            // Not a noun: it is about setting the shell up rather than about a
+            // session, so it is answered below without one.
+            "completion" => break,
             other if NOUNS.contains(&other) => break,
             other => {
                 eprintln!("dirk: unrecognized option '{other}'");
@@ -349,6 +353,21 @@ fn main() -> io::Result<()> {
             "{}\n",
             serde_json::to_string_pretty(&api::schema()).unwrap_or_default()
         ));
+        return Ok(());
+    }
+
+    // Answered without a session for the same reason as the schema: the shell
+    // is being set up, not driven.
+    if words(&args).first() == Some(&"completion") {
+        let shell = words(&args).get(1).copied().unwrap_or_default();
+        match complete::script(shell) {
+            Some(text) => say(&text),
+            None => {
+                eprintln!("dirk: no completions for {shell:?}");
+                eprintln!("Try one of: {}", complete::SHELLS.join(", "));
+                std::process::exit(1);
+            }
+        }
         return Ok(());
     }
 

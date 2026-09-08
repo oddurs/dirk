@@ -96,6 +96,14 @@
     },
     {
       "answer": [
+        "pane",
+        "matched"
+      ],
+      "args": "<pane> <text...> [--regex] [--lines N] [--timeout MS]",
+      "name": "pane.wait-output"
+    },
+    {
+      "answer": [
         "closed"
       ],
       "args": "<pane>",

@@ -816,6 +816,11 @@ are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
 `--current` resolves from them — so a command from inside a pane reaches the
 session holding it without the caller looking anything up first.
 
+`dirk completion bash|zsh|fish` prints a completion script, generated from that
+same table. Ids complete too, by asking the running session — `w7:p12` is not a
+thing anybody remembers and it is the argument almost every command wants.
+`make install` puts them where each shell looks.
+
 `dirk api schema` prints the whole surface as JSON — every command, what it
 takes and which keys its answer carries — generated from the same table the
 skill and the completions are. It needs no running session, because a caller
