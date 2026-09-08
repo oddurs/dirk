@@ -2,7 +2,7 @@
 id: 92
 title: A space row leads with what it is, not with what it is doing
 type: feature
-status: backlog
+status: review
 milestone: v1.0
 created: 2026-09-07
 updated: 2026-09-07
@@ -34,6 +34,7 @@ thing above it -- which is what it is.
 
 ## Acceptance criteria
 - [ ] The first line is state, number, branch and git counts
-- [ ] The second line is the intent
-- [ ] A space with nothing to say for its second line draws one line
-- [ ] The short form keeps the identity line and drops the intent
+      — state, number and branch done here; the counts are 0093
+- [x] The second line is the intent
+- [x] A space with nothing to say for its second line draws one line
+- [x] The short form keeps the identity line and drops the intent

@@ -135,7 +135,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v1.0 — Production
 
-`####······` 38% · 9 of 24 done · due 2027-04-01
+`#####·····` 42% · 10 of 24 done · due 2027-04-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -149,8 +149,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
 - [ ] `0090` The documentation pages are a second copy of the README <sup>feature · p2 · web</sup>
-- [ ] `0091` A project is a repository, not a directory <sup>feature · p0 · nav</sup>
-- [ ] `0092` A space row leads with what it is, not with what it is doing <sup>feature · p0 · nav</sup>
 - [ ] `0093` How far ahead and behind a branch is <sup>feature · p1 · git</sup>
 - [ ] `0094` A worktree is drawn under the checkout it came from <sup>feature · p0 · nav</sup>
 - [ ] `0095` Rows say what they hold without being opened <sup>feature · p2 · nav</sup>
@@ -159,6 +157,7 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 ### in review
 
 - [ ] `0018` Release workflow and packaging <sup>chore · p1 · packaging · deferred-homebrew</sup>
+- [ ] `0092` A space row leads with what it is, not with what it is doing <sup>feature · p0 · nav</sup>
 
 ### done
 
@@ -170,5 +169,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0087` A design system the program cannot drift from <sup>feature · p1 · web</sup>
 - [x] `0088` Real terminal output, on the page <sup>feature · p2 · web</sup>
 - [x] `0089` GitHub Pages, deployed by the workflow <sup>chore · p1 · web</sup>
+- [x] `0091` A project is a repository, not a directory <sup>feature · p0 · nav</sup>
 - [x] `0099` A shot at a size you choose <sup>chore · p3 · web</sup>
 
