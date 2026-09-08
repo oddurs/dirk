@@ -210,6 +210,25 @@ cmd_ship() {
         fi
     fi
 
+    # And the milestone, if that item was the last thing in it. Same argument
+    # one level up: a milestone's status arrives on the trunk by merge, and a
+    # merge does not run cairn, so nothing on the other side would ever close
+    # it. The first `make lint` afterwards would then fail -- for whoever
+    # happened to push next, rather than for whoever finished the milestone.
+    #
+    # Run whatever the item did, because a branch that reopens something can
+    # complete a milestone too, and the script is the one that decides which.
+    if [ -x scripts/milestones ]; then
+        milestones=$(scripts/milestones 2>&1 || true)
+        if [ -n "$milestones" ]; then
+            printf '%s\n' "$milestones" >&2
+            if ! git diff --quiet -- cairn ROADMAP.md 2>/dev/null; then
+                git add cairn ROADMAP.md 2>/dev/null || true
+                git commit --quiet -m "cairn: a milestone finished with it"
+            fi
+        fi
+    fi
+
     cmd_check
 
     step "pushing $branch"
