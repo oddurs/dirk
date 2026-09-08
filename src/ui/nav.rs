@@ -772,6 +772,7 @@ pub fn render(
                     session,
                     selected: nav.selected == index && row.selectable(),
                     active: nav.active,
+                    intent_first: cfg.nav.leads_with_intent(),
                 },
             );
         }
@@ -812,6 +813,8 @@ struct Ctx<'a> {
     selected: bool,
     /// The nav holds the keyboard.
     active: bool,
+    /// Whether a space's one line says what it is doing rather than what it is.
+    intent_first: bool,
 }
 
 fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
@@ -1277,7 +1280,13 @@ fn space_row(buf: &mut Buffer, hits: &mut HitMap, cx: &Ctx, s: Space) {
     // outside a repository, or on a detached head, has only its label -- and
     // then the label is the most stable name it has rather than a caption of
     // something above it.
-    let branch = repo.map(|r| r.branch.as_str()).filter(|b| !b.is_empty());
+    let branch = repo
+        .map(|r| r.branch.as_str())
+        .filter(|b| !b.is_empty())
+        // With one checkout per project the branch is `main` on every row and
+        // says nothing; the label is the whole of what tells them apart. This
+        // is the row saying what it is *doing* instead of what it *is*.
+        .filter(|_| !cx.intent_first);
     // Where that branch stands, when there is anything to say. A count of zero
     // is not information -- the same rule the rail follows for the attention
     // counts -- so each side is drawn only when it is not zero, and a branch

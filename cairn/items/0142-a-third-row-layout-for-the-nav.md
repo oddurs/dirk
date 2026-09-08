@@ -2,10 +2,10 @@
 id: 142
 title: A third row layout for the nav
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p3
 area: nav
 effort: s
@@ -27,7 +27,24 @@ Pick the third arrangement worth having, name it, and document all three
 together so the choice is a choice rather than a search.
 
 ## Acceptance criteria
-- [ ] A third value for `rows`, named for what it shows
-- [ ] Column arithmetic exact in all three, at every sidebar width
-- [ ] All three documented in one table
-- [ ] No token composition mechanism
+- [x] A third value for `rows`, named for what it shows
+- [x] Column arithmetic exact in all three, at every sidebar width
+- [x] All three documented in one table
+- [x] No token composition mechanism
+
+## 2026-09-08
+
+The item described the two that existed before the nav redesign: it says `tall`
+gives a space its branch on a second line. It is the other way round now — the
+row *leads* with what the space is, which is its branch, and the second line is
+the caption saying what it is doing. `0092` made that change and this item
+predates it.
+
+So the third one worth having is the mirror of `short`: one line carrying what
+the space is *doing* rather than what it *is*. That is the arrangement for
+somebody whose projects are one checkout each, where every row says `main` and
+the branch is the column that carries nothing.
+
+One filter and no new drawing path: the row already chooses the label when there
+is no branch, so `intent` is that same row with the branch withheld. The column
+arithmetic is therefore the arithmetic that was already exact.

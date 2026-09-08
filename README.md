@@ -232,8 +232,16 @@ nothing is happening in it. That is also what tells an agent sitting idle apart
 from an empty shell, now that they are not listed separately.
 
 A folded project carries the worst state inside it and a count, so twenty repos
-fit on a screen and the one that is blocked still says so. `rows = "short"`
-drops the branch line, which is scenery — the worktree mark stays, because that
+fit on a screen and the one that is blocked still says so. `rows` picks one of three:
+
+| | |
+| --- | --- |
+| `tall` | two lines: what the space **is** on the first, what it is **doing** under it |
+| `short` | one line: what it is — its branch, or its name where there is no branch |
+| `intent` | one line: what it is **doing**, for projects whose one checkout makes every branch the same word |
+
+`short`
+drops the caption, which is scenery — the worktree mark stays, because that
 is what tells two rows wearing one repository's name apart.
 
 ## Tabs
@@ -769,7 +777,7 @@ window_title = "{workspace}"
 [nav]
 glyphs    = "unicode"        # unicode | ascii | round
 attention = "when-needed"    # when-needed | always | never
-rows      = "tall"           # tall gives a workspace its branch on a second line
+rows      = "tall"           # tall | short | intent
 
 [[project]]
 path  = "~/Code/dirk"

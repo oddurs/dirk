@@ -43,6 +43,39 @@ const READY: &str = "+ workspace";
 /// fails as "never started" and reads like a bug in dirk.
 const START: Duration = Duration::from_secs(30);
 
+/// A repository on a named branch, made for one test to read back.
+///
+/// One commit, because a branch with nothing on it is unborn and
+/// `rev-parse HEAD` has no answer for it. Identity comes from `-c` rather than
+/// from whoever the machine thinks is running: CI has no `user.email`, and a
+/// commit is what this needs to exist at all.
+fn a_repo_on(branch: &str) -> (std::path::PathBuf, String) {
+    let dir = std::env::temp_dir().join("dirk-smoke").join(format!(
+        "repo-{}-{}",
+        std::process::id(),
+        next_config_id()
+    ));
+    std::fs::create_dir_all(&dir).expect("repo dir");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=dirk", "-c", "user.email=dirk@example"])
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", branch]);
+    std::fs::write(dir.join("a-file"), "one line\n").expect("a file");
+    git(&["add", "a-file"]);
+    git(&["commit", "-qm", "one"]);
+    (dir, branch.to_string())
+}
+
 /// Unique per config directory, so concurrent tests do not share one.
 fn next_config_id() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -159,17 +192,34 @@ impl Harness {
     /// Each call gets its own config directory, so a test that needs a layout
     /// does not change what every other test sees.
     fn start_with_config(config: &str) -> Self {
-        let dir = std::env::temp_dir().join("dirk-smoke").join(format!(
+        Self::start_where(config, None)
+    }
+
+    /// Start dirk somewhere other than this checkout.
+    ///
+    /// A row that says which branch it is on needs a branch to say, and CI
+    /// checks this code out on a detached HEAD -- so the repository the tests
+    /// run *in* cannot be the one they run *on*. A test that cares makes its
+    /// own, and this points dirk at it.
+    fn start_in(dir: &std::path::Path, config: &str) -> Self {
+        Self::start_where(config, Some(dir))
+    }
+
+    fn start_where(config: &str, cwd: Option<&std::path::Path>) -> Self {
+        let home = std::env::temp_dir().join("dirk-smoke").join(format!(
             "{}-{}",
             std::process::id(),
             next_config_id()
         ));
-        std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
-        std::fs::write(dir.join("dirk").join("config.toml"), isolated(config)).expect("config");
-        Self::start_with(Some(dir))
+        std::fs::create_dir_all(home.join("dirk")).expect("config dir");
+        std::fs::write(home.join("dirk").join("config.toml"), isolated(config)).expect("config");
+        Self::start_with(Some(home), cwd.map(std::path::Path::to_path_buf))
     }
 
-    fn start_with(config_home: Option<std::path::PathBuf>) -> Self {
+    fn start_with(
+        config_home: Option<std::path::PathBuf>,
+        cwd: Option<std::path::PathBuf>,
+    ) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -185,7 +235,7 @@ impl Harness {
         // every one of them attaching to whichever server started first --
         // with whichever configuration that one was given.
         cmd.arg("--no-session");
-        cmd.cwd(env!("CARGO_MANIFEST_DIR"));
+        cmd.cwd(cwd.unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))));
         cmd.env("TERM", "xterm-256color");
         // A predictable, quiet shell: an interactive zsh would paint a prompt
         // and a theme over the assertions.
@@ -1324,10 +1374,18 @@ fn the_rail_counts_what_is_owed_and_nothing_else() {
 #[test]
 fn an_agent_is_given_a_name_you_could_type() {
     let claude = fake_agent("claude");
-    let mut h = Harness::start_with_config(&format!(
-        "shell = {:?}\n[notify]\nenabled = false\n",
-        claude.display().to_string()
-    ));
+    // In a repository of its own: this reads an intent out of a nav row, and
+    // how much of it fits depends on what else the row has to say. Run from a
+    // worktree -- which is how this project is worked on -- the row carries a
+    // worktree mark too, and the intent is elided to make room for it.
+    let (repo, _) = a_repo_on("zarquon-agent");
+    let mut h = Harness::start_in(
+        &repo,
+        &format!(
+            "shell = {:?}\n[notify]\nenabled = false\n",
+            claude.display().to_string()
+        ),
+    );
     assert!(h.wait_for(READY, START), "never started");
 
     // Name the workspace first: an agent's name comes from the intent of the
@@ -2565,5 +2623,50 @@ fn images_can_be_turned_off_and_then_nothing_is_sent() {
             >= 2),
         "the pane stopped reading after an image it was told to ignore\n{}",
         h.drawn()
+    );
+}
+
+#[test]
+fn a_space_can_lead_with_what_it_is_doing_instead_of_what_it_is() {
+    // Two arrangements is two, and the gap between them is large: a space row
+    // leads with what it *is*, which is its branch — and on a project with one
+    // checkout that is the same word on every row and says nothing.
+    // Its own repository, on a branch of its own naming. Asking the checkout
+    // these tests run in would work here and fail in CI, which does what CI
+    // does and checks the code out on a detached HEAD -- and a branchless row
+    // is not a subject either arrangement can be told apart by.
+    let (repo, branch) = a_repo_on("zarquon-nav");
+    // Enough of it to recognise in a column that elides.
+    let head: String = branch.chars().take(8).collect();
+
+    let mut short = Harness::start_in(&repo, "[nav]\nrows = \"short\"\n");
+    assert!(
+        short.wait_for(READY, START),
+        "never started\n{}",
+        short.drawn()
+    );
+    // Waited for: git is asked off the drawing thread, so the branch reaches
+    // the column a moment after the row does.
+    assert!(
+        short.wait_until(START, |h| h.rows().iter().any(|r| r.contains(&head))),
+        "the row does not say which branch it is on\n{}",
+        short.drawn()
+    );
+    drop(short);
+
+    // What it is doing: its own name, and no branch beside it.
+    let mut doing = Harness::start_in(&repo, "[nav]\nrows = \"intent\"\n");
+    assert!(
+        doing.wait_for(READY, START),
+        "never started\n{}",
+        doing.drawn()
+    );
+    // Long enough that the branch would have arrived by now — the run above
+    // shows how long that takes.
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        !doing.rows().iter().any(|r| r.contains(&head)),
+        "the branch is still there, so this is `short` by another name\n{}",
+        doing.drawn()
     );
 }
