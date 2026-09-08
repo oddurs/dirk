@@ -2,10 +2,10 @@
 id: 138
 title: The title dirk writes to the terminal it runs in
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: chrome
 effort: s
