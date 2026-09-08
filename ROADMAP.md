@@ -216,18 +216,15 @@ What v0.5 did not finish, and the terminal features a pane needs before it is
 
 ## v0.9 — Coming back to it
 
-`########··` 75% · 3 of 4 done · due 2027-07-31
+`##########` 100% · 4 of 4 done · due 2027-07-31
 
 A session survives detaching. It should also survive the binary changing under
-
-### backlog
-
-- [ ] `0145` dirk update <sup>feature · p2 · packaging</sup>
 
 ### done
 
 - [x] `0143` Something on the screen after a restart <sup>feature · p1 · server</sup>
 - [x] `0144` Replacing the binary without ending the work <sup>feature · p2 · server</sup>
+- [x] `0145` dirk update <sup>feature · p2 · packaging</sup>
 - [x] `0146` Watching and driving a terminal over the socket <sup>feature · p2 · api</sup>
 
 ## v0.10 — More than one machine
@@ -293,7 +290,7 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 ## Unscheduled
 
-`#####·····` 45% · 5 of 11 done
+`######····` 55% · 6 of 11 done
 
 ### backlog
 

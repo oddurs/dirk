@@ -3,11 +3,11 @@ id: 114
 key: v0.9
 title: Coming back to it
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 113
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 due: 2027-07-31
 ---
 

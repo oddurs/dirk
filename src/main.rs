@@ -70,6 +70,7 @@ mod state;
 mod theme;
 mod tokens;
 mod ui;
+mod update;
 mod wait;
 mod wire;
 
@@ -110,6 +111,7 @@ Commands:
   attach                 attach to the session (the default)
   server                 be the session; started for you, not usually typed
   relay                  a session on stdin and stdout; what --remote runs
+  update [--check]       replace this binary with the newest release
 
 Asking a running session, from a shell or from inside a pane.  Answers are
 JSON; `--current` means the pane you are in.
@@ -226,6 +228,11 @@ fn main() -> io::Result<()> {
             "--skill" => {
                 say(&skill::text());
                 return Ok(());
+            }
+            "update" => {
+                let check = rest.clone().any(|a| a == "--check");
+                let code = update_command(check);
+                std::process::exit(code);
             }
             "server" => mode = Mode::Server,
             "relay" => mode = Mode::Relay,
@@ -596,6 +603,56 @@ fn main() -> io::Result<()> {
 fn command_args_are(args: &[String], noun: &str, verb: &str) -> bool {
     let words = words(args);
     words.first() == Some(&noun) && words.get(1) == Some(&verb)
+}
+
+/// `dirk update`, and what it says.
+///
+/// Prose on stdout rather than JSON: this is one of the few things a person
+/// types at a shell rather than a program asking a running session, so the
+/// answer is for them. The exit status is for the script that wraps it -- zero
+/// when there is nothing to do or it was done, one when it could not.
+fn update_command(check: bool) -> i32 {
+    use update::{Outcome, say};
+    match update::run(check) {
+        Outcome::UpToDate(v) => {
+            say(&format!("dirk {v} is the latest release"));
+            0
+        }
+        Outcome::Available { from, to } => {
+            say(&format!("dirk {to} is out; this is {from}"));
+            say("run `dirk update` to replace this binary");
+            0
+        }
+        Outcome::Updated { from, to } => {
+            say(&format!("dirk {from} replaced with {to}"));
+            // The running server is the old binary until it is restarted, and
+            // saying nothing here is how somebody concludes the update did not
+            // work when their session behaves exactly as it did before.
+            say("sessions already running keep the old one until `dirk session quit`");
+            0
+        }
+        Outcome::NotOurs(owner) => {
+            let by = match owner {
+                update::Owner::Homebrew => "Homebrew",
+                update::Owner::Nix => "nix",
+                update::Owner::Cargo => "cargo",
+                update::Owner::Ours => "something else",
+            };
+            eprintln!("dirk: this dirk was installed by {by}, which owns the file");
+            if let Some(cmd) = owner.instead() {
+                eprintln!("      upgrade it with: {cmd}");
+            }
+            1
+        }
+        Outcome::Unsupported => {
+            eprintln!("dirk: there is no published build for this platform");
+            1
+        }
+        Outcome::Failed(why) => {
+            eprintln!("dirk: {why}");
+            1
+        }
+    }
 }
 
 /// The value of a `--name value` or `--name=value` option, if it was given.
