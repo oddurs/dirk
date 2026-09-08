@@ -67,9 +67,19 @@ struct Harness {
     master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
+/// What every test in this file wants on top of whatever it configures.
+///
+/// Non-login shells, for the same reason the harness sets `SHELL` and points
+/// `XDG_CONFIG_HOME` away from home: these tests read what is drawn, and a
+/// login shell brings /etc/profile, /etc/bashrc and somebody's prompt into it.
+/// Two of those write a window title after every command — which is an intent,
+/// which is a workspace label, and one of these tests is about what a *test*
+/// put in that title.
+const ISOLATED: &str = "[terminal]\nshell_mode = \"non_login\"\n";
+
 impl Harness {
     fn start() -> Self {
-        Self::start_with(None)
+        Self::start_with_config("")
     }
 
     /// Start dirk against a written configuration file.
@@ -83,7 +93,14 @@ impl Harness {
             next_config_id()
         ));
         std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
-        std::fs::write(dir.join("dirk").join("config.toml"), config).expect("config");
+        std::fs::write(
+            dir.join("dirk").join("config.toml"),
+            // Appended, not prepended: a section header before somebody's
+            // top-level keys would swallow them into it, the file would be
+            // refused, and the test would silently run on the defaults.
+            format!("{config}\n{ISOLATED}"),
+        )
+        .expect("config");
         Self::start_with(Some(dir))
     }
 

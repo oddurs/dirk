@@ -316,6 +316,7 @@ pub struct Config {
     pub naming: Naming,
     pub notify: Notify,
     pub server: Server,
+    pub terminal: Terminal,
     pub session: SessionCfg,
     pub sound: Sound,
     /// What to pipe a selection into. Empty means whatever this platform is
@@ -770,6 +771,66 @@ impl Default for Notify {
     }
 }
 
+/// How a pane's shell is started, and where.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Terminal {
+    /// `auto`, `login` or `non_login`.
+    ///
+    /// A login shell reads the files that build a login `PATH` — on macOS that
+    /// is `/usr/libexec/path_helper` and Homebrew's initialisation, both in
+    /// `/etc/zprofile` and neither read by any other kind of shell. Without
+    /// this, `PATH` inside a dirk pane was missing entries it has in every
+    /// other terminal on the machine, which people reasonably diagnosed as dirk
+    /// being broken.
+    ///
+    /// `auto` is login on macOS and unchanged elsewhere, because that is where
+    /// the problem is and because Linux distributions put the same entries in
+    /// files every interactive shell reads. A shell with no `-l` wants
+    /// `non_login`.
+    pub shell_mode: String,
+    /// `follow`, `home`, `current`, or a path.
+    ///
+    /// Where a pane made beside another one starts. `follow` inherits from the
+    /// pane it was made from, which is what dirk has always done and what
+    /// splitting usually means.
+    pub new_cwd: String,
+}
+
+impl Default for Terminal {
+    fn default() -> Self {
+        Self {
+            shell_mode: "auto".into(),
+            new_cwd: "follow".into(),
+        }
+    }
+}
+
+impl Terminal {
+    /// Should a shell started now be a login shell?
+    pub fn login(&self) -> bool {
+        match self.shell_mode.as_str() {
+            "login" => true,
+            "non_login" => false,
+            // Only where the problem is. Linux distributions put the same
+            // entries in files every interactive shell reads.
+            _ => cfg!(target_os = "macos"),
+        }
+    }
+
+    /// Where a pane made from `from` should start.
+    pub fn start_in(&self, from: &Path) -> PathBuf {
+        match self.new_cwd.as_str() {
+            "home" => home(),
+            // dirk's own directory, which is where it was launched from and is
+            // what somebody who wants "wherever I started this" means.
+            "current" => std::env::current_dir().unwrap_or_else(|_| home()),
+            "follow" | "" => from.to_path_buf(),
+            path => expand(path),
+        }
+    }
+}
+
 /// What a session brings back when it starts again.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1015,6 +1076,7 @@ impl Default for Config {
             naming: Naming::default(),
             notify: Notify::default(),
             server: Server::default(),
+            terminal: Terminal::default(),
             session: SessionCfg::default(),
             sound: Sound::default(),
             clipboard: Vec::new(),
@@ -1113,6 +1175,15 @@ pub fn home() -> PathBuf {
 /// asked, whether that is a terminal at startup or a client that said `reload`.
 pub fn complaints(cfg: &Config) -> Vec<String> {
     let mut out = Vec::new();
+    if !matches!(
+        cfg.terminal.shell_mode.as_str(),
+        "auto" | "login" | "non_login"
+    ) {
+        out.push(format!(
+            "terminal.shell_mode: {:?} is not auto, login or non_login; using auto",
+            cfg.terminal.shell_mode
+        ));
+    }
     let known: Vec<String> = cfg.kinds().into_iter().map(|k| k.name).collect();
     for (name, says) in &cfg.sound.per_agent {
         if !matches!(says.as_str(), "on" | "off" | "default") {
@@ -1346,6 +1417,9 @@ impl Config {
         // success for a change that never reached anything. They take effect on
         // the next pane, which is what changing a shell means.
         session.shell = next.shell();
+        // Cached beside the shell and for the same reason: both take effect on
+        // the next pane, which is what changing either of them means.
+        session.terminal = next.terminal.clone();
         session.set_scrollback(next.scrollback);
         *current = next;
         Ok(said)

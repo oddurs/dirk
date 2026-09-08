@@ -35,7 +35,18 @@ const START: Duration = Duration::from_secs(30);
 /// One configuration directory for the whole run, away from the checkout.
 fn config_home() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("dirk-tests-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::create_dir_all(dir.join("dirk"));
+    // Non-login shells, for the same reason the suite sets `SHELL` and clears
+    // the `GIT_*` variables: these tests assert on what is drawn, and a login
+    // shell brings /etc/profile, /etc/bashrc and somebody's prompt into it. A
+    // prompt that publishes its directory as a window title is a workspace
+    // label, and a label of a different length moves every column after it.
+    //
+    // The test that is *about* login shells writes its own configuration.
+    let _ = std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        "[terminal]\nshell_mode = \"non_login\"\n",
+    );
     dir
 }
 
@@ -2079,6 +2090,20 @@ fn a_worktrees_space_hangs_off_the_checkout_the_others_hang_off() {
         repo.file_name().unwrap().to_string_lossy()
     ));
     must_be_disposable(&at);
+    // Asked of the session rather than watched for on the screen. A pane's own
+    // prompt carries its directory — `repo-hang-side` — so waiting for "side"
+    // to appear anywhere was satisfied by the shell before git had answered,
+    // and the branch had not reached the column yet.
+    let branched = Instant::now() + START;
+    while Instant::now() < branched {
+        if ask(&session, &["workspace", "list"])
+            .1
+            .contains("\"branch\": \"side\"")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     assert!(
         client.wait_for("side", START),
         "the worktree never reached the column\n{}",
@@ -2106,7 +2131,8 @@ fn a_worktrees_space_hangs_off_the_checkout_the_others_hang_off() {
         .iter()
         .find(|line| line.contains('└') || line.contains('├'))
         .expect("no connector: nothing was drawn as hanging");
-    let hung_at = column(hung, "side").expect("the worktree's branch");
+    let hung_at =
+        column(hung, "side").unwrap_or_else(|| panic!("the worktree's branch\n{}", client.drawn()));
     assert!(
         hung_at > flush,
         "the worktree was drawn as a peer of the repository proper: \
@@ -4272,6 +4298,100 @@ fn nothing_else_moves_an_agents_viewport() {
     let (ok, said) = ask(&session, &["pane", "read", &pane, "10"]);
     assert!(ok, "an ordinary read was refused: {said}");
     assert!(said.contains("zzEND"), "the ordinary read is wrong: {said}");
+
+    drop(client);
+}
+
+#[test]
+fn a_pane_starts_the_shell_and_the_directory_that_were_asked_for() {
+    // A non-login shell on macOS never reads the files that build a login PATH
+    // — path_helper and Homebrew's initialisation — so PATH inside a dirk pane
+    // was missing entries it has in every other terminal on the machine. That
+    // reads as dirk being broken.
+    let session = unique("shellmode");
+    let dir = config_home().join("cfg-shellmode");
+    std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+    let elsewhere = config_home().join("zzelsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("a directory to start in");
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        format!(
+            "[terminal]\nshell_mode = \"login\"\nnew_cwd = \"{}\"\n",
+            elsewhere.display()
+        ),
+    )
+    .expect("config");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let first = first_id(&panes);
+
+    // A pane made beside another one starts where the policy says, not where
+    // the one it came from was.
+    let (ok, out) = ask(&session, &["pane", "split", &first, "rows"]);
+    assert!(ok, "split failed: {out}");
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    assert!(
+        panes.contains("zzelsewhere"),
+        "the new pane did not start where it was told: {panes}"
+    );
+    // And the one that was already there is untouched.
+    assert!(
+        panes.matches("zzelsewhere").count() == 1,
+        "the policy reached a pane that already existed: {panes}"
+    );
+
+    // The shell is a login shell, which is the whole point of the setting.
+    let ids = ids(&panes);
+    let made = ids.last().expect("the new pane").clone();
+    let (ok, out) = ask(&session, &["pane", "run", &made, "printf 'zz%s\\n' \"$0\""]);
+    assert!(ok, "pane run failed: {out}");
+    // `-l` is what dirk passes and what a shell reports back in `$0` only
+    // sometimes, so ask the shell itself whether it is one.
+    let (ok, out) = ask(
+        &session,
+        &[
+            "pane",
+            "run",
+            &made,
+            "case $- in *l*) printf zzLOGIN;; *) printf zzPLAIN;; esac",
+        ],
+    );
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &made, "zzLOGIN", START),
+        "the pane's shell is not a login shell\n{}",
+        ask(&session, &["pane", "read", &made, "20"]).1
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_shell_mode_nobody_understands_is_complained_about() {
+    let session = unique("shellbad");
+    let dir = config_home().join("cfg-shellbad");
+    std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        "[terminal]\nshell_mode = \"loginish\"\n",
+    )
+    .expect("config");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+    // A session still starts: a setting nobody understands falls back rather
+    // than costing you the session it was in.
+    let (ok, out) = ask(&session, &["session", "reload"]);
+    assert!(ok, "reload failed: {out}");
+    assert!(
+        out.contains("not auto, login or non_login"),
+        "the reload did not say what it did not understand: {out}"
+    );
 
     drop(client);
 }

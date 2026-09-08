@@ -117,6 +117,22 @@ pub struct Pane {
     cols: u16,
 }
 
+/// Everything about starting a pane that is not what to run or where.
+///
+/// A struct rather than four more arguments: the four travel together through
+/// every call site, and three of them are numbers that would sit next to each
+/// other waiting to be swapped.
+#[derive(Debug, Clone, Copy)]
+pub struct Setup {
+    pub rows: u16,
+    pub cols: u16,
+    pub scrollback: usize,
+    /// Make an interactive shell a login shell, which is what reads the files
+    /// that build a login `PATH`. Only meaningful when the argv is a shell: a
+    /// board's command is a command and is run as one.
+    pub login: bool,
+}
+
 fn oops(e: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
@@ -126,11 +142,15 @@ impl Pane {
         id: PaneId,
         argv: &[String],
         cwd: &Path,
-        rows: u16,
-        cols: u16,
-        scrollback: usize,
+        how: Setup,
         tx: Sender<Ev>,
     ) -> std::io::Result<Self> {
+        let Setup {
+            rows,
+            cols,
+            scrollback,
+            login,
+        } = how;
         let (rows, cols) = (rows.max(1), cols.max(1));
         // Guarded rather than assumed: `argv[1..]` on an empty slice panics, and
         // a layout pane may legally be written with a title and no command.
@@ -148,6 +168,14 @@ impl Pane {
             .map_err(oops)?;
 
         let mut cmd = CommandBuilder::new(&program);
+        // `-l` rather than an argv[0] beginning with a dash, which is the older
+        // convention and the one this pty library reserves for the shell it
+        // picks itself. Every shell somebody would set here takes `-l`; one
+        // that does not wants `shell_mode = "non_login"`, and says so in the
+        // manual.
+        if login {
+            cmd.arg("-l");
+        }
         for a in &argv[1..] {
             cmd.arg(a);
         }

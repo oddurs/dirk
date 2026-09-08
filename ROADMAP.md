@@ -167,7 +167,7 @@ dirk guesses at agent state where it could be told. Installing the hook rather
 
 ## v0.8 — The rest of the multiplexer
 
-`··········` 0% · 0 of 10 done · due 2027-06-15
+`#·········` 10% · 1 of 10 done · due 2027-06-15
 
 What v0.5 did not finish, and the terminal features a pane needs before it is
 
@@ -179,10 +179,13 @@ What v0.5 did not finish, and the terminal features a pane needs before it is
 - [ ] `0136` Tabs, and moving a pane between them <sup>feature · p1 · mux</sup>
 - [ ] `0137` Images in a pane <sup>feature · p2 · mux</sup>
 - [ ] `0138` The title dirk writes to the terminal it runs in <sup>feature · p2 · chrome</sup>
-- [ ] `0139` Login shells, and where a new pane starts <sup>feature · p2 · config</sup>
 - [ ] `0140` Pane borders, and turning the mouse off <sup>feature · p3 · chrome</sup>
 - [ ] `0141` Bindings without a prefix <sup>feature · p2 · config</sup>
 - [ ] `0142` A third row layout for the nav <sup>feature · p3 · nav</sup>
+
+### done
+
+- [x] `0139` Login shells, and where a new pane starts <sup>feature · p2 · config</sup>
 
 ## v0.9 — Coming back to it
 

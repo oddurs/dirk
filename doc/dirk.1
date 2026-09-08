@@ -169,8 +169,12 @@ runs with no configuration file.
 .I ~/.config/dirk/config.toml
 overrides what it names and leaves the rest alone: who the bar says you are,
 where the project picker looks, the sidebar width, the scrollback depth, the
-shell, the boards, the layouts, the naming thresholds, and the size a session
-has when nothing is attached to it
+shell, the boards, the layouts, the naming thresholds,
+how a pane's shell is started
+.RB ( [terminal] " " shell_mode ")"
+and where one made beside another begins
+.RB ( [terminal] " " new_cwd ),
+and the size a session has when nothing is attached to it
 .RB ( [server] " " headless_cols ", " headless_rows ).
 .PP
 .B [identity]
