@@ -797,29 +797,6 @@ fn spawn_input(tx: Sender<Ev>) {
     });
 }
 
-/// What this machine is called, for a title that says which one it is.
-///
-/// Trimmed to the first label: a session on `build.example.com` is on `build`,
-/// and the rest is a domain nobody is choosing a window by.
-fn hostname() -> String {
-    let mut buf = [0i8; 256];
-    // SAFETY: the buffer is ours and the length is its own.
-    let ok = unsafe { libc::gethostname(buf.as_mut_ptr(), buf.len()) } == 0;
-    if !ok {
-        return String::new();
-    }
-    let bytes: Vec<u8> = buf
-        .iter()
-        .take_while(|b| **b != 0)
-        .map(|b| *b as u8)
-        .collect();
-    String::from_utf8_lossy(&bytes)
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_string()
-}
-
 /// One tick a second: the clock needs it, and so does naming — a title that
 /// went quiet mid-debounce has no further output to wake the loop with.
 fn spawn_ticker(tx: Sender<Ev>) {
@@ -2068,7 +2045,8 @@ impl App {
             .active_pane()
             .and_then(|p| p.title())
             .unwrap_or_default();
-        let want = self.cfg.ui.title(&hostname(), &workspace, &tab, &pane);
+        let host = config::hostname().unwrap_or_default();
+        let want = self.cfg.ui.title(&host, &workspace, &tab, &pane);
         let Some(want) = want else { return };
         if self.titled.as_ref() == Some(&want) {
             return;

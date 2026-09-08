@@ -34,6 +34,14 @@ better of the two. `main.rs` takes `.unwrap_or_default()`.
 
 ## Acceptance criteria
 
-- [ ] One `gethostname` call site in the tree
-- [ ] It is the portable one
-- [ ] The window title still says the short host name
+- [x] One `gethostname` call site in the tree
+- [x] It is the portable one
+- [x] The window title still says the short host name
+
+## 2026-09-08
+
+Closed with `0176`, which needed exactly this: the duplicate *was* the bug, so
+removing it and fixing the build are one change. `main.rs`'s copy is gone,
+`config::hostname` is public, and the title path takes
+`.unwrap_or_default()` — a machine with no name gets an empty `{host}`, which is
+what the old `String::new()` did.

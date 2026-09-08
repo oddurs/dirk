@@ -43,5 +43,29 @@ about the two hostname wrappers.
 
 ## Acceptance criteria
 
-- [ ] `cargo check` passes for every target in `release.yml`
-- [ ] There is one `gethostname` wrapper in the tree, not two
+- [x] `cargo check` passes for every target in `release.yml`
+- [x] There is one `gethostname` wrapper in the tree, not two
+
+## 2026-09-08
+
+Verified for all five, not just the one that was broken:
+
+    x86_64-unknown-linux-gnu    ok
+    x86_64-unknown-linux-musl   ok
+    aarch64-unknown-linux-gnu   ok
+    x86_64-apple-darwin         ok
+    aarch64-apple-darwin        ok
+
+The fix is a deletion. `config.rs` already had the portable form, so `main.rs`
+loses its copy and asks for that one — which closes `0180` as well, since the
+duplicate was the whole of it.
+
+A guard test rather than a note in a comment: it scans the source for a second
+`gethostname` wrapper and fails when one appears, because the duplicate was not
+a call to the function that existed — it was a second one of it, and nothing
+about a call graph would have found it. The needle is assembled from three
+pieces, since `config.rs` is one of the files being scanned and a needle spelled
+out in it would find itself.
+
+What this does not do is stop the next target break, which is a different
+target and a different mistake. That is `0177`.
