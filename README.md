@@ -751,6 +751,7 @@ agents happen to run in and one they can work in.
 
 ```console
 $ dirk pane list
+$ dirk pane attach w7:p12        # that pane, in this terminal, and nothing else
 $ dirk pane split w7:p12 rows
 $ dirk pane run --current "cargo test"
 $ dirk agent list
@@ -815,6 +816,19 @@ number the nav shows beside a workspace is positional and changes when spaces
 are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
 `--current` resolves from them — so a command from inside a pane reaches the
 session holding it without the caller looking anything up first.
+
+**`dirk pane attach <pane>` gives you that pane and nothing else.** Attaching
+gives you the whole of dirk; sometimes what you want is the one pane the agent
+is in — over ssh from a phone, inside another multiplexer, or in a terminal too
+small for a sidebar to be anything but in the way. What is already on the screen
+arrives first, then whatever the pane says next.
+
+The prefix keeps its meaning and means two things here: `d` leaves, and pressing
+it twice sends a literal one through. The wheel and plain <kbd>PgUp</kbd> read
+what has gone past, typing brings you back to the bottom, and the terminal you
+attached from owns that pane's size. One writer at a time — `--takeover`
+replaces the current one, because the usual reason for asking is that the other
+end is a terminal you have already closed.
 
 `dirk session notify <target> <text>` puts a build, a deploy or a cron job
 through the same path an agent's blocking takes, and therefore through the same

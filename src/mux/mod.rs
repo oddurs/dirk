@@ -68,5 +68,19 @@ pub enum Ev {
     /// A round of board status commands finished. Answered by name rather than
     /// by index, because the list can be reloaded while one is in flight.
     Badges(Vec<(String, Option<String>)>),
+    /// Somebody wants one pane in their own terminal, with nothing around it.
+    ///
+    /// The loop answers on the socket itself and says here only whether it
+    /// accepted, because from the moment a watcher exists the loop is the one
+    /// writing to that socket — and two threads writing frames down one
+    /// connection interleave them.
+    Watch {
+        watcher: Box<crate::server::Watcher>,
+        back: std::sync::mpsc::SyncSender<bool>,
+    },
+    /// A key or a wheel from a direct attach, for the pane it is attached to.
+    Watched(u64, crossterm::event::Event),
+    /// A direct attach went away.
+    Unwatch(u64),
     Tick,
 }

@@ -1776,6 +1776,32 @@ impl Session {
         };
     }
 
+    /// One pane's screen, as the escape sequences that recreate it.
+    ///
+    /// Including whatever scrollback it is showing: `set_scrollback` moves the
+    /// window vt100 is already keeping, so a pane being read from the past
+    /// formats exactly as a pane at the bottom does.
+    pub fn pane_screen(&mut self, id: PaneId) -> Option<Vec<u8>> {
+        let pane = self.pane_anywhere_mut(id)?;
+        let term = pane.term.lock().ok()?;
+        Some(term.screen().contents_formatted())
+    }
+
+    /// How far back a pane is being read, wherever it is.
+    pub fn scrolled_at(&mut self, id: PaneId) -> usize {
+        self.pane_anywhere_mut(id).map_or(0, |pane| pane.scroll)
+    }
+
+    /// Resize one pane by handle, whichever workspace holds it.
+    ///
+    /// For a terminal attached to that pane alone: it owns the size, because
+    /// what it is showing is that pane and nothing else.
+    pub fn resize_pane(&mut self, id: PaneId, rows: u16, cols: u16) {
+        if let Some(pane) = self.pane_anywhere_mut(id) {
+            pane.resize(rows, cols);
+        }
+    }
+
     /// Does this pane exist, and is anything still running in it?
     ///
     /// `None` is "no such pane" and `Some(false)` is "its program has exited",

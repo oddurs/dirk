@@ -506,3 +506,128 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
     }
     Ok(End::Dropped { painted })
 }
+
+/// One pane, in this terminal, with no interface around it.
+///
+/// Attaching gives you the whole of dirk. Sometimes what you want is the one
+/// pane the agent is in — over ssh from a phone, inside another multiplexer, or
+/// in a terminal too small for a sidebar to be anything but in the way.
+///
+/// The prefix keeps its meaning, and means only two things here: `d` leaves,
+/// and pressing it twice sends a literal one through to the program. Everything
+/// else goes to the pane, which is the whole point.
+pub fn watch(path: &Path, target: &str, takeover: bool) -> io::Result<()> {
+    let mut sock = UnixStream::connect(path)?;
+    let mut reader = sock.try_clone()?;
+    let (cols, rows) = crossterm::terminal::size()?;
+    wire::send_json(
+        &mut sock,
+        Kind::Watch,
+        &wire::Watch {
+            pane: target.to_string(),
+            cols,
+            rows,
+            takeover,
+        },
+    )?;
+
+    // Answered before the terminal is touched: "no such pane" and "somebody
+    // else has it" are things to read on a normal screen, not through a
+    // terminal that has just been put into raw mode and cleared.
+    match wire::recv(&mut reader)? {
+        Some((Kind::Reply, body)) => {
+            let reply: wire::Reply = serde_json::from_slice(&body).map_err(io::Error::other)?;
+            if !reply.ok {
+                return Err(io::Error::other(reply.error.unwrap_or_default()));
+            }
+        }
+        _ => return Err(io::Error::other("the session did not answer")),
+    }
+
+    setup()?;
+    let result = pump_watch(&mut reader, sock);
+    restore();
+    result
+}
+
+/// Frames out, keys in, until somebody leaves.
+fn pump_watch(reader: &mut UnixStream, writer: UnixStream) -> io::Result<()> {
+    let leaving = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&leaving);
+    let mut sending = writer;
+
+    // Input on its own thread, because reading the terminal blocks and so does
+    // reading the socket, and neither may wait for the other.
+    let feeding = std::thread::spawn(move || {
+        // dirk's prefix, and it carries its usual promise: pressed twice it
+        // sends a literal one through, so a program that wants NUL still gets
+        // it.
+        let prefix = |k: &crossterm::event::KeyEvent| {
+            k.code == crossterm::event::KeyCode::Char(' ')
+                && k.modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+        };
+        let mut armed = false;
+        while let Ok(event) = crossterm::event::read() {
+            if let crossterm::event::Event::Key(k) = &event
+                && k.kind != crossterm::event::KeyEventKind::Release
+            {
+                if armed {
+                    armed = false;
+                    // `d`, as everywhere else in dirk. Leaving is the only
+                    // thing this attachment has to offer beyond the pane.
+                    if k.code == crossterm::event::KeyCode::Char('d') {
+                        stop.store(true, Ordering::Relaxed);
+                        // Its own socket, so the reader on the far side wakes
+                        // up rather than waiting for a frame that is not coming.
+                        let _ = sending.shutdown(std::net::Shutdown::Both);
+                        return;
+                    }
+                    // Anything else after the prefix: if it was the prefix
+                    // again, one goes through; otherwise both do, because
+                    // swallowing a keystroke is worse than sending one.
+                    if !prefix(k) {
+                        let literal =
+                            crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+                                crossterm::event::KeyCode::Char(' '),
+                                crossterm::event::KeyModifiers::CONTROL,
+                            ));
+                        if let Some(msg) = Input::from_event(&literal) {
+                            let _ = wire::send_json(&mut sending, Kind::Input, &msg);
+                        }
+                    }
+                } else if prefix(k) {
+                    armed = true;
+                    continue;
+                }
+            }
+            let Some(msg) = Input::from_event(&event) else {
+                continue;
+            };
+            if wire::send_json(&mut sending, Kind::Input, &msg).is_err() {
+                return;
+            }
+        }
+    });
+
+    let out = io::stdout();
+    loop {
+        match wire::recv(reader) {
+            Ok(Some((Kind::Frame, bytes))) => {
+                let mut lock = out.lock();
+                lock.write_all(&bytes)?;
+                lock.flush()?;
+            }
+            Ok(Some((Kind::Bye, _))) | Ok(None) => break,
+            Ok(Some(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    // The input thread is blocked on the terminal and cannot be asked to stop;
+    // it goes when the process does. What matters is that we do not wait for it.
+    drop(feeding);
+    match leaving.load(Ordering::Relaxed) {
+        true => Ok(()),
+        false => Err(io::Error::other("the pane went away")),
+    }
+}
