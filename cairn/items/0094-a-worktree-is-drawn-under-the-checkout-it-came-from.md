@@ -2,7 +2,7 @@
 id: 94
 title: A worktree is drawn under the checkout it came from
 type: feature
-status: backlog
+status: done
 milestone: v1.0
 depends_on:
 - 91
