@@ -2,10 +2,10 @@
 id: 130
 title: Telling dirk what is behind the wrapper
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: agents
 effort: s
