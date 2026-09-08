@@ -72,6 +72,12 @@ pub struct Pane {
     pub closing: bool,
     /// What is running here, as of the last sample.
     pub occupant: crate::agent::Occupant,
+    /// The wrapper that named the harness in here, when one did.
+    ///
+    /// Set when `DIRK_AGENT` on an unrecognised foreground process decided what
+    /// this pane holds. Kept so `agent explain` can say that a hint decided it
+    /// rather than leaving somebody to wonder how dirk recognised `fence`.
+    pub hinted: Option<String>,
     /// What to call the agent in here, when there is one.
     ///
     /// Unique among live agents, because a name is how one is addressed. It
@@ -194,6 +200,7 @@ impl Pane {
             exit: None,
             closing: false,
             occupant: crate::agent::Occupant::default(),
+            hinted: None,
             agent_name: None,
             scroll: 0,
             touched: std::time::Instant::now(),

@@ -324,6 +324,17 @@ pub struct Config {
     /// the key it ships with.
     pub keys: std::collections::BTreeMap<String, String>,
     pub nav: Nav,
+    /// Programs that run something else and are not it.
+    ///
+    /// A sandbox or a container shim shows itself as the foreground process, so
+    /// dirk sees `fence` and no agent at all — no state, no naming, no
+    /// notification, in exactly the setup where an agent is most likely to be
+    /// left running unattended. Naming it here says its command line is worth
+    /// reading, which is the one case where dirk reads anybody's.
+    ///
+    /// Added to the interpreters dirk already knows rather than replacing them.
+    #[serde(default)]
+    pub wrappers: Vec<String>,
     /// Harnesses dirk should recognise, on top of the ones it ships with.
     #[serde(rename = "agent")]
     pub agents: Vec<AgentDef>,
@@ -630,6 +641,16 @@ fn agent_files(said: &mut Vec<String>) -> Vec<(AgentDef, crate::agent::From)> {
 }
 
 impl Config {
+    /// Every program whose command line is worth reading: the interpreters dirk
+    /// ships with, plus whatever the file added.
+    pub fn wrappers(&self) -> Vec<String> {
+        crate::agent::INTERPRETERS
+            .iter()
+            .map(|s| s.to_string())
+            .chain(self.wrappers.iter().cloned())
+            .collect()
+    }
+
     /// Which key runs what, after the file has had its say.
     pub fn keys(&self) -> crate::action::Keys {
         let mut keys = crate::action::Keys::default();
@@ -932,6 +953,7 @@ impl Default for Config {
             clipboard: Vec::new(),
             keys: std::collections::BTreeMap::new(),
             nav: Nav::default(),
+            wrappers: Vec::new(),
             agents: Vec::new(),
             default_agent: String::new(),
             projects: Vec::new(),
@@ -1351,7 +1373,8 @@ mod tests {
                     program: "sculptor".into(),
                     args: String::new(),
                 },
-                &kinds
+                &kinds,
+                &cfg.wrappers(),
             )
             .agent()
             .map(|k| k.name.as_str()),

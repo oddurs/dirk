@@ -427,6 +427,28 @@ A block whose `name` matches a shipped one replaces it whole rather than
 merging — somebody overriding claude's markers does not want to inherit half of
 ours.
 
+**An agent behind a sandbox is still an agent.** Detection starts from the
+foreground process, so an agent run under a sandbox or a container shim shows
+the *wrapper* — dirk sees `fence` and no agent at all: no state, no naming, no
+notification, in exactly the setup where an agent is most likely to be left
+running unattended.
+
+```toml
+wrappers = ["fence", "nono"]   # programs that run something else and are not it
+```
+
+Naming one says its command line is worth reading, which is the only case where
+dirk reads anybody's — the same rule that already covers `node` and `python`,
+and the same `argv` fragments do the identifying:
+
+```toml
+# ~/.config/dirk/agents/claude.toml
+argv = ["-- claude", "claude/cli.js"]
+```
+
+`agent explain` says an agent was found behind something rather than leaving you
+to wonder how dirk came to recognise a program called `fence`.
+
 **One harness, one file.** `~/.config/dirk/agents/claude.toml` says the same
 thing without the `name`, which the filename already carries, and beats a block
 of the same name — a file is the more specific statement, a document about that

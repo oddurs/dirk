@@ -1471,6 +1471,19 @@ pub fn explain(ws: &Workspace, now: Instant) -> Explained {
         ));
         return done(Observed::NoAgent, signals, None, None);
     };
+    signals.push((
+        "process",
+        None,
+        match &pane.hinted {
+            // Worth saying plainly: otherwise somebody is left wondering how
+            // dirk came to recognise a program called `fence`.
+            Some(wrapper) => format!(
+                "{} is running behind {wrapper}, found in its command line",
+                kind.name
+            ),
+            None => format!("the foreground process is {}", kind.name),
+        },
+    ));
 
     // Only panes holding an agent are read, which is what keeps this off the
     // cost of every tick.
@@ -2377,6 +2390,8 @@ impl Session {
     pub fn apply_agents(&mut self, reading: crate::agent::Reading) {
         let found: std::collections::HashMap<PaneId, Option<crate::agent::Occupant>> =
             reading.panes.into_iter().collect();
+        let hinted: std::collections::HashMap<PaneId, String> =
+            reading.hinted.into_iter().collect();
         let set = |ws: &mut Workspace| {
             for p in ws.every_pane_mut() {
                 match found.get(&p.id) {
@@ -2384,7 +2399,12 @@ impl Session {
                     // end between the pgid being read and `ps` running, which a
                     // shell does on every short command.
                     Some(None) | None => {}
-                    Some(Some(o)) => p.occupant = o.clone(),
+                    Some(Some(o)) => {
+                        p.occupant = o.clone();
+                        // Cleared when it is not in this reading, so a pane
+                        // that stops being a wrapper stops claiming to be one.
+                        p.hinted = hinted.get(&p.id).cloned();
+                    }
                 }
             }
         };

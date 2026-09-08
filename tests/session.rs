@@ -3527,3 +3527,104 @@ fn a_captured_screen_can_be_run_through_the_same_rule() {
         "the refusal did not list what it knows: {said}"
     );
 }
+
+#[test]
+fn an_agent_behind_a_sandbox_is_still_an_agent() {
+    // Detection starts from the foreground process, so an agent under a
+    // sandbox or a container shim shows the wrapper and no agent at all — no
+    // state, no naming, no notification, in exactly the setup where an agent is
+    // most likely to be left running unattended.
+    let session = unique("wrapper");
+    let dir = config_home().join("cfg-wrapper");
+    std::fs::create_dir_all(dir.join("dirk").join("agents")).expect("agents dir");
+    // `sh -c` stands in for a sandbox: it runs something else and stays in the
+    // process table as the foreground group's leader, which is the whole shape
+    // of the problem. `env` and `nice` would not do — they exec, so the wrapper
+    // is gone by the time anybody looks.
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        "wrappers = [\"sh\"]\n",
+    )
+    .expect("config");
+    std::fs::write(
+        dir.join("dirk").join("agents").join("claude.toml"),
+        "argv = [\"zzWRAPPED\"]\n",
+    )
+    .expect("rule file");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    // The trailing `true` is load-bearing: given one command `sh -c` execs it,
+    // and then there is no wrapper left to see.
+    let (ok, out) = ask(
+        &session,
+        &["pane", "run", &pane, "sh -c 'zzWRAPPED=1; sleep 20; true'"],
+    );
+    assert!(ok, "pane run failed: {out}");
+
+    let deadline = Instant::now() + START;
+    let mut seen = false;
+    while Instant::now() < deadline && !seen {
+        seen = ask(&session, &["agent", "list"]).1.contains("claude");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        seen,
+        "the agent behind the wrapper was not found\n{}",
+        ask(&session, &["agent", "explain", &pane]).1
+    );
+
+    // And explain says it was found behind something, rather than leaving
+    // somebody to wonder how dirk came to recognise a program called `env`.
+    let (ok, said) = ask(&session, &["agent", "explain", &pane]);
+    assert!(ok, "agent explain failed: {said}");
+    assert!(
+        said.contains("behind sh"),
+        "explain did not say what it was found behind: {said}"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_program_that_was_not_named_a_wrapper_keeps_its_own_identity() {
+    // The closed list is the point. dirk reads a command line to disambiguate a
+    // program that has told it nothing, and for nothing else — so a program
+    // nobody named stays what it is even when an agent's name is in its
+    // arguments.
+    let session = unique("nowrapper");
+    let dir = config_home().join("cfg-nowrapper");
+    std::fs::create_dir_all(dir.join("dirk").join("agents")).expect("agents dir");
+    std::fs::write(
+        dir.join("dirk").join("agents").join("claude.toml"),
+        "argv = [\"zzUNWRAPPED\"]\n",
+    )
+    .expect("rule file");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, out) = ask(
+        &session,
+        &["pane", "run", &pane, "sh -c 'zzUNWRAPPED=1; sleep 5; true'"],
+    );
+    assert!(ok, "pane run failed: {out}");
+
+    // Long enough for two samples, so one that was going to match would have.
+    std::thread::sleep(Duration::from_secs(3));
+    let (ok, agents) = ask(&session, &["agent", "list"]);
+    assert!(ok, "agent list failed");
+    assert!(
+        !agents.contains("claude"),
+        "argv was read for a program nobody named a wrapper: {agents}"
+    );
+
+    drop(client);
+}

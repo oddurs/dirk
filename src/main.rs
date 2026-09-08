@@ -2612,25 +2612,33 @@ impl App {
         // now, and reading it here rather than there keeps `session reload`
         // from changing what a sample in flight is comparing against.
         let kinds = std::sync::Arc::clone(&self.kinds);
+        let wrappers = self.cfg.wrappers();
         std::thread::spawn(move || {
             let table = crate::agent::table();
-            let panes = panes
-                .into_iter()
-                .map(|(id, pgid)| {
-                    let occupant = match pgid {
-                        // Nothing in the foreground: the pane is holding
-                        // nothing, and that is news.
-                        None => Some(crate::agent::Occupant::Unknown),
-                        // A group that is not in the table ended between the
-                        // pgid being read and `ps` running. That is not news.
-                        Some(pgid) => table
-                            .get(&pgid)
-                            .map(|proc| crate::agent::identify(proc, &kinds)),
-                    };
-                    (id, occupant)
-                })
-                .collect();
-            let _ = tx.send(Ev::Agents(crate::agent::Reading { panes }));
+            let mut out = Vec::new();
+            let mut hinted = Vec::new();
+            for (id, pgid) in panes {
+                let proc = pgid.and_then(|pgid| table.get(&pgid));
+                let occupant = match pgid {
+                    // Nothing in the foreground: the pane is holding nothing,
+                    // and that is news.
+                    None => Some(crate::agent::Occupant::Unknown),
+                    // A group that is not in the table ended between the pgid
+                    // being read and `ps` running. That is not news.
+                    Some(_) => proc.map(|p| crate::agent::identify(p, &kinds, &wrappers)),
+                };
+                // Recognised through something rather than as itself. Recorded
+                // so that `agent explain` can say so, rather than leaving
+                // somebody to wonder how dirk came to recognise `fence`.
+                if let (Some(crate::agent::Occupant::Agent(kind)), Some(proc)) =
+                    (occupant.as_ref(), proc)
+                    && let Some(wrapper) = crate::agent::behind(proc, kind)
+                {
+                    hinted.push((id, wrapper));
+                }
+                out.push((id, occupant));
+            }
+            let _ = tx.send(Ev::Agents(crate::agent::Reading { panes: out, hinted }));
         });
     }
 
