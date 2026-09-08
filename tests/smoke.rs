@@ -2212,3 +2212,33 @@ fn dirk_says_what_the_window_it_is_in_should_be_called() {
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(quiet.title(), None, "an empty template still wrote a title");
 }
+
+#[test]
+fn copy_mode_moves_by_words_the_way_every_editor_does() {
+    // Selecting an identifier out of a stack trace meant holding `l`. This is
+    // the gap people actually feel, because every editor they use has `w`.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    h.send(b"printf 'zzalpha.beta  gamma\\n'\r");
+    assert!(
+        h.wait_for("zzalpha.beta", START),
+        "the line never printed\n{}",
+        h.drawn()
+    );
+
+    // Into copy mode, to the start of that line, then select one word.
+    h.send(b"\x00[");
+    assert!(
+        h.wait_until(START, |h| h.drawn().contains("y copy")),
+        "copy mode did not open\n{}",
+        h.drawn()
+    );
+    // Up to the printed line, to its start, then select one word: `zzalpha`
+    // stops at the dot, which is what makes `w` useful in code.
+    h.send(b"k0vwy");
+    assert!(
+        h.wait_until(START, |h| !h.drawn().contains("y copy")),
+        "copying did not leave copy mode\n{}",
+        h.drawn()
+    );
+}

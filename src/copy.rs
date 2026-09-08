@@ -194,3 +194,172 @@ mod tests {
         assert_eq!(text(parser.screen(), span), "src/main.rs\nsrc/api.rs");
     }
 }
+
+/// Where a word motion lands, on one screen.
+///
+/// vi's rules, not a Unicode segmentation library's: what somebody pressing `w`
+/// expects here is what vi does, including the places vi is arguably wrong. A
+/// word is a run of word characters or a run of punctuation; a big word is a
+/// run of anything that is not a space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Word {
+    /// `w` — the start of the next word.
+    Next,
+    /// `b` — the start of this word, or of the one before it.
+    Back,
+    /// `e` — the end of this word, or of the next.
+    End,
+}
+
+/// Which class a character belongs to, for `w` and `b`.
+///
+/// Three classes and not two, because vi stops between a word and the
+/// punctuation beside it: `foo.bar` is three words, which is what makes `w`
+/// useful in code rather than in prose.
+fn class(c: char, big: bool) -> u8 {
+    match c {
+        c if c.is_whitespace() => 0,
+        _ if big => 1,
+        c if c.is_alphanumeric() || c == '_' => 1,
+        _ => 2,
+    }
+}
+
+/// Move by a word within `line`, from `col`.
+///
+/// Answers a column on the same line. Running off the end is the end: crossing
+/// lines would need the scrollback, and the caller is already the thing that
+/// knows how to move between rows.
+pub fn word(line: &str, col: u16, motion: Word, big: bool) -> u16 {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return 0;
+    }
+    let last = chars.len() - 1;
+    let at = (col as usize).min(last);
+    let cls = |i: usize| class(chars[i], big);
+
+    let landed = match motion {
+        Word::Next => {
+            let mut i = at;
+            // Off the end of what is under the cursor, then over the gap.
+            let start = cls(i);
+            while i < last && cls(i) == start && start != 0 {
+                i += 1;
+            }
+            while i < last && cls(i) == 0 {
+                i += 1;
+            }
+            i
+        }
+        Word::Back => {
+            let mut i = at;
+            while i > 0 && cls(i - 1) == 0 {
+                i -= 1;
+            }
+            // Then to the start of whatever that is.
+            if i > 0 {
+                i -= 1;
+                let here = cls(i);
+                while i > 0 && cls(i - 1) == here && here != 0 {
+                    i -= 1;
+                }
+            }
+            i
+        }
+        Word::End => {
+            let mut i = at;
+            // Past the end of this one, so pressing it twice moves twice.
+            if i < last {
+                i += 1;
+            }
+            while i < last && cls(i) == 0 {
+                i += 1;
+            }
+            let here = cls(i);
+            while i < last && cls(i + 1) == here && here != 0 {
+                i += 1;
+            }
+            i
+        }
+    };
+    landed as u16
+}
+
+/// The row a paragraph motion lands on.
+///
+/// A paragraph is a run of lines with something on them; a blank line is the
+/// boundary. `{` goes back to one and `}` forward, which in a terminal is how
+/// you move between one command's output and the next.
+pub fn paragraph(lines: &[String], row: u16, forward: bool) -> u16 {
+    let last = lines.len().saturating_sub(1);
+    let blank = |i: usize| lines.get(i).is_none_or(|l| l.trim().is_empty());
+    let mut i = (row as usize).min(last);
+    let step = |i: usize| match forward {
+        true => (i + 1).min(last),
+        false => i.saturating_sub(1),
+    };
+    // Off whatever boundary we are standing on, so pressing it twice moves
+    // twice rather than staying put.
+    while i != step(i) && blank(i) {
+        i = step(i);
+    }
+    while i != step(i) && !blank(step(i)) {
+        i = step(i);
+    }
+    match i == step(i) {
+        true => i as u16,
+        false => step(i) as u16,
+    }
+}
+
+#[cfg(test)]
+mod motions {
+    use super::*;
+
+    #[test]
+    fn a_word_is_what_vi_means_by_one() {
+        // Three classes, not two: `foo.bar` is three words, which is what makes
+        // this useful in code rather than in prose.
+        let line = "foo.bar  baz";
+        assert_eq!(word(line, 0, Word::Next, false), 3, "to the dot");
+        assert_eq!(word(line, 3, Word::Next, false), 4, "to bar");
+        assert_eq!(word(line, 4, Word::Next, false), 9, "over the gap to baz");
+        assert_eq!(word(line, 9, Word::Back, false), 4);
+        assert_eq!(word(line, 4, Word::Back, false), 3);
+        assert_eq!(word(line, 0, Word::End, false), 2, "the end of foo");
+        assert_eq!(word(line, 2, Word::End, false), 3, "the dot is a word");
+    }
+
+    #[test]
+    fn a_big_word_is_anything_that_is_not_a_space() {
+        let line = "foo.bar  baz";
+        assert_eq!(word(line, 0, Word::Next, true), 9, "straight over the dot");
+        assert_eq!(word(line, 9, Word::Back, true), 0);
+        assert_eq!(word(line, 0, Word::End, true), 6, "the end of foo.bar");
+    }
+
+    #[test]
+    fn a_motion_at_the_edge_stays_on_the_line() {
+        // Crossing lines would need the scrollback, and the row is the caller's
+        // business. Standing still is the honest answer.
+        assert_eq!(word("abc", 2, Word::Next, false), 2);
+        assert_eq!(word("abc", 0, Word::Back, false), 0);
+        assert_eq!(word("", 0, Word::Next, false), 0);
+    }
+
+    #[test]
+    fn a_paragraph_is_a_run_of_lines_with_something_on_them() {
+        let lines: Vec<String> = ["one", "two", "", "three", "", "", "four"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(paragraph(&lines, 0, true), 2, "to the blank after one-two");
+        assert_eq!(paragraph(&lines, 2, true), 4, "to the blank after three");
+        assert_eq!(paragraph(&lines, 6, false), 5, "back to the blank run");
+        // Pressing it at the end does not wrap, and pressing it twice from a
+        // boundary moves twice rather than staying put.
+        assert_eq!(paragraph(&lines, 6, true), 6);
+        assert_eq!(paragraph(&lines, 0, false), 0);
+    }
+}

@@ -3791,6 +3791,46 @@ impl App {
                 }
                 false => mode.at.0 = step(mode.at.0, 1, rows),
             },
+            // Half a screen, which is what the pair does everywhere else.
+            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.session.scroll_focused(rows as isize / 2);
+            }
+            KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.session.scroll_focused(-(rows as isize) / 2);
+            }
+            KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.session.scroll_focused(rows as isize);
+            }
+            KeyCode::Char('f') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.session.scroll_focused(-(rows as isize));
+            }
+            // vi's word motions, on the line the cursor is on. Holding `l` to
+            // reach an identifier in a stack trace is the gap people actually
+            // feel, because every editor they use has `w`.
+            KeyCode::Char(c @ ('w' | 'b' | 'e' | 'W' | 'B' | 'E'))
+                if k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT =>
+            {
+                let motion = match c.to_ascii_lowercase() {
+                    'w' => copy::Word::Next,
+                    'b' => copy::Word::Back,
+                    _ => copy::Word::End,
+                };
+                let big = c.is_uppercase();
+                let (pane, row) = (mode.pane, mode.at.0);
+                let line = self.copy_line(pane, row);
+                if let Some(mode) = self.copy.as_mut() {
+                    mode.at.1 = copy::word(&line, mode.at.1, motion, big);
+                }
+            }
+            // A blank line is the boundary, which in a terminal is the gap
+            // between one command's output and the next.
+            KeyCode::Char(c @ ('{' | '}')) => {
+                let pane = mode.pane;
+                let lines = self.copy_lines(pane);
+                if let Some(mode) = self.copy.as_mut() {
+                    mode.at.0 = copy::paragraph(&lines, mode.at.0, c == '}');
+                }
+            }
             KeyCode::PageUp => {
                 self.session.scroll_focused(rows as isize / 2);
             }
@@ -3806,6 +3846,37 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// One row of the pane being read, as text.
+    fn copy_line(&self, pane: crate::mux::PaneId, row: u16) -> String {
+        self.copy_lines(pane)
+            .get(row as usize)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Every row of the pane being read, as text.
+    ///
+    /// The visible screen, which is what copy mode is looking at: scrolling
+    /// moves the window vt100 already keeps, so a pane read from the past
+    /// answers here exactly as one at the bottom does.
+    fn copy_lines(&self, pane: crate::mux::PaneId) -> Vec<String> {
+        let Some(p) = self
+            .session
+            .focused_workspace()
+            .and_then(|ws| ws.pane(pane))
+        else {
+            return Vec::new();
+        };
+        let Ok(term) = p.term.lock() else {
+            return Vec::new();
+        };
+        let screen = term.screen();
+        let (rows, cols) = screen.size();
+        (0..rows)
+            .map(|r| screen.contents_between(r, 0, r, cols))
+            .collect()
     }
 
     /// Take what is selected, and give it to the end with a clipboard.

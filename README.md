@@ -254,9 +254,16 @@ at it.
 | --- | --- |
 | wheel, <kbd>PgUp</kbd> <kbd>PgDn</kbd>, `g` `G` | move through the scrollback |
 | `h` `j` `k` `l`, arrows, `0` `$` | move the cursor; up at the top scrolls |
+| `w` `b` `e`, `W` `B` `E` | move by words, and by big words |
+| `{` `}` | move by paragraphs — a blank line is the boundary |
+| <kbd>Ctrl</kbd>+`u` `d`, <kbd>Ctrl</kbd>+`b` `f` | half a screen, and a whole one |
 | `v` | start selecting from here |
 | `y` <kbd>Enter</kbd> | copy, and leave |
 | `q` <kbd>Esc</kbd> | leave, back at the bottom |
+
+Words follow vi's rules rather than a Unicode segmentation library's: three
+classes, so `foo.bar` is three words. That is what makes `w` useful in code
+rather than in prose, and it is what somebody pressing it expects.
 
 Dragging with the pointer selects and copies in one gesture, which is what
 everybody already does. A pane whose program asked for mouse events keeps them —
