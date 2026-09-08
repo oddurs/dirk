@@ -2,7 +2,7 @@
 id: 182
 title: main.rs is five thousand lines and one unit test
 type: chore
-status: done
+status: doing
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
@@ -84,3 +84,13 @@ down — the test asks by id now.
 **Next.** The `*_key` handlers are eight functions and a mode dispatcher, and
 they belong with the modes. That is the piece with the next-best ratio of lines
 moved to tests enabled.
+
+Reopened. `git work ship` closes the item its branch claimed, which is right for
+an item a branch finishes and wrong for this one: the criterion about what
+`main.rs` is left holding is deliberately unticked, and an item marked done with
+work named in it is an item nobody will read again.
+
+Still open, in the order the ratio of lines-moved to tests-enabled suggests: the
+eight `*_key` handlers and the mode dispatcher over them; then mouse handling
+and hit testing; then the rendering and composition pass. `main` keeps argument
+parsing, mode selection and the loop.

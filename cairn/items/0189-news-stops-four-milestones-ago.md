@@ -2,7 +2,7 @@
 id: 189
 title: NEWS stops four milestones ago
 type: docs
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p1
