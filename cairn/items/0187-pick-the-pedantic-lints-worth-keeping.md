@@ -2,7 +2,7 @@
 id: 187
 title: Pick the pedantic lints worth keeping
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
@@ -40,6 +40,45 @@ disagree with several of them on purpose.
 
 ## Acceptance criteria
 
-- [ ] The chosen lints are in `Cargo.toml`, each with its reason
-- [ ] The tree is clean under them
-- [ ] CI enforces them
+- [x] The chosen lints are in `Cargo.toml`, each with its reason
+- [x] The tree is clean under them
+- [x] CI enforces them
+
+## 2026-09-08
+
+Read rather than obeyed, and most of what the item nominated did not survive
+the reading.
+
+**`unused_self`, 22 of them — declined.** The item guessed these were methods on
+`App` that never touch it. Every one is in `theme.rs`: a zero-sized `Theme` whose
+accessors take `self` so that `THEME.panel()` reads the way it does, and so a
+theme that carries a palette can arrive without changing every call site. That
+is deliberate and the lint is wrong about it.
+
+**`match_same_arms`, 3 — declined.** All three are distinct cases that happen to
+need the same nothing. `(Some(_), Some(_))` and `(None, None)` are different
+situations; `Waiting if seen` and `Said(Done) if seen` are different
+observations. Merging them saves two lines and loses what the arms were
+documenting.
+
+**`assigning_clones`, 9 — declined.** `clone_from` is measurably better in a
+loop over large values and this is not that; what it is here is a less readable
+line for no gain anybody could measure.
+
+**`cast_possible_truncation`, 42 — declined.** Spot-checked: the ones in the
+drawing code are bounds-checked before the cast rather than after, which is the
+right order and is what the lint cannot see.
+
+**`implicit_clone`, 7 — taken.** `to_path_buf()` on a `PathBuf` and
+`to_string()` on a `String` both say "convert" where what happens is a copy.
+
+The one worth more than all of them was not on the list. The audit's own note
+said there is not one `unwrap` outside a test in `src`, and nothing was keeping
+it that way — so `unwrap_used` and `expect_used` are denied now, with
+`clippy.toml` allowing them where a panic is an assertion. The tree needed no
+changes at all: it was already true, and now it stays true. `todo`,
+`unimplemented` and `dbg_macro` went in beside them on the same argument.
+
+`0191` is here too, because it is the same question. A conflict marker reached a
+manual page during this run of work and `mandoc -T lint` had nothing to say
+about it — `cargo fmt` only sees the ones in Rust.

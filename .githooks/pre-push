@@ -23,4 +23,12 @@ while read -r local_ref _ remote_ref _; do
     esac
 done
 
+# A conflict marker is never intentional and never worth uploading. The gate
+# checks it too, but the gate is a thing you run and this is a thing that runs.
+if git grep -n -I -E "^(<{7}|={7}|>{7}|\|{7})( |$)" -- . ':!Makefile' ':!.githooks/pre-push'; then
+    echo "pre-push: a merge marker is committed above." >&2
+    echo "          --no-verify if you mean it." >&2
+    exit 1
+fi
+
 exit 0

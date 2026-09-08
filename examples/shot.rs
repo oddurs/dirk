@@ -26,6 +26,10 @@
 //! searchable, a few kilobytes, and correct by construction, because it came
 //! out of the program rather than out of a screenshot of it.
 
+//! `unwrap` here is an assertion. `clippy.toml` says so for `#[cfg(test)]`
+//! modules; a example is its own crate and has to say it itself.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};

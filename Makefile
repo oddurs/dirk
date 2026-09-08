@@ -36,8 +36,21 @@ check: fmt lint test
 fmt:
 	$(CARGO) fmt --all --check
 
-lint: shellcheck milestones
+lint: shellcheck milestones conflicts
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+
+# A conflict marker is never intentional and is trivial to see, and `cargo fmt`
+# only sees the ones in Rust. A manual page with three of them in the middle of
+# its COMMANDS section passed `mandoc -T lint` and was committed, because the
+# eye reads the prose around them and skips the noise.
+#
+# Tracked files only, so a marker in something untracked is somebody's business
+# rather than the gate's.
+conflicts:
+	@if git grep -n -I -E "^(<{7}|={7}|>{7}|\|{7})( |$$)" -- . ':!Makefile'; then \
+		echo "conflicts: a merge marker is committed above" >&2; \
+		exit 1; \
+	fi
 
 # The scripts are the workflow, and CI holds them to this. It was not in the
 # gate, so the first thing to fail on it was a change to the script that runs

@@ -1189,10 +1189,9 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                     match &pane.occupant {
                         // Its name, which is how it is addressed, rather than
                         // its kind, which every agent of that kind shares.
-                        crate::agent::Occupant::Agent(k) => pane
-                            .agent_name
-                            .clone()
-                            .unwrap_or_else(|| k.name.to_string()),
+                        crate::agent::Occupant::Agent(k) => {
+                            pane.agent_name.clone().unwrap_or_else(|| k.name.clone())
+                        }
                         crate::agent::Occupant::Program(p) => p.clone(),
                         // "free" rather than "shell": what matters about a
                         // prompt is that an agent could be started in it.

@@ -716,9 +716,9 @@ impl Session {
         let (key, main) = match self.repos.get(path) {
             Some(known) => known.clone(),
             None => {
-                let answer = crate::git::belongs_to(path)
-                    .unwrap_or_else(|| (path.to_path_buf(), path.to_path_buf()));
-                self.repos.insert(path.to_path_buf(), answer.clone());
+                let answer =
+                    crate::git::belongs_to(path).unwrap_or_else(|| (path.clone(), path.clone()));
+                self.repos.insert(path.clone(), answer.clone());
                 answer
             }
         };
@@ -746,7 +746,7 @@ impl Session {
         let proj = &mut self.projects[i];
         if !proj.checkouts.iter().any(|c| &c.path == path) {
             let checkout = Checkout {
-                path: path.to_path_buf(),
+                path: path.clone(),
                 main: *path == main,
                 repo: None,
                 read_at: None,
@@ -2539,7 +2539,7 @@ impl Session {
                     (Some(kind), None) => {
                         let from = crate::name::slugify(&ws.label, crate::name::AGENT_NAME_MAX);
                         let from = if from.is_empty() {
-                            kind.name.to_string()
+                            kind.name.clone()
                         } else {
                             from
                         };
