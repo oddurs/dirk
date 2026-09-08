@@ -164,7 +164,12 @@ pub fn agent_json(session: &Session, p: usize, w: usize) -> Option<Value> {
 ///
 /// Split from the mutating half so a read is obviously a read — including to
 /// the seen rule, which must not be touched here.
-pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire::Reply> {
+pub fn read(
+    session: &Session,
+    kinds: &[crate::agent::Kind],
+    cmd: &str,
+    args: &[String],
+) -> Option<crate::wire::Reply> {
     use crate::wire::Reply;
     Some(match cmd {
         "workspace.list" => {
@@ -255,6 +260,27 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
                 }
             }
             Reply::ok(json!({ "tabs": list }))
+        }
+
+        // Which rules a harness is being recognised by, and where they came
+        // from. When a state is wrong the first question is which rules decided
+        // it, and "the ones dirk ships" and "the ones in the file you wrote
+        // last week" are very different answers.
+        "agent.rules" => {
+            let list: Vec<Value> = kinds
+                .iter()
+                .map(|k| {
+                    json!({
+                        "name": k.name,
+                        "from": k.from.name(),
+                        "names": k.names,
+                        "argv": k.argv,
+                        "command": k.command,
+                        "blocked": { "menu": k.choices, "match": k.blocked },
+                    })
+                })
+                .collect();
+            Reply::ok(json!({ "agents": list }))
         }
 
         "agent.list" => {
@@ -454,6 +480,11 @@ pub const COMMANDS: &[Command] = &[
         name: "agent.state",
         args: "<blocked|working|done|idle|starting> [workspace|pane]",
         answer: "state, workspace, seen",
+    },
+    Command {
+        name: "agent.rules",
+        args: "",
+        answer: "agents[]",
     },
     Command {
         name: "agent.start",

@@ -410,7 +410,24 @@ blocked = { menu = true, match = ["Proceed?"] }
 
 A block whose `name` matches a shipped one replaces it whole rather than
 merging — somebody overriding claude's markers does not want to inherit half of
-ours. Markers are substrings, not patterns: this runs against the screen on
+ours.
+
+**One harness, one file.** `~/.config/dirk/agents/claude.toml` says the same
+thing without the `name`, which the filename already carries, and beats a block
+of the same name — a file is the more specific statement, a document about that
+one harness. It is also a thing you can hand to somebody, which a paragraph of
+your config.toml is not. A file that does not parse is complained about and
+ignored: detection rules that fail to load must not be able to take out the
+session that was going to draw with them.
+
+`dirk agent rules` says which rules each harness is being recognised by and
+where they came from. When a state is wrong the first question is which rules
+decided it, and "the ones dirk ships" and "the ones in the file you wrote last
+week" are very different answers.
+
+Deliberately not doing the other half of what herdr does here: fetching rule
+updates from a server. A redraw whose behaviour depends on a file downloaded
+overnight is not a redraw anybody can debug. Markers are substrings, not patterns: this runs against the screen on
 every tick, and a regular expression out of a config file is a way to make a
 redraw depend on somebody else's backtracking.
 

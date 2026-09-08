@@ -32,8 +32,23 @@ updates from a server. A redraw whose behaviour depends on a file downloaded
 overnight is not a redraw anybody can debug.
 
 ## Acceptance criteria
-- [ ] `~/.config/dirk/agents/<name>.toml` read at startup and on reload
-- [ ] A local file replaces shipped rules of that name whole
-- [ ] `[[agent]]` in config.toml keeps working and is documented as the older form
-- [ ] An invalid file warns and falls back; it never fails startup
-- [ ] `dirk agent rules` lists each harness and which source decided it
+- [x] `~/.config/dirk/agents/<name>.toml` read at startup and on reload
+- [x] A local file replaces shipped rules of that name whole
+- [x] `[[agent]]` in config.toml keeps working and is documented as the older form
+- [x] An invalid file warns and falls back; it never fails startup
+- [x] `dirk agent rules` lists each harness and which source decided it
+
+## 2026-09-08
+
+The filename names the harness, so a file has no `name` field. A `name` inside
+one that disagreed with the filename would leave two ways to say which harness a
+document is about and no way to tell which won.
+
+Files beat `[[agent]]` blocks, and are read in sorted order so two of them
+cannot decide between themselves which was last. A file is the more specific
+statement — somebody wrote a document about that one harness — and the block is
+the older way of saying the same thing.
+
+`Kind` grew a `from`, which is not part of what a rule is and is kept anyway:
+when a state is wrong the first question is which rules decided it. `agent
+rules` reports it, and `0128` will report it per pane.

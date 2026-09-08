@@ -3303,3 +3303,93 @@ fn a_direct_attach_can_read_what_has_gone_past_and_typing_comes_back() {
     drop(direct);
     drop(client);
 }
+
+#[test]
+fn a_harness_can_be_replaced_by_a_file_about_that_harness() {
+    // Fixing one marker used to be an edit to the file that also holds your
+    // projects, your boards and your theme — and there was no way to hand
+    // somebody the fix.
+    let session = unique("rules");
+    let dir = config_home().join("cfg-rules");
+    std::fs::create_dir_all(dir.join("dirk").join("agents")).expect("agents dir");
+    std::fs::write(
+        dir.join("dirk").join("agents").join("claude.toml"),
+        "names = [\"claude\", \"zzclaudewrapper\"]\n\
+         [blocked]\n\
+         menu = false\n\
+         match = [\"zzASKING\"]\n",
+    )
+    .expect("rule file");
+    // And one that does not parse, which must be complained about and ignored
+    // rather than taking the session with it.
+    std::fs::write(
+        dir.join("dirk").join("agents").join("broken.toml"),
+        "names = [unclosed\n",
+    )
+    .expect("broken rule file");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, rules) = ask(&session, &["agent", "rules"]);
+    assert!(ok, "agent rules failed: {rules}");
+    assert!(
+        rules.contains("zzclaudewrapper"),
+        "the file did not replace the shipped rules: {rules}"
+    );
+    assert!(
+        rules.contains("\"from\": \"file\""),
+        "the answer does not say where the rules came from: {rules}"
+    );
+    // Replaced whole, not merged: somebody overriding claude's markers does not
+    // want to inherit half of ours.
+    assert!(
+        !rules.contains("Would you like"),
+        "the shipped markers were merged into the file's: {rules}"
+    );
+    // The harnesses the file said nothing about are untouched.
+    assert!(rules.contains("codex"), "a harness went missing: {rules}");
+    // And the file that does not parse is not a harness.
+    assert!(
+        !rules.contains("\"name\": \"broken\""),
+        "a rule file that does not parse became a harness: {rules}"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn an_agent_block_in_the_config_still_works_and_a_file_wins() {
+    // `[[agent]]` is what these were called first, and somebody's config should
+    // not stop working because a better place to put it arrived.
+    let session = unique("rulesboth");
+    let dir = config_home().join("cfg-rulesboth");
+    std::fs::create_dir_all(dir.join("dirk").join("agents")).expect("agents dir");
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        "[[agent]]\nname = \"zzfromconfig\"\n\n[[agent]]\nname = \"claude\"\nnames = [\"zzfromblock\"]\n",
+    )
+    .expect("config");
+    std::fs::write(
+        dir.join("dirk").join("agents").join("claude.toml"),
+        "names = [\"zzfromfile\"]\n",
+    )
+    .expect("rule file");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, rules) = ask(&session, &["agent", "rules"]);
+    assert!(ok, "agent rules failed: {rules}");
+    assert!(
+        rules.contains("zzfromconfig"),
+        "an [[agent]] block stopped working: {rules}"
+    );
+    // A file is the more specific statement: a document about that one harness.
+    assert!(
+        rules.contains("zzfromfile") && !rules.contains("zzfromblock"),
+        "the block beat the file about the same harness: {rules}"
+    );
+
+    drop(client);
+}

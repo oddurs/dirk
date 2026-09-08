@@ -75,6 +75,34 @@ pub struct Kind {
     /// Without this, every such turn read as blocked, which masks `done` and
     /// inverts the attention order.
     pub choices: bool,
+    /// Where these rules came from.
+    ///
+    /// Not part of what a rule *is*, and kept anyway: when a state is wrong the
+    /// first question is which rules decided it, and "the ones dirk ships" and
+    /// "the ones in the file you wrote last week" are very different answers.
+    pub from: From,
+}
+
+/// Which of the three places a harness's rules were read from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum From {
+    /// Compiled in.
+    #[default]
+    Shipped,
+    /// An `[[agent]]` block in config.toml. What these were called first.
+    Config,
+    /// Its own file under `agents/`, which replaces the shipped rules whole.
+    File,
+}
+
+impl From {
+    pub fn name(self) -> &'static str {
+        match self {
+            From::Shipped => "shipped",
+            From::Config => "config.toml",
+            From::File => "file",
+        }
+    }
 }
 
 /// The harnesses dirk knows about without being told.
@@ -92,6 +120,7 @@ pub fn defaults() -> Vec<Kind> {
         command: vec![name.to_string()],
         blocked: blocked.iter().map(|s| s.to_string()).collect(),
         choices,
+        from: From::Shipped,
     };
     vec![
         k(
