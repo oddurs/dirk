@@ -2,7 +2,7 @@
 id: 124
 title: 'dirk notify: an interruption a script can cause'
 type: feature
-status: backlog
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
