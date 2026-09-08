@@ -52,12 +52,19 @@ nothing has to be passed twice.
     $ git work sync           # rebase onto origin/main, when it has moved
     $ git work ship
 
-`ship` runs the gate, pushes, opens a pull request titled from the item and
-bodied from its reasoning, and turns on auto-merge. When CI goes green GitHub
+`ship` closes the item and commits that, runs the gate, pushes, opens a pull
+request titled from the item and bodied from its reasoning, and turns on
+auto-merge.
+
+The close is in the branch on purpose. `land` runs in the trunk checkout, after
+the branch it belonged to is gone, so anything it wrote to `cairn/items` there
+would be a loose edit with nowhere to go — the trunk takes changes only through
+a pull request. Putting the close in the branch makes the commit that did the
+work the commit that recorded it. When CI goes green GitHub
 squashes it and deletes the branch. `git work ship --land` waits for that to
 happen and then does the last step for you.
 
-    $ git work land           # close the item, remove the worktree
+    $ git work land           # remove the worktree; ship closed the item
     $ git work drop           # change your mind: hand the item back instead
     $ git work list           # what is still in flight
     $ git work clean          # reap everything that has already merged
@@ -82,8 +89,8 @@ The gate
 
     $ make check
 
-`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and the full
-test suite. It is what CI runs, and `git work ship` runs it before it pushes,
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `shellcheck`
+over the scripts and hooks, and the full test suite. It is what CI runs, and `git work ship` runs it before it pushes,
 so a red pull request should be a surprise.
 
     $ make shot

@@ -14,16 +14,16 @@ brief. Read it before you change anything.
     ... work ...
     make check                # the gate CI enforces
     git work ship             # push, pull request, merge itself when green
-    git work land             # close the item, remove the worktree
+    git work land             # remove the worktree; ship closed the item
     git work drop             # changed your mind: hand the item back instead
 
 Every branch gets a worktree of its own, so two agents can work at once without
 sharing a build directory. Never `git switch` in a checkout someone else may be
 building in.
 
-`make check` is `cargo fmt --check`, `cargo clippy --all-targets -D warnings`
-and the full test suite. It must pass. Do not ship around it and do not use
-`--no-verify`.
+`make check` is `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
+`shellcheck` over the scripts, and the full test suite. It must pass. Do not
+ship around it and do not use `--no-verify`.
 
 ## What the code is trying to be
 

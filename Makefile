@@ -13,7 +13,7 @@ DIRK    := target/release/dirk
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DISTDIR := dirk-$(VERSION)
 
-.PHONY: all build check test fmt lint shot shots site site-serve roadmap setup \
+.PHONY: all build check test fmt lint shellcheck shot shots site site-serve roadmap setup \
         news ChangeLog dist install install-man uninstall clean distclean help
 
 all: build
@@ -31,8 +31,22 @@ check: fmt lint test
 fmt:
 	$(CARGO) fmt --all --check
 
-lint:
+lint: shellcheck
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+
+# The scripts are the workflow, and CI holds them to this. It was not in the
+# gate, so the first thing to fail on it was a change to the script that runs
+# the gate. Skipped rather than fatal when shellcheck is absent -- CI is the
+# authority and says so out loud rather than passing in silence.
+SCRIPTS = scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
+
+shellcheck:
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		echo "shellcheck -S warning $(SCRIPTS)"; \
+		shellcheck -S warning $(SCRIPTS); \
+	else \
+		echo "shellcheck: not installed, skipping -- CI runs it and will not"; \
+	fi
 
 # The unit tests cover the naming policy; tests/smoke.rs drives the real binary
 # on a real pseudo-terminal, so this is one entry point for both.

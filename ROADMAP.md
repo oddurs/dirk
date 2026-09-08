@@ -217,7 +217,7 @@ Local and several saved machines in one nav, one agent list across all of them,
 
 ## v1.0 — Production
 
-`#######···` 63% · 15 of 24 done · due 2027-11-01
+`#######···` 64% · 16 of 25 done · due 2027-11-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -253,4 +253,5 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0095` Rows say what they hold without being opened <sup>feature · p2 · nav</sup>
 - [x] `0096` The state glyphs are a set, and this is not the only one <sup>chore · p3 · chrome</sup>
 - [x] `0099` A shot at a size you choose <sup>chore · p3 · web</sup>
+- [x] `0150` A landed item's close never reaches the trunk <sup>bug · p1 · packaging</sup>
 
