@@ -1,0 +1,678 @@
+/* dirk — the design system.
+ *
+ * Three rules, and they are the program's rules restated for a page.
+ *
+ *   Colour is a role, never a literal.  Every colour here is a var() reaching
+ *   for a job — --text, --accent, --ok — and every one of those is generated
+ *   from src/theme.rs into tokens.css.  There is no hex in this file, and the
+ *   light ramp is derived from the dark one rather than picked beside it, so
+ *   there is still only one palette.
+ *
+ *   Chrome is not content.  The header, the navigation and the footer paint
+ *   their own ground.  The reading column paints nothing of its own.  That
+ *   difference is what makes navigation read as navigation, on a page as much
+ *   as in a pane.
+ *
+ *   The grid is a character cell.  Spacing is a multiple of one terminal row,
+ *   not of eight pixels, so the terminal renders sit on the same rhythm as the
+ *   prose around them. */
+
+/* ═══ Scale ══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* One terminal row. Everything vertical is a multiple or a third of it. */
+  --row: 1.5rem;
+
+  --space-1: calc(var(--row) / 3);
+  --space-2: calc(var(--row) * 2 / 3);
+  --space-3: var(--row);
+  --space-4: calc(var(--row) * 1.5);
+  --space-5: calc(var(--row) * 2);
+  --space-6: calc(var(--row) * 3);
+  --space-7: calc(var(--row) * 4);
+  --space-8: calc(var(--row) * 6);
+
+  /* The site is set in the reader's terminal font. It is the one typeface
+   * every visitor already chose, and for a program that draws terminals it is
+   * a better answer than a webfont nobody asked to download. */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono",
+    "JetBrains Mono", "Roboto Mono", "Liberation Mono", monospace;
+  --font-text: system-ui, -apple-system, "Segoe UI", Inter, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 1rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.25rem;
+  --text-hero: clamp(2.25rem, 1.2rem + 4.2vw, 3.75rem);
+
+  /* Prose stops at a measure you can read without losing the line. */
+  --measure: 68ch;
+  --measure-wide: 104ch;
+  --sidebar: 17rem;
+
+  --radius: 3px;
+  --radius-lg: 5px;
+  --hairline: 1px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --quick: 120ms var(--ease);
+}
+
+/* ═══ Surfaces ═══════════════════════════════════════════════════════════
+ * Chrome one step off the ground, exactly as the rail sits off the panel. */
+
+:root {
+  --surface-ground: var(--panel-bg);
+  --surface-chrome: var(--rail-bg);
+  --surface-raised: var(--active-row);
+  --surface-sunken: var(--rail-bg);
+  --rule: var(--rule-strong);
+  --rule-faint: color-mix(in oklab, var(--rule-strong) 45%, transparent);
+  --focus: var(--accent, var(--title));
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+/* The light ramp is derived, not authored: the same hues, turned over.
+ *
+ * It is written in relative colour syntax on purpose. A browser that cannot
+ * read it drops every one of these declarations together and keeps the dark
+ * palette, which is a whole design rather than half of two. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --surface-ground: oklch(from var(--gotham-base8) 0.985 calc(c * 0.35) h);
+    --surface-chrome: oklch(from var(--gotham-base8) 0.955 calc(c * 0.5) h);
+    --surface-raised: oklch(from var(--gotham-base8) 0.97 calc(c * 0.6) h);
+    --surface-sunken: oklch(from var(--gotham-base8) 0.945 calc(c * 0.6) h);
+
+    --text: oklch(from var(--gotham-base0) 0.26 c h);
+    --dim: oklch(from var(--gotham-base6) 0.48 c h);
+    --faint: oklch(from var(--gotham-base5) 0.6 c h);
+    --title: oklch(from var(--gotham-accent) 0.48 c h);
+    --key: oklch(from var(--gotham-accent) 0.48 c h);
+    --number: oklch(from var(--gotham-accent) 0.48 c h);
+    --working: oklch(from var(--gotham-accent) 0.48 c h);
+
+    --ok: oklch(from var(--gotham-green) 0.5 c h);
+    --warn: oklch(from var(--gotham-yellow) 0.55 calc(c * 1.15) h);
+    --critical: oklch(from var(--gotham-red) 0.5 c h);
+    --branch: oklch(from var(--gotham-mauve) 0.5 c h);
+    --worktree: oklch(from var(--gotham-peach) 0.5 c h);
+    --intent: oklch(from var(--gotham-base6) 0.48 c h);
+
+    --rule: oklch(from var(--gotham-base5) 0.87 calc(c * 0.5) h);
+    --rule-faint: oklch(from var(--gotham-base5) 0.93 calc(c * 0.4) h);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 12px 28px -18px rgb(0 0 0 / 0.25);
+  }
+}
+
+/* The toggle wins over the system in both directions. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-ground: oklch(from var(--gotham-base8) 0.985 calc(c * 0.35) h);
+  --surface-chrome: oklch(from var(--gotham-base8) 0.955 calc(c * 0.5) h);
+  --surface-raised: oklch(from var(--gotham-base8) 0.97 calc(c * 0.6) h);
+  --surface-sunken: oklch(from var(--gotham-base8) 0.945 calc(c * 0.6) h);
+  --text: oklch(from var(--gotham-base0) 0.26 c h);
+  --dim: oklch(from var(--gotham-base6) 0.48 c h);
+  --faint: oklch(from var(--gotham-base5) 0.6 c h);
+  --title: oklch(from var(--gotham-accent) 0.48 c h);
+  --key: oklch(from var(--gotham-accent) 0.48 c h);
+  --number: oklch(from var(--gotham-accent) 0.48 c h);
+  --working: oklch(from var(--gotham-accent) 0.48 c h);
+  --ok: oklch(from var(--gotham-green) 0.5 c h);
+  --warn: oklch(from var(--gotham-yellow) 0.55 calc(c * 1.15) h);
+  --critical: oklch(from var(--gotham-red) 0.5 c h);
+  --branch: oklch(from var(--gotham-mauve) 0.5 c h);
+  --worktree: oklch(from var(--gotham-peach) 0.5 c h);
+  --intent: oklch(from var(--gotham-base6) 0.48 c h);
+  --rule: oklch(from var(--gotham-base5) 0.87 calc(c * 0.5) h);
+  --rule-faint: oklch(from var(--gotham-base5) 0.93 calc(c * 0.4) h);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 12px 28px -18px rgb(0 0 0 / 0.25);
+}
+
+/* ═══ Reset ══════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  /* Anchored headings should not land under the sticky header. */
+  scroll-padding-top: calc(var(--space-6) + var(--space-2));
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+body {
+  background: var(--surface-ground);
+  color: var(--text);
+  font-family: var(--font-text);
+  font-size: var(--text-base);
+  line-height: var(--row);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+img, svg, video { display: block; max-width: 100%; height: auto; }
+input, button, select { font: inherit; color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+::selection { background: var(--selected-bg); color: var(--selected); }
+
+/* ═══ Layout primitives ══════════════════════════════════════════════════ */
+
+.shell {
+  width: 100%;
+  max-width: var(--measure-wide);
+  margin-inline: auto;
+  padding-inline: var(--space-3);
+}
+
+.column { max-width: var(--measure); }
+
+.stack > * + * { margin-block-start: var(--space-3); }
+
+.with-sidebar {
+  display: grid;
+  gap: var(--space-6);
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  align-items: start;
+  padding-block: var(--space-6);
+}
+@media (max-width: 60rem) {
+  .with-sidebar { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+}
+
+main { flex: 1; }
+
+.skip {
+  position: absolute;
+  inset-inline-start: var(--space-2);
+  inset-block-start: calc(var(--space-2) * -8);
+  z-index: 10;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-chrome);
+  border: var(--hairline) solid var(--rule);
+  border-radius: var(--radius);
+  transition: inset-block-start var(--quick);
+}
+.skip:focus { inset-block-start: var(--space-2); }
+
+/* ═══ Prose ══════════════════════════════════════════════════════════════ */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  scroll-margin-top: var(--space-6);
+}
+
+h1 { font-size: var(--text-3xl); }
+h2 { font-size: var(--text-xl); color: var(--title); }
+h3 { font-size: var(--text-lg); }
+h4, h5, h6 { font-size: var(--text-base); color: var(--dim); }
+
+.prose > * + * { margin-block-start: var(--space-3); }
+.prose > h2 { margin-block-start: var(--space-6); }
+.prose > h3 { margin-block-start: var(--space-5); }
+.prose > h2 + *, .prose > h3 + * { margin-block-start: var(--space-2); }
+.prose { max-width: var(--measure); }
+.prose p, .prose li { text-wrap: pretty; }
+
+/* Rules and headings share a job: they say a new thing has started. Only one
+ * of them should do it at a time, so a heading carries its own hairline. */
+.prose > h2 {
+  padding-block-end: var(--space-1);
+  border-block-end: var(--hairline) solid var(--rule-faint);
+}
+
+a {
+  color: var(--title);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--title) 35%, transparent);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+  transition: color var(--quick), text-decoration-color var(--quick);
+}
+a:hover { text-decoration-color: currentColor; }
+
+/* The anchor beside a heading is chrome. It appears when the heading is
+ * reached for and is invisible the rest of the time; a column of them down the
+ * margin is decoration claiming to be structure. */
+.anchor {
+  margin-inline-start: 0.4em;
+  color: var(--faint);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity var(--quick);
+}
+h2:hover .anchor, h3:hover .anchor, .anchor:focus-visible { opacity: 1; }
+
+.prose ul, .prose ol { padding-inline-start: var(--space-3); }
+.prose li + li { margin-block-start: var(--space-1); }
+.prose li::marker { color: var(--faint); }
+
+.prose blockquote {
+  padding-inline-start: var(--space-2);
+  border-inline-start: 2px solid var(--rule);
+  color: var(--dim);
+}
+
+hr {
+  border: 0;
+  border-block-start: var(--hairline) solid var(--rule-faint);
+  margin-block: var(--space-5);
+}
+
+.lede {
+  font-size: var(--text-lg);
+  color: var(--dim);
+  max-width: var(--measure);
+}
+
+/* ═══ Code ═══════════════════════════════════════════════════════════════ */
+
+code, kbd, samp, pre { font-family: var(--font-mono); }
+
+:not(pre) > code {
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  background: var(--surface-sunken);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: var(--radius);
+  /* A word in code type should not break the line it is in. */
+  white-space: nowrap;
+}
+
+figure.code {
+  position: relative;
+  background: var(--surface-sunken);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+figure.code pre {
+  overflow-x: auto;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--row);
+  tab-size: 4;
+}
+
+/* The language, as a label on the frame rather than a badge floating over it. */
+figure.code::before {
+  content: attr(data-lang);
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  padding: 0.1em 0.6em;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  border-inline-start: var(--hairline) solid var(--rule-faint);
+  border-block-end: var(--hairline) solid var(--rule-faint);
+  border-end-start-radius: var(--radius);
+}
+figure.code[data-lang="text"]::before,
+figure.code[data-lang="console"]::before { content: none; }
+
+/* A console block is a transcript: the prompt is chrome, the output is not. */
+figure.code[data-lang="console"] pre { color: var(--dim); }
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0.05em 0.4em;
+  font-size: 0.85em;
+  text-align: center;
+  color: var(--key);
+  font-weight: var(--key-weight, 600);
+  background: var(--surface-raised);
+  border: var(--hairline) solid var(--rule);
+  border-block-end-width: 2px;
+  border-radius: var(--radius);
+}
+
+/* ═══ The terminal frame ═════════════════════════════════════════════════
+ * Real output from the real binary. It stays dark in both themes, because a
+ * terminal is dark and recolouring a screenshot makes it a drawing. */
+
+.term {
+  --term-ground: var(--gotham-base0);
+  --term-chrome: var(--gotham-rail);
+  background: var(--term-ground);
+  border: var(--hairline) solid var(--gotham-base5);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  color-scheme: dark;
+}
+
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.3rem var(--space-2);
+  background: var(--term-chrome);
+  border-block-end: var(--hairline) solid var(--gotham-base5);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--gotham-base6);
+}
+.term-dot {
+  inline-size: 0.6em;
+  block-size: 0.6em;
+  border-radius: 50%;
+  background: var(--gotham-base5);
+}
+.term-name { margin-inline-start: auto; letter-spacing: 0.08em; text-transform: uppercase; }
+
+.term-screen {
+  overflow-x: auto;
+  padding: var(--space-2);
+  font-size: clamp(0.5rem, 1.35vw, var(--text-sm));
+  line-height: 1.35;
+  color: var(--gotham-base8);
+  white-space: pre;
+}
+
+/* ═══ Callouts ═══════════════════════════════════════════════════════════ */
+
+.callout {
+  --callout-tone: var(--dim);
+  padding: var(--space-2) var(--space-3);
+  border-inline-start: 2px solid var(--callout-tone);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: color-mix(in oklab, var(--callout-tone) 8%, transparent);
+  font-size: var(--text-sm);
+}
+.callout > * + * { margin-block-start: var(--space-2); }
+.callout[data-kind="trap"] { --callout-tone: var(--warn); }
+.callout[data-kind="warn"] { --callout-tone: var(--critical); }
+.callout[data-kind="note"] { --callout-tone: var(--title); }
+.callout::before {
+  content: attr(data-kind);
+  display: block;
+  margin-block-end: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--callout-tone);
+}
+
+/* ═══ Tables ═════════════════════════════════════════════════════════════ */
+
+.prose table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.prose th, .prose td {
+  padding: var(--space-1) var(--space-2);
+  text-align: start;
+  border-block-end: var(--hairline) solid var(--rule-faint);
+  vertical-align: baseline;
+}
+.prose th {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--dim);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.prose td:first-child { font-family: var(--font-mono); color: var(--text); }
+
+/* ═══ Chrome: header, nav, footer ════════════════════════════════════════ */
+
+.chrome {
+  background: var(--surface-chrome);
+  border-color: var(--rule-faint);
+  border-style: solid;
+  border-width: 0;
+}
+
+header.chrome {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 5;
+  border-block-end-width: var(--hairline);
+  backdrop-filter: blur(8px);
+  background: color-mix(in oklab, var(--surface-chrome) 88%, transparent);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  block-size: calc(var(--row) * 2.4);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45em;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.02em;
+}
+.brand .mark { color: var(--title); }
+.brand:hover { color: var(--text); }
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 0.05em 0.45em;
+  color: var(--dim);
+  border: var(--hairline) solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.bar nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-inline-start: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.bar nav a { color: var(--dim); text-decoration: none; }
+.bar nav a:hover, .bar nav a[aria-current] { color: var(--text); }
+@media (max-width: 40rem) {
+  .bar nav a[data-optional] { display: none; }
+}
+
+.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: calc(var(--row) * 1.4);
+  block-size: calc(var(--row) * 1.4);
+  color: var(--dim);
+  background: none;
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--quick), border-color var(--quick);
+}
+.ghost:hover { color: var(--text); border-color: var(--rule); }
+
+footer.chrome {
+  border-block-start-width: var(--hairline);
+  padding-block: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--dim);
+}
+footer .bar { block-size: auto; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+footer a { color: var(--dim); }
+
+/* ═══ Sidebar navigation ═════════════════════════════════════════════════ */
+
+.sidebar {
+  position: sticky;
+  inset-block-start: calc(var(--row) * 2.4 + var(--space-3));
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  max-block-size: calc(100dvh - var(--row) * 5);
+  overflow-y: auto;
+}
+@media (max-width: 60rem) { .sidebar { position: static; max-block-size: none; } }
+
+.sidebar h2 {
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 0;
+  padding: 0;
+  margin-block-end: var(--space-1);
+}
+.sidebar section + section { margin-block-start: var(--space-3); }
+.sidebar ul { list-style: none; padding: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.1rem var(--space-2);
+  margin-inline-start: calc(var(--space-2) * -1);
+  color: var(--dim);
+  text-decoration: none;
+  border-inline-start: 2px solid transparent;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.sidebar a:hover { color: var(--text); background: var(--surface-raised); }
+.sidebar a[aria-current="page"] {
+  color: var(--text);
+  border-inline-start-color: var(--title);
+  background: var(--surface-raised);
+}
+
+/* ═══ On this page ═══════════════════════════════════════════════════════ */
+
+.toc {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  border-inline-start: var(--hairline) solid var(--rule-faint);
+  padding-inline-start: var(--space-2);
+}
+.toc ul { list-style: none; padding: 0; }
+.toc a { color: var(--dim); text-decoration: none; display: block; padding-block: 0.1rem; }
+.toc a:hover { color: var(--text); }
+.toc li[data-level="3"] { padding-inline-start: var(--space-2); }
+.toc-title {
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-block-end: var(--space-1);
+}
+
+/* ═══ Hero ═══════════════════════════════════════════════════════════════ */
+
+.hero { padding-block: var(--space-7) var(--space-6); }
+.hero h1 {
+  font-size: var(--text-hero);
+  letter-spacing: -0.03em;
+  max-inline-size: 18ch;
+}
+.hero .lede { margin-block-start: var(--space-3); max-inline-size: 56ch; }
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-start: var(--space-4);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  border: var(--hairline) solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface-raised);
+  transition: border-color var(--quick), color var(--quick);
+}
+.button:hover { border-color: var(--title); color: var(--title); }
+.button[data-variant="primary"] {
+  color: var(--surface-ground);
+  background: var(--title);
+  border-color: var(--title);
+}
+.button[data-variant="primary"]:hover { filter: brightness(1.1); color: var(--surface-ground); }
+
+/* A command you are meant to run, with the one affordance that matters. */
+.command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--surface-sunken);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: var(--radius);
+}
+.command code { background: none; border: 0; padding: 0; white-space: nowrap; overflow-x: auto; }
+.command .prompt { color: var(--faint); user-select: none; }
+
+/* ═══ Cards ══════════════════════════════════════════════════════════════ */
+
+.cards {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  max-inline-size: var(--measure-wide);
+}
+.card {
+  padding: var(--space-3);
+  background: var(--surface-chrome);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: var(--radius-lg);
+}
+.card h3 { font-size: var(--text-base); color: var(--title); }
+.card p { margin-block-start: var(--space-1); color: var(--dim); font-size: var(--text-sm); }
+
+/* ═══ State glyphs ═══════════════════════════════════════════════════════
+ * The same colours the nav uses, for the same words. */
+
+.state { font-family: var(--font-mono); }
+.state[data-state="blocked"] { color: var(--critical); font-weight: 600; }
+.state[data-state="working"] { color: var(--working); }
+.state[data-state="done"]    { color: var(--ok); }
+.state[data-state="idle"]    { color: var(--idle); }
+
+/* ═══ Print ══════════════════════════════════════════════════════════════ */
+
+@media print {
+  header.chrome, footer.chrome, .sidebar, .toc, .skip { display: none; }
+  body { background: #fff; color: #000; }
+  .with-sidebar { grid-template-columns: 1fr; }
+}

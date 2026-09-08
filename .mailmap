@@ -1,0 +1,4 @@
+# One person, two addresses: the commit-signing one GitHub rewrites to, and the
+# one in AUTHORS. `git shortlog -sne` and the generated ChangeLog read this, so
+# the history has one author rather than two.
+Oddur Sigurdsson <oddurs@gmail.com> <oddurs@users.noreply.github.com>

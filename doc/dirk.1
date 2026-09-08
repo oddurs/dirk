@@ -1,0 +1,237 @@
+.\" dirk(1) — manual page.
+.\"
+.\" Copyright (C) 2026 Oddur Sigurdsson.
+.\"
+.\" Copying and distribution of this file, with or without modification, are
+.\" permitted in any medium without royalty provided the copyright notice and
+.\" this notice are preserved.
+.\"
+.TH DIRK 1 "2026-09-07" "dirk 0.4.0" "User Commands"
+.
+.SH NAME
+dirk \- a terminal multiplexer that knows what its sessions are for
+.
+.SH SYNOPSIS
+.B dirk
+.RI [ OPTION ]...
+.RI [ COMMAND ]
+.
+.SH DESCRIPTION
+.B dirk
+runs a terminal multiplexer with a clickable project tree, static layouts, and
+workspaces named from what the program inside them says it is doing.
+.PP
+With no command it attaches to the session, starting it if it is not running.
+The session outlives the terminal it was started from: close that terminal and
+everything in it keeps going.
+.PP
+Where
+.BR tmux (1)
+gives you panes and asks you to remember what is in them,
+.B dirk
+starts from the other end. The sidebar is the product and the panes hang off
+it: boards at the top, the work in the middle, and between them whatever is
+interrupting.
+.
+.SH COMMANDS
+.SS Running a session
+.TP
+.B attach
+Attach to the session, starting it if it is not running. This is the default.
+.TP
+.B server
+Be the session. Started for you; not usually typed.
+.TP
+.B relay
+A session on standard input and output. What
+.B \-\-remote
+runs on the far side.
+.
+.SS Asking a running session
+From a shell or from inside a pane. Answers are JSON, including the failures,
+because the caller is a program and prose on standard error is not something a
+program can branch on. Ids are opaque and stable:
+.B w7
+is a workspace and
+.B w7:p12
+a pane in it. Every managed pane is told its own, so
+.B \-\-current
+works from inside one without looking anything up.
+.TP
+.B workspace \fRlist | focus | create | rename | close
+.TP
+.B pane \fRlist | focus | split | read | send\-keys | close
+.TP
+.B layout \fRlist | open
+.TP
+.B agent \fRlist | start | state | hooks
+.TP
+.B session \fRinfo | list | reload | commands
+.
+.SH OPTIONS
+.TP
+.BI \-\-session " NAME"
+Which session to attach to. Defaults to
+.BR default .
+.TP
+.BI \-\-remote " TARGET"
+Attach to a session on
+.IR TARGET ,
+over
+.BR ssh (1).
+.TP
+.B \-\-no\-session
+One process, no session. Ends with this terminal, which is what
+.B dirk
+was before it had a server.
+.TP
+.B \-\-skill
+Print what a coding agent needs in order to drive a session. Generated from the
+command table, so it cannot describe a surface that no longer exists.
+.TP
+.BR \-h ", " \-\-help
+Display a usage summary and exit.
+.TP
+.BR \-V ", " \-\-version
+Output version information and exit.
+.
+.SH KEYS
+The prefix is
+.BR Ctrl\-Space .
+.BR Ctrl\-a " and " Ctrl\-b
+are both load\-bearing in every shell line editor; Ctrl\-Space is NUL, which
+nothing sends on purpose. Press it twice to send a literal one through.
+.PP
+After the prefix:
+.TS
+tab(@);
+lB l.
+n@New workspace in this project
+o@Open a project
+x@Close the focused pane
+| v@Split into columns
+\- s@Split into rows
+;@Next pane in this workspace
+Tab j k@Next / previous workspace
+1 2 3@Jump to a board
+b@Hide the nav
+u@Release a held name, so naming may claim the workspace again
+r@Restart a stopped pane
+w@Give the nav the keyboard: j k to move, Enter to go, Escape back
+a@Start an agent here
+[@Read this pane's scrollback, and copy out of it
+/@Find a line, in any pane
+d@Detach: leave, and let everything keep running
+q@Quit: end every shell and every agent
+.TE
+.PP
+In the scrollback view: the wheel,
+.BR PgUp / PgDn ,
+.B g
+and
+.B G
+move through it;
+.BR h " " j " " k " " l ,
+the arrows,
+.B 0
+and
+.B $
+move the cursor;
+.B v
+starts a selection;
+.B y
+or
+.B Enter
+copies and leaves;
+.B q
+or
+.B Esc
+leaves without copying. Dragging with the pointer selects and copies in one
+gesture. A pane whose program asked for mouse events keeps them.
+.PP
+Leaving and quitting are different things. A session outlives the terminal it
+was started in, so detaching is the ordinary way out. Quitting ends the work.
+.PP
+.B Esc
+never leaves. It closes the picker, or hands the keyboard back from the nav,
+and does nothing else. Everything else goes straight through to the program in
+the pane.
+.
+.SH CONFIGURATION
+.B dirk
+runs with no configuration file.
+.I ~/.config/dirk/config.toml
+overrides what it names and leaves the rest alone: the brand shown in the bar,
+where the project picker looks, the sidebar width, the scrollback depth, the
+shell, the boards, the layouts, and the naming thresholds.
+.PP
+.B dirk session reload
+re\-reads it without restarting. An open layout keeps its panes.
+.PP
+The full reference, with defaults, is in the README shipped alongside this page
+in
+.IR /usr/local/share/doc/dirk .
+.
+.SH ENVIRONMENT
+.TP
+.B DIRK_SSH
+The program
+.B \-\-remote
+reaches the far side with.
+.TP
+.B DIRK_REMOTE
+The far\-side
+.B dirk
+for
+.BR \-\-remote .
+Defaults to
+.BR dirk .
+.TP
+.B DIRK_DEBUG
+A file for a session's own standard error to land in.
+.TP
+.B SHELL
+What a pane runs when the configuration does not name a shell.
+.
+.SH FILES
+.TP
+.I ~/.config/dirk/config.toml
+The configuration file, if it exists.
+.
+.SH EXIT STATUS
+.B dirk
+exits 0 on success. A command asking a session something exits non\-zero when
+the session refuses or cannot be reached, and prints the reason as JSON on
+standard output.
+.
+.SH BUGS
+Report bugs at
+.UR https://github.com/oddurs/dirk/issues
+https://github.com/oddurs/dirk/issues
+.UE .
+.PP
+The backlog is in the repository: see
+.I ROADMAP.md
+and
+.BR cairn (1).
+.
+.SH AUTHOR
+Written by Oddur Sigurdsson.
+.
+.SH COPYRIGHT
+Copyright \(co 2026 Oddur Sigurdsson.
+License GPLv3+: GNU GPL version 3 or later
+.UR https://gnu.org/licenses/gpl.html
+https://gnu.org/licenses/gpl.html
+.UE .
+.br
+This is free software: you are free to change and redistribute it. There is NO
+WARRANTY, to the extent permitted by law.
+.
+.SH SEE ALSO
+.BR tmux (1),
+.BR screen (1),
+.BR ssh (1)
+.PP
+The full documentation, and the reasoning behind the design, is in the
+project's README.

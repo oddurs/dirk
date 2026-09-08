@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Feature requests and roadmap
+    url: https://github.com/oddurs/dirk/blob/main/ROADMAP.md
+    about: >-
+      dirk plans its work in the repository with cairn. Check ROADMAP.md before
+      opening a request — it may already be filed, with the reasoning attached.
