@@ -3003,6 +3003,7 @@ impl App {
                     .and_then(|x| x.title())
                     .or_else(|| ws.suggested.clone());
                 let panes = ws.panes().len();
+                let here = name::where_it_is(ws);
                 let current = ws.label.clone();
                 let blocked = ws.state == agent::State::Blocked;
 
@@ -3016,6 +3017,7 @@ impl App {
                     &current,
                     title.as_deref(),
                     &repo,
+                    &here,
                     &branch,
                     panes,
                     blocked,

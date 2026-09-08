@@ -512,6 +512,9 @@ pub struct Session {
     /// in without becoming a different directory.
     repos: std::collections::HashMap<PathBuf, (PathBuf, PathBuf)>,
     pub shell: String,
+    /// How a pane's shell is started, and where a pane made beside another one
+    /// begins. Cached like `shell` is, and refreshed on reload.
+    pub terminal: crate::config::Terminal,
     /// Transitions with no new intent that count as stale. Zero is off.
     stale_after: u32,
     scrollback: usize,
@@ -533,6 +536,7 @@ impl Session {
             previous: None,
             repos: std::collections::HashMap::new(),
             shell: cfg.shell(),
+            terminal: cfg.terminal.clone(),
             stale_after: if cfg.naming.show_stale {
                 cfg.naming.stale_after_turns
             } else {
@@ -683,7 +687,13 @@ impl Session {
     fn spawn_shell(&mut self, cwd: &Path, rows: u16, cols: u16) -> Option<Pane> {
         let id = self.id();
         let argv = vec![self.shell.clone()];
-        match Pane::spawn(id, &argv, cwd, rows, cols, self.scrollback, self.tx.clone()) {
+        let how = crate::mux::pty::Setup {
+            rows,
+            cols,
+            scrollback: self.scrollback,
+            login: self.terminal.login(),
+        };
+        match Pane::spawn(id, &argv, cwd, how, self.tx.clone()) {
             Ok(p) => Some(p),
             Err(e) => {
                 eprintln!("dirk: spawn {}: {e}", self.shell);
@@ -694,13 +704,14 @@ impl Session {
 
     /// Split the focused pane, putting a second shell beside it.
     pub fn split(&mut self, dir: Dir, rows: u16, cols: u16) {
-        let Some(cwd) = self
+        let Some(from) = self
             .focused_workspace()
             .and_then(|ws| ws.active_pane())
             .map(|x| x.cwd.clone())
         else {
             return;
         };
+        let cwd = self.terminal.start_in(&from);
         let Some(pane) = self.spawn_shell(&cwd, rows, cols) else {
             return;
         };
@@ -805,15 +816,15 @@ impl Session {
                 // is left rather than what the tree allotted.
                 let inner = content_of(label.is_some(), r);
 
-                match Pane::spawn(
-                    id,
-                    &pane_def.command,
-                    &cwd,
-                    inner.height,
-                    inner.width,
-                    self.scrollback,
-                    self.tx.clone(),
-                ) {
+                let how = crate::mux::pty::Setup {
+                    rows: inner.height,
+                    cols: inner.width,
+                    scrollback: self.scrollback,
+                    // A board runs a command, not a shell, and `-l` to somebody
+                    // else's program is an argument they did not expect.
+                    login: false,
+                };
+                match Pane::spawn(id, &pane_def.command, &cwd, how, self.tx.clone()) {
                     Ok(mut p) => {
                         p.label = label;
                         panes.push(p);
@@ -1210,11 +1221,12 @@ impl Session {
         let Focus::Ws { p, w } = self.focus else {
             return None;
         };
-        let cwd = self
+        let from = self
             .focused_workspace()
             .and_then(|ws| ws.active_pane())
             .map(|x| x.cwd.clone())
             .unwrap_or_else(crate::config::home);
+        let cwd = self.terminal.start_in(&from);
         let pane = self.spawn_shell(&cwd, rows, cols)?;
         let id = self.id();
         let ws = self.projects.get_mut(p)?.workspaces.get_mut(w)?;
@@ -1264,15 +1276,15 @@ impl Session {
             .unwrap_or(area);
 
         let new_id = self.id();
-        match Pane::spawn(
-            new_id,
-            &argv,
-            &cwd,
-            rect.height,
-            rect.width,
-            self.scrollback,
-            self.tx.clone(),
-        ) {
+        let how = crate::mux::pty::Setup {
+            rows: rect.height,
+            cols: rect.width,
+            scrollback: self.scrollback,
+            // Restarting whatever this pane was running, which is its own argv
+            // and only a shell when it was one.
+            login: argv.len() == 1 && argv[0] == self.shell && self.terminal.login(),
+        };
+        match Pane::spawn(new_id, &argv, &cwd, how, self.tx.clone()) {
             Ok(mut pane) => {
                 pane.label = label;
                 let Some(ws) = self.focused_workspace_mut() else {
@@ -1738,6 +1750,7 @@ impl Session {
         for proj in &mut self.projects {
             for ws in &mut proj.workspaces {
                 let title = ws.active_pane().and_then(|p| p.title());
+                let here = crate::name::where_it_is(ws);
                 let now = crate::name::normalize(title.as_deref().unwrap_or_default());
                 // A title the policy would reject is not an intent. Without
                 // this, a pane whose title is a shell prompt or the agent's own
@@ -1745,7 +1758,7 @@ impl Session {
                 // the second source exists for, so they would never be asked
                 // about and would keep their project name for ever.
                 let now = (!now.is_empty()
-                    && !crate::name::is_junk(&now, &proj.name, &cfg.ignore_titles))
+                    && !crate::name::is_junk(&now, &proj.name, &here, &cfg.ignore_titles))
                 .then_some(now);
                 if now != ws.intent {
                     // Only when it actually changed. A title republished

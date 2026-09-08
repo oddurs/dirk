@@ -325,6 +325,11 @@ the socket is not.
 dirk works them out from four signals, ranked, and a weak one is never allowed
 to make a strong claim:
 
+A title that is a shell prompt, or that is simply the name of the directory the
+pane is standing in, is location rather than intent and never becomes a name.
+That matters more since login shells: macOS puts the working directory in the
+window title of every one of them.
+
 | | signal | may claim |
 | --- | --- | --- |
 | 1 | **the agent says so** — a hook runs `dirk agent state done --current` | anything |
@@ -637,6 +642,15 @@ headless_rows = 24
 
 [session]
 resume_agents = true         # start a restored agent on the conversation it had
+
+# A non-login shell on macOS never reads /etc/zprofile, so it never runs
+# path_helper or Homebrew's initialisation — and PATH inside a pane was missing
+# entries it has in every other terminal on the machine. `auto` is login there
+# and unchanged elsewhere, where the same entries are in files every interactive
+# shell reads. A shell with no `-l` wants "non_login".
+[terminal]
+shell_mode = "auto"          # auto | login | non_login
+new_cwd    = "follow"        # follow | home | current | a path
 
 [nav]
 glyphs    = "unicode"        # unicode | ascii | round

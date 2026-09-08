@@ -113,8 +113,25 @@ pub fn similarity(a: &str, b: &str) -> f32 {
     shared as f32 / (x.len() + y.len() - shared) as f32
 }
 
+/// The name of the directory a workspace's pane is standing in.
+///
+/// One place, so the naming pass and the second-source pass cannot come to
+/// different conclusions about what counts as location.
+pub fn where_it_is(ws: &crate::mux::session::Workspace) -> String {
+    ws.active_pane()
+        .map(|p| p.cwd.clone())
+        .unwrap_or_else(|| ws.at.clone())
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// True when a title says nothing about intent and must never become a name.
-pub fn is_junk(title: &str, repo: &str, ignore: &[String]) -> bool {
+///
+/// `here` is the directory the pane is standing in. A shell that publishes its
+/// working directory as the window title — which macOS puts on every login
+/// shell — is announcing where it is, and where it is is already on the row.
+pub fn is_junk(title: &str, repo: &str, here: &str, ignore: &[String]) -> bool {
     let t = normalize(title);
     if t.is_empty() {
         return true;
@@ -127,10 +144,17 @@ pub fn is_junk(title: &str, repo: &str, ignore: &[String]) -> bool {
         return true;
     }
 
-    // A shell prompt: "oddurs@Oddurs-MacBook-Pro:~/Code/perfect".
+    // A shell prompt: "oddurs@Oddurs-MacBook-Pro:~/Code/perfect", or the
+    // shorter "Oddurs-MacBook-Pro:~/Code/perfect" that macOS puts on a login
+    // shell. The head is one word either way; what settles it is that the tail
+    // is a place — a path, or the very directory this pane is in. "wip: the
+    // parser" survives, because "the parser" is neither.
     if let Some(colon) = t.find(':') {
         let head = &t[..colon];
-        if !head.contains(char::is_whitespace) && head.contains('@') {
+        let tail = t[colon + 1..].trim();
+        let a_place =
+            tail.starts_with(['~', '/']) || (!here.is_empty() && tail.eq_ignore_ascii_case(here));
+        if !head.contains(char::is_whitespace) && (head.contains('@') || a_place) {
             return true;
         }
         // A Windows drive letter: "c:\src".
@@ -141,6 +165,12 @@ pub fn is_junk(title: &str, repo: &str, ignore: &[String]) -> bool {
 
     // A bare path or filename is location, not intent.
     if t.starts_with(['~', '/', '.']) {
+        return true;
+    }
+
+    // And so is the name of the directory this pane is standing in, whether or
+    // not it is written as a path.
+    if !here.is_empty() && lower == here.to_lowercase() {
         return true;
     }
 
@@ -454,6 +484,9 @@ pub fn decide(
     current: &str,
     title: Option<&str>,
     repo: &str,
+    // The directory the pane is in, so a shell announcing it is not read as an
+    // intent.
+    here: &str,
     branch: &str,
     pane_count: usize,
     blocked: bool,
@@ -490,7 +523,7 @@ pub fn decide(
     if intent.is_empty() {
         return Decision::Skip(Skip::NoIntent);
     }
-    if is_junk(&intent, repo, &cfg.ignore_titles) {
+    if is_junk(&intent, repo, here, &cfg.ignore_titles) {
         return Decision::Skip(Skip::Junk);
     }
 
@@ -590,8 +623,30 @@ mod tests {
         let now = Instant::now();
         // Debounce needs two passes: the first records the title, the second
         // finds it unchanged and commits.
-        decide(&cfg(), state, current, Some(title), repo, "", 1, false, now);
-        decide(&cfg(), state, current, Some(title), repo, "", 1, false, now)
+        decide(
+            &cfg(),
+            state,
+            current,
+            Some(title),
+            repo,
+            "",
+            "",
+            1,
+            false,
+            now,
+        );
+        decide(
+            &cfg(),
+            state,
+            current,
+            Some(title),
+            repo,
+            "",
+            "",
+            1,
+            false,
+            now,
+        )
     }
 
     #[test]
@@ -624,6 +679,7 @@ mod tests {
                 title,
                 "bedreader",
                 "",
+                "",
                 1,
                 false,
                 now
@@ -637,6 +693,7 @@ mod tests {
                 "my careful name",
                 title,
                 "bedreader",
+                "",
                 "",
                 1,
                 false,
@@ -711,7 +768,7 @@ mod tests {
             "bedreader", // the repo name is what dirk already defaults to
         ];
         for t in junk {
-            assert!(is_junk(t, "bedreader", &[]), "{t} should be junk");
+            assert!(is_junk(t, "bedreader", "", &[]), "{t} should be junk");
         }
     }
 
@@ -721,11 +778,11 @@ mod tests {
         // would be a workspace called "nvim".
         let ignore = crate::config::Naming::default().ignore_titles;
         for t in ["nvim", "lazygit", "Claude Code", "htop"] {
-            assert!(is_junk(t, "dirk", &ignore), "{t} should be ignored");
+            assert!(is_junk(t, "dirk", "", &ignore), "{t} should be ignored");
             // And without the list, most of them get through.
         }
         assert!(
-            !is_junk("lazygit", "dirk", &[]),
+            !is_junk("lazygit", "dirk", "", &[]),
             "the list is what rejects it"
         );
     }
@@ -734,7 +791,7 @@ mod tests {
     fn ordinary_words_that_happen_to_be_commands_are_kept() {
         // The policy's own caveat: "go", "make" and "less" are English too.
         for t in ["go routine leak fix", "make the sidebar clickable"] {
-            assert!(!is_junk(t, "dirk", &[]), "{t} should have survived");
+            assert!(!is_junk(t, "dirk", "", &[]), "{t} should have survived");
         }
     }
 
@@ -768,6 +825,7 @@ mod tests {
                 Some("Building the mux core"),
                 "dirk",
                 "",
+                "",
                 1,
                 false,
                 t0
@@ -782,6 +840,7 @@ mod tests {
                 "w1",
                 Some("Building the mux core"),
                 "dirk",
+                "",
                 "",
                 1,
                 false,
@@ -798,6 +857,7 @@ mod tests {
                 "w1",
                 Some("Building the mux core"),
                 "dirk",
+                "",
                 "",
                 1,
                 false,
@@ -835,6 +895,7 @@ mod tests {
                 title,
                 "dirk",
                 "",
+                "",
                 1,
                 false,
                 now
@@ -861,6 +922,7 @@ mod tests {
             Some("First intent"),
             "dirk",
             "",
+            "",
             1,
             false,
             t0,
@@ -872,6 +934,7 @@ mod tests {
                 "w1",
                 Some("First intent"),
                 "dirk",
+                "",
                 "",
                 1,
                 false,
@@ -888,6 +951,7 @@ mod tests {
             Some("Wholly unrelated topic"),
             "dirk",
             "",
+            "",
             1,
             false,
             t0,
@@ -899,6 +963,7 @@ mod tests {
                 "First intent",
                 Some("Wholly unrelated topic"),
                 "dirk",
+                "",
                 "",
                 1,
                 false,
@@ -919,6 +984,7 @@ mod tests {
                 Some("Some work"),
                 "dirk",
                 "",
+                "",
                 2,
                 false,
                 Instant::now()
@@ -938,6 +1004,7 @@ mod tests {
             Some("An intent"),
             "dirk",
             "",
+            "",
             1,
             false,
             now,
@@ -956,6 +1023,7 @@ mod tests {
                 "my careful name",
                 Some("Quite different"),
                 "dirk",
+                "",
                 "",
                 1,
                 false,
@@ -992,6 +1060,7 @@ mod tests {
                 "w1",
                 Some("Do you want to proceed?"),
                 "dirk",
+                "",
                 "",
                 1,
                 true,
