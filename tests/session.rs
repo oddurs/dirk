@@ -3792,15 +3792,22 @@ fn a_restored_session_comes_back_on_the_conversation_it_was_having() {
     let (ok, panes) = ask(&session, &["pane", "list", &ws]);
     assert!(ok, "pane list failed");
     let pane = first_id(&panes);
-    let (ok, out) = ask(
-        &session,
-        &[
-            "pane",
-            "run",
-            &pane,
-            "exec sh -c 'exec -a zzharness sleep 30'",
-        ],
-    );
+    // A process whose name is the harness, made by giving `sleep` that name.
+    // `exec -a` would be shorter and is a bashism: CI's /bin/sh is dash, where
+    // it fails, takes the pane's shell with it, and ends the session.
+    let bin = config_home().join("zzharness-bin");
+    std::fs::create_dir_all(&bin).expect("bin dir");
+    let link = bin.join("zzharness");
+    if !link.exists() {
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .iter()
+            .map(std::path::Path::new)
+            .find(|p| p.exists())
+            .expect("a sleep to borrow a name from");
+        std::os::unix::fs::symlink(sleep, &link).expect("symlink");
+    }
+    let running = format!("{} 30", link.display());
+    let (ok, out) = ask(&session, &["pane", "run", &pane, &running]);
     assert!(ok, "pane run failed: {out}");
     let deadline = Instant::now() + START;
     while Instant::now() < deadline {

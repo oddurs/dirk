@@ -2,10 +2,10 @@
 id: 125
 title: Resume the conversation, not just the directory
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p0
 area: agents
 effort: l
@@ -69,3 +69,9 @@ agent says it is doing — so that is where the conversation belongs too.
 `differs` had to learn about the new fields or a conversation reported after the
 last write would never reach the file, and the restart it exists for would find
 nothing.
+
+CI caught one this machine could not: the stand-in harness used `exec -a`, which
+is a bashism. Linux CI's `/bin/sh` is dash, where it fails — and because the
+test had `exec`ed the pane's own shell, failing took the pane, the session and
+the rest of the test with it. A symlink that gives `sleep` the harness's name
+does the same job with no shell feature at all.

@@ -150,19 +150,19 @@ The socket API can be asked things. This is the half that lets a program use
 
 ## v0.7 — Agents you do not have to babysit
 
-`#####·····` 50% · 4 of 8 done · due 2027-04-30
+`#######···` 63% · 5 of 8 done · due 2027-04-30
 
 dirk guesses at agent state where it could be told. Installing the hook rather
 
 ### backlog
 
-- [ ] `0125` Resume the conversation, not just the directory <sup>feature · p0 · agents</sup>
 - [ ] `0129` Reading a full-screen agent's history <sup>feature · p2 · agents</sup>
 - [ ] `0131` Display tokens an outside program can set <sup>feature · p2 · agents</sup>
 - [ ] `0132` Per-agent sound <sup>feature · p3 · agents</sup>
 
 ### done
 
+- [x] `0125` Resume the conversation, not just the directory <sup>feature · p0 · agents</sup>
 - [x] `0126` Install the hook, do not print it <sup>feature · p0 · agents</sup>
 - [x] `0127` Detection rules as files, replaceable one at a time <sup>feature · p1 · agents</sup>
 - [x] `0128` agent explain: why this pane is in this state <sup>feature · p1 · agents</sup>
