@@ -2,10 +2,10 @@
 id: 128
 title: 'agent explain: why this pane is in this state'
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p1
 area: agents
 effort: m
