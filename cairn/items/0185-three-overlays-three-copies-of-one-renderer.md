@@ -2,7 +2,7 @@
 id: 185
 title: Three overlays, three copies of one renderer
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
