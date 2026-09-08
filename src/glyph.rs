@@ -33,6 +33,22 @@
 //! for text dirk did not choose (a workspace named in Japanese, an emoji an
 //! agent put in its own title), and the table answers for the marks dirk did.
 //!
+//! ## Why `unicode` is still the default
+//!
+//! There are two full sets and `round` is arguably the prettier: `○ ◐ ● ✓` is
+//! a progression, and four marks that are a progression are four marks you can
+//! read as one thing rather than as four.
+//!
+//! It is not the default, and that is a decision rather than an oversight.
+//! `! * + ·` are legible to somebody who has never seen dirk and never read
+//! anything about it — an exclamation mark means attention wherever you have
+//! seen one before. A circle three-quarters filled does not mean anything
+//! until you have been told what the other quarters mean. And `✓` for `done`
+//! competes with the tick a test suite prints, which is the one thing in a
+//! pane it is most likely to be sitting next to.
+//!
+//! So: shipped, named, one line to choose, and not chosen for you.
+//!
 //! ## Why there is no Nerd Font set
 //!
 //! It was considered and rejected, and the reasons are worth keeping:
@@ -51,6 +67,8 @@
 //! What someone with the font can do is say so, per mark, with the width they
 //! know their terminal gives it. That is the mechanism without dirk owning
 //! either the maintenance or the breakage.
+
+use unicode_width::UnicodeWidthStr;
 
 /// One mark, and how many columns the terminal gives it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +148,29 @@ marks! {
 }
 
 impl G {
+    /// What the `round` set draws instead, where it differs from `unicode`.
+    ///
+    /// A diff rather than a third column in the table above. The set exists
+    /// because four marks read better as circles; writing the other twenty out
+    /// again as "the same" would make every new mark a three-way decision that
+    /// is really a one-way one, and the day somebody forgot the third column
+    /// the set would silently lose a glyph.
+    ///
+    /// A progression rather than four unrelated pictures: empty at rest, half
+    /// filled while working, filled when it wants you, and a tick when it is
+    /// finished. `starting` is the dotted one, which is the circle not drawn
+    /// yet.
+    fn round(self) -> Option<&'static str> {
+        Some(match self {
+            G::Idle => "○",
+            G::Working => "◐",
+            G::Blocked => "●",
+            G::Done => "✓",
+            G::Starting => "◌",
+            _ => return None,
+        })
+    }
+
     /// The mark for an agent state, by the name the theme and the nav share.
     pub fn state(name: &str) -> G {
         match name {
@@ -158,16 +199,36 @@ impl Default for Glyphs {
 }
 
 impl Glyphs {
+    /// The sets dirk ships, as the names a configuration file may use.
+    ///
+    /// Here rather than in `config.rs` so the two cannot drift: a name this
+    /// list does not have is a name `set` would quietly answer `unicode` to.
+    pub const SETS: &'static [&'static str] = &["unicode", "ascii", "round"];
+
     /// A shipped set by name. Anything unrecognised is `unicode`, which is what
-    /// dirk has always drawn — reported elsewhere rather than guessed at here.
+    /// dirk has always drawn — reported by `config::problems` rather than
+    /// guessed at here.
     pub fn set(name: &str) -> Self {
-        let ascii = name == "ascii";
         Glyphs(
             G::ALL
                 .iter()
-                .map(|g| Mark {
-                    text: if ascii { g.ascii() } else { g.unicode() }.to_string(),
-                    cells: 1,
+                .map(|g| {
+                    let text = match name {
+                        "ascii" => g.ascii(),
+                        // The round set is the unicode one with the states
+                        // redrawn, so anything it does not name falls through.
+                        "round" => g.round().unwrap_or_else(|| g.unicode()),
+                        _ => g.unicode(),
+                    }
+                    .to_string();
+                    // Measured, not assumed. A shipped set is ordinary text
+                    // and `unicode-width` is the authority on it -- and it
+                    // caught `^M`, the ascii mark for enter, being budgeted at
+                    // one column for as long as there has been an ascii set.
+                    // The override path still takes a declared width, because
+                    // that is the case where nothing here can measure.
+                    let cells = text.width().max(1) as u16;
+                    Mark { text, cells }
                 })
                 .collect(),
         )
@@ -224,6 +285,90 @@ mod tests {
                 text.is_ascii(),
                 "{}: {text:?} is not ascii in the ascii set",
                 mark.name()
+            );
+        }
+    }
+
+    #[test]
+    fn a_shipped_set_is_budgeted_at_the_width_it_actually_draws() {
+        // The nav's arithmetic is exact: a mark that takes two columns where
+        // one was budgeted does not look slightly wrong, it shifts every
+        // column after it on that row.
+        for name in Glyphs::SETS {
+            let g = Glyphs::set(name);
+            for &mark in G::ALL {
+                let text = g.text(mark);
+                assert_eq!(
+                    g.cells(mark) as usize,
+                    text.width().max(1),
+                    "{name}: {} draws {text:?} and was budgeted {} columns",
+                    mark.name(),
+                    g.cells(mark)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_state_mark_is_one_cell_in_every_set() {
+        // These live in the tightest column there is, between the disclosure
+        // and the number. A two-column state mark would shift the number, the
+        // name and the age on that row and on no other.
+        for name in Glyphs::SETS {
+            let g = Glyphs::set(name);
+            for state in ["blocked", "done", "working", "idle", "starting", "unknown"] {
+                let mark = G::state(state);
+                assert_eq!(
+                    g.cells(mark),
+                    1,
+                    "{name}: {state} is {:?}, which is not one column",
+                    g.text(mark)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_round_set_redraws_the_states_and_nothing_else() {
+        // It is the unicode set with four marks changed. If it started
+        // diverging elsewhere it would be a second interface to maintain
+        // rather than a second opinion about four glyphs.
+        let round = Glyphs::set("round");
+        let plain = Glyphs::default();
+        let changed: Vec<_> = G::ALL
+            .iter()
+            .filter(|&&g| round.text(g) != plain.text(g))
+            .map(|g| g.name())
+            .collect();
+        assert_eq!(
+            changed,
+            ["blocked", "done", "working", "idle", "starting"],
+            "the round set drifted from the unicode one"
+        );
+        assert_eq!(round.text(G::Idle), "○");
+        assert_eq!(round.text(G::Working), "◐");
+        assert_eq!(round.text(G::Done), "✓");
+    }
+
+    #[test]
+    fn a_set_nobody_ships_is_a_problem_rather_than_a_shrug() {
+        // `set` answers the default for a name it does not know, so without
+        // this a typo is a configuration that appears to have been ignored.
+        let mut cfg = crate::config::Config::default();
+        cfg.nav.glyphs = "circles".into();
+        let said = crate::config::complaints(&cfg).join("\n");
+        assert!(
+            said.contains("circles") && said.contains("round"),
+            "an unknown set was not reported against the sets that exist: {said:?}"
+        );
+        for name in Glyphs::SETS {
+            let mut cfg = crate::config::Config::default();
+            cfg.nav.glyphs = (*name).into();
+            assert!(
+                !crate::config::complaints(&cfg)
+                    .iter()
+                    .any(|p| p.contains("glyph set")),
+                "{name} is shipped and was refused"
             );
         }
     }
