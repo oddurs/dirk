@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="dirk">
-  <!-- The mark the rail draws, on the ground the panel paints. Both values are
-       Gotham, and are the only place on the site a colour is written down: an
-       SVG has no custom properties to reach for before it is in the document. -->
-  <rect width="32" height="32" rx="6" fill="#0a0f14"/>
-  <path d="M16 7 L23 16 L16 25 L9 16 Z" fill="#33859d"/>
-</svg>
