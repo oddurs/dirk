@@ -2128,7 +2128,11 @@ fn every_pane_can_carry_a_rule_that_says_which_one_has_the_keyboard() {
 /// it. Boards are not usable for this: one whose program is not installed is
 /// dropped at startup, so which rows exist depends on the machine.
 fn focus_mark(h: &Harness) -> Option<usize> {
-    h.rows().iter().find_map(|row| row.find('\u{258A}'))
+    // Columns, not bytes: a rule is made of `─`, which is three bytes and one
+    // column, so a byte offset says the edge moved three times as far as it did.
+    h.rows()
+        .iter()
+        .find_map(|row| row.chars().position(|c| c == '\u{258A}'))
 }
 
 #[test]
@@ -2294,6 +2298,50 @@ fn searching_inside_copy_mode_stays_in_the_pane_you_are_reading() {
     assert!(
         h.wait_until(START, |h| !h.drawn().contains("y copy")),
         "escape did not leave copy mode\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_split_can_be_resized_from_the_keyboard() {
+    // The sidebar divider drags and the splits did not, from either input. A
+    // layout you cannot adjust without reaching for a mouse is one people leave
+    // wrong.
+    let mut h = Harness::start_with_config("[ui]\npane_rules = \"always\"\n");
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    h.send(b"\x00|");
+    assert!(
+        h.wait_until(START, |h| rules(h) == 2),
+        "the split never drew\n{}",
+        h.drawn()
+    );
+    let edge = |h: &Harness| focus_mark(h).expect("a focused pane");
+    let before = edge(&h);
+
+    // A count, so `10h` is one gesture rather than ten presses.
+    h.send(b"\x00R10h");
+    assert!(
+        h.wait_until(START, |h| edge(h) + 10 == before),
+        "the edge did not move ten columns: {} then {:?}\n{}",
+        before,
+        focus_mark(&h),
+        h.drawn()
+    );
+
+    // Escape leaves, and the keys go back to the pane.
+    h.send(b"\x1b");
+    assert!(
+        h.wait_until(START, |h| !h.drawn().contains("esc done")),
+        "resize mode did not end\n{}",
+        h.drawn()
+    );
+    let after = edge(&h);
+    h.send(b"hhhh");
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        edge(&h),
+        after,
+        "keys still moved the edge after leaving\n{}",
         h.drawn()
     );
 }

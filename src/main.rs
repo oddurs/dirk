@@ -652,6 +652,22 @@ enum Begin {
     Waiting(wait::What),
 }
 
+/// The resize mode's own state: how far the next press moves.
+#[derive(Debug, Clone, Default)]
+struct Resize {
+    /// Digits typed since the last movement, so `10l` is one gesture.
+    count: String,
+}
+
+impl Resize {
+    /// How many cells the next press moves, and clear the count.
+    fn take(&mut self) -> i32 {
+        let n = self.count.parse().unwrap_or(1);
+        self.count.clear();
+        n
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /// Attach to the session, starting it if it is not there.
@@ -967,6 +983,12 @@ struct App {
     copy: Option<copy::Mode>,
     /// Searching, when that is.
     find: Option<find::Find>,
+    /// Moving the edge beside the focused pane, once that is what is happening.
+    ///
+    /// A mode rather than a chord because resizing is never one keystroke, and
+    /// holding a modifier through six of them is worse than pressing one key
+    /// first.
+    resize: Option<Resize>,
     /// A question that wants one line of text back.
     asking: Option<Ask>,
     /// Everything dirk can do, when somebody has asked.
@@ -1044,6 +1066,7 @@ impl App {
             to_resume: Vec::new(),
             waits: Vec::new(),
             copy: None,
+            resize: None,
             find: None,
             asking: None,
             palette: None,
@@ -3481,6 +3504,9 @@ impl App {
         if self.copy.is_some() && !self.prefix {
             return self.copy_key(k);
         }
+        if self.resize.is_some() && !self.prefix {
+            return self.resize_key(k);
+        }
         if self.nav.active && !self.prefix {
             return self.nav_key(k);
         }
@@ -3886,6 +3912,42 @@ impl App {
         }
     }
 
+    /// A key while the edge beside the focused pane is being moved.
+    ///
+    /// Digits accumulate, so `10l` is one gesture rather than ten presses.
+    fn resize_key(&mut self, k: KeyEvent) {
+        let Some(state) = self.resize.as_mut() else {
+            return;
+        };
+        let (dir, sign) = match k.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                self.resize = None;
+                self.status.clear();
+                return;
+            }
+            KeyCode::Char(c @ '0'..='9') if !(c == '0' && state.count.is_empty()) => {
+                state.count.push(c);
+                let count = state.count.clone();
+                self.note(&format!("resize: {count}"));
+                return;
+            }
+            KeyCode::Char('h') | KeyCode::Left => (Dir::Cols, -1),
+            KeyCode::Char('l') | KeyCode::Right => (Dir::Cols, 1),
+            KeyCode::Char('k') | KeyCode::Up => (Dir::Rows, -1),
+            KeyCode::Char('j') | KeyCode::Down => (Dir::Rows, 1),
+            _ => return,
+        };
+        let cells = state.take() * sign;
+        let area = self.content;
+        let moved = self.session.nudge(dir, cells, area);
+        if !moved {
+            self.note("resize: no edge that way · esc done");
+            return;
+        }
+        self.resize_panes();
+        self.note("resize: hjkl move the edge · esc done");
+    }
+
     /// A key while a search query is being typed.
     ///
     /// Enter takes you to the first match and leaves the query standing, so `n`
@@ -4153,6 +4215,17 @@ impl App {
             }
             A::MovePaneBack => self.move_pane(-1),
             A::MovePaneOn => self.move_pane(1),
+            A::Resize => {
+                if self
+                    .session
+                    .focused_workspace()
+                    .is_none_or(|ws| ws.panes().len() < 2)
+                {
+                    return self.note("nothing to resize: this space has one pane");
+                }
+                self.resize = Some(Resize::default());
+                self.note("resize: hjkl move the edge · esc done");
+            }
             A::Restart => {
                 if !self.session.restart_focused(self.content) {
                     self.note("nothing to restart");

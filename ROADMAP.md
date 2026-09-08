@@ -197,13 +197,12 @@ dirk guesses at agent state where it could be told. Installing the hook rather
 
 ## v0.8 — The rest of the multiplexer
 
-`#####·····` 50% · 5 of 10 done · due 2027-06-15
+`######····` 60% · 6 of 10 done · due 2027-06-15
 
 What v0.5 did not finish, and the terminal features a pane needs before it is
 
 ### backlog
 
-- [ ] `0133` Resizing a split from the keyboard <sup>feature · p1 · mux</sup>
 - [ ] `0136` Tabs, and moving a pane between them <sup>feature · p1 · mux</sup>
 - [ ] `0137` Images in a pane <sup>feature · p2 · mux</sup>
 - [ ] `0141` Bindings without a prefix <sup>feature · p2 · config</sup>
@@ -211,6 +210,7 @@ What v0.5 did not finish, and the terminal features a pane needs before it is
 
 ### done
 
+- [x] `0133` Resizing a split from the keyboard <sup>feature · p1 · mux</sup>
 - [x] `0134` Copy mode: word and paragraph motions <sup>feature · p2 · mux</sup>
 - [x] `0135` Searching where you are reading <sup>feature · p2 · mux</sup>
 - [x] `0138` The title dirk writes to the terminal it runs in <sup>feature · p2 · chrome</sup>

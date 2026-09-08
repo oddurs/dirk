@@ -87,6 +87,75 @@ impl Node {
         }
     }
 
+    /// Move the boundary the pane sits against, by cells.
+    ///
+    /// Positive is right or down, whichever way the split runs — the boundary
+    /// moves, rather than this pane growing. That is what `l` means when the
+    /// focused pane is on the right of a pair: the edge beside it is on its
+    /// left, and moving it right makes that pane narrower. tmux does the same,
+    /// and a version that always grew the focused pane would mean `l` and `h`
+    /// swapping meaning depending on which pane you were in.
+    ///
+    /// The innermost split running the right way is the one it sits against: in
+    /// a column inside a row, `l` moves the column's edge and not the outer
+    /// one. Anything else resizes a boundary somewhere else on the screen,
+    /// which is the version of this that people give up on.
+    ///
+    /// Shares are rewritten in cells rather than nudged as weights, so a press
+    /// is a column and not a proportion of one — and the other children keep
+    /// the sizes they had, so nothing moves except the boundary asked for.
+    pub fn nudge(&mut self, target: PaneId, dir: Dir, cells: i32, area: Rect) -> bool {
+        // Narrower than this and there is nothing left to look at, so the
+        // boundary stops rather than the pane disappearing.
+        const MIN: u16 = 3;
+        let Node::Split { dir: d, children } = self else {
+            return false;
+        };
+        let Some(i) = children
+            .iter()
+            .position(|(_, n)| n.leaves().contains(&target))
+        else {
+            return false;
+        };
+        let constraints: Vec<Constraint> = children.iter().map(|(c, _)| *c).collect();
+        let areas = Layout::new(Direction::from(*d), constraints).split(area);
+
+        // Deeper first: a split of the right kind further in is the boundary
+        // this pane is actually beside.
+        if let Some(a) = areas.get(i)
+            && children[i].1.nudge(target, dir, cells, *a)
+        {
+            return true;
+        }
+        if *d != dir || children.len() < 2 {
+            return false;
+        }
+
+        let along = |r: &Rect| match dir {
+            Dir::Cols => r.width,
+            Dir::Rows => r.height,
+        };
+        let mut sizes: Vec<u16> = areas.iter().map(along).collect();
+        // The neighbour on the far side of the boundary being moved: the one
+        // after, unless this is the last, in which case the one before and the
+        // sign flips with it.
+        let (j, cells) = match i + 1 < sizes.len() {
+            true => (i + 1, cells),
+            false => (i - 1, -cells),
+        };
+        let want = sizes[i] as i32 + cells;
+        let give = sizes[j] as i32 - cells;
+        if want < MIN as i32 || give < MIN as i32 {
+            return false;
+        }
+        sizes[i] = want as u16;
+        sizes[j] = give as u16;
+        for ((c, _), size) in children.iter_mut().zip(sizes) {
+            *c = Constraint::Fill(size.max(1));
+        }
+        true
+    }
+
     /// Every pane, in the order it is drawn. That order is also the order focus
     /// cycles in, which is why it is tree order and not insertion order.
     pub fn leaves(&self) -> Vec<PaneId> {
@@ -293,6 +362,70 @@ mod tests {
     #[test]
     fn a_lone_pane_gets_the_whole_area() {
         assert_eq!(leaf(1).rects(area()), vec![(1, area())]);
+    }
+
+    #[test]
+    fn moves_the_boundary_the_pane_is_beside() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut t = Node::Leaf(1);
+        t.split(1, Dir::Cols, 2);
+        let width = |t: &Node, id: PaneId| {
+            t.rects(area)
+                .into_iter()
+                .find(|(x, _)| *x == id)
+                .map(|(_, r)| r.width)
+                .unwrap()
+        };
+        let before = width(&t, 1);
+        assert!(t.nudge(1, Dir::Cols, 10, area));
+        assert_eq!(
+            width(&t, 1),
+            before + 10,
+            "a press is a column, not a share"
+        );
+        assert_eq!(
+            width(&t, 1) + width(&t, 2),
+            80,
+            "the boundary moved, not the area"
+        );
+
+        // The boundary moves, rather than the focused pane growing: asked from
+        // the pane on the right, moving it right again makes that pane
+        // narrower.
+        assert!(t.nudge(2, Dir::Cols, 10, area));
+        assert_eq!(width(&t, 1), before + 20);
+        assert!(t.nudge(2, Dir::Cols, -20, area));
+        assert_eq!(width(&t, 1), before);
+    }
+
+    #[test]
+    fn the_boundary_stops_rather_than_closing_a_pane() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut t = Node::Leaf(1);
+        t.split(1, Dir::Cols, 2);
+        assert!(
+            !t.nudge(1, Dir::Cols, 100, area),
+            "it ran a pane off the screen"
+        );
+        assert!(!t.nudge(1, Dir::Cols, -100, area));
+        // And a direction there is no boundary in does nothing at all.
+        assert!(!t.nudge(1, Dir::Rows, 5, area));
+    }
+
+    #[test]
+    fn the_innermost_split_is_the_one_that_moves() {
+        // A column inside a row: `l` moves the column's edge, not the outer
+        // one. Anything else resizes a boundary somewhere else on the screen.
+        let area = Rect::new(0, 0, 80, 24);
+        let mut t = Node::Leaf(1);
+        t.split(1, Dir::Rows, 2);
+        t.split(2, Dir::Cols, 3);
+        let rect =
+            |t: &Node, id: PaneId| t.rects(area).into_iter().find(|(x, _)| *x == id).unwrap().1;
+        let one = rect(&t, 1);
+        assert!(t.nudge(2, Dir::Cols, 6, area));
+        assert_eq!(rect(&t, 1), one, "the outer split moved");
+        assert_eq!(rect(&t, 2).width, 40 + 6);
     }
 
     #[test]

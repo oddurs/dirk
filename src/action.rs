@@ -78,6 +78,9 @@ actions! {
     MovePaneBack "pane.move-back"   "Move this pane back"                "{",
     MovePaneOn   "pane.move-on"     "Move this pane on"                  "}",
     Restart      "pane.restart"     "Restart a stopped pane"             "r",
+    // `R` rather than `r`, which restarts a stopped pane and says so on that
+    // pane's own rule -- a promise already made on the screen.
+    Resize       "pane.resize"      "Move the edge beside this pane"     "R",
 
     // Tabs: the level between a space and its panes.
     // `c` and `&` are tmux's, and `[` is tmux's copy mode, which is why next
