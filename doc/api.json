@@ -104,6 +104,16 @@
     },
     {
       "answer": [
+        "pane",
+        "rows",
+        "cols",
+        "then that pane's screen until you detach"
+      ],
+      "args": "<pane> [--takeover]",
+      "name": "pane.attach"
+    },
+    {
+      "answer": [
         "closed"
       ],
       "args": "<pane>",

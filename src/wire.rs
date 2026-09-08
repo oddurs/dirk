@@ -71,6 +71,11 @@ pub enum Kind {
     /// the client is the end with a clipboard. Running `pbcopy` in the server
     /// would put a remote session's selection on the build box.
     Clip = 8,
+    /// One pane, in your own terminal, with no interface around it.
+    ///
+    /// A separate kind rather than a command because the answer is a stream:
+    /// what comes back is that pane's screen, again, until you leave.
+    Watch = 9,
 }
 
 impl Kind {
@@ -84,6 +89,7 @@ impl Kind {
             6 => Kind::Reply,
             7 => Kind::Alert,
             8 => Kind::Clip,
+            9 => Kind::Watch,
             _ => return None,
         })
     }
@@ -149,6 +155,20 @@ pub struct Alert {
     /// failed" would be worse than saying nothing.
     #[serde(default)]
     pub text: String,
+}
+
+/// Which pane a direct attach wants, and how big the terminal asking is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Watch {
+    pub pane: String,
+    pub cols: u16,
+    pub rows: u16,
+    /// Replace whoever currently owns input for that pane.
+    ///
+    /// The usual reason for asking is that the other owner is a terminal you
+    /// have already closed, so refusing outright would leave a pane nobody can
+    /// reach until the session is restarted.
+    pub takeover: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

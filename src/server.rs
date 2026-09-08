@@ -214,6 +214,37 @@ impl View {
     }
 }
 
+/// One terminal attached to one pane, with no interface around it.
+///
+/// Not a [`View`]: a view is a whole session composed into a frame, and this is
+/// one pane's own screen posted straight through. The difference is the point —
+/// somebody attaching this way has a terminal too small for a sidebar, or is
+/// already inside another multiplexer, or wants the pane and nothing else.
+pub struct Watcher {
+    pub id: u64,
+    pub out: UnixStream,
+    /// The pane, as the caller named it. Resolved by the loop that owns the
+    /// session, because only it knows what exists.
+    pub target: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub takeover: bool,
+    /// Set once the loop has accepted it and resolved the pane.
+    pub pane: crate::mux::PaneId,
+    /// What was last posted, so an unchanged screen is not sent again.
+    ///
+    /// A pane redraws on a timer more often than it changes, and a direct
+    /// attach that reposted an identical screen every tick would make a still
+    /// terminal look like a flickering one over ssh.
+    pub last: Vec<u8>,
+}
+
+impl std::fmt::Debug for Watcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Watcher")
+    }
+}
+
 /// Take connections and turn them into events.
 ///
 /// One thread accepts; one more per client reads its input. Both post into the
@@ -239,6 +270,7 @@ fn client(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>) {
     };
     match kind {
         Kind::Hello => view(out, reader, tx, &body),
+        Kind::Watch => watch(out, reader, tx, &body),
         Kind::Command => {
             let mut out = out;
             if answer(&mut out, &tx, &body).is_err() {
@@ -285,6 +317,64 @@ fn view(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>, body: &[u8]) {
     // Named, so a client that was taken over cannot clear the view of the one
     // that replaced it on its way out.
     let _ = tx.send(Ev::Detach(id));
+}
+
+/// Serve one pane to one terminal.
+fn watch(out: UnixStream, mut reader: UnixStream, tx: Sender<Ev>, body: &[u8]) {
+    let Ok(want) = serde_json::from_slice::<wire::Watch>(body) else {
+        return;
+    };
+    let id = next_client_id();
+    // Same reason a view sets one: a terminal that stops draining must not be
+    // able to hold the loop that owns every other pane.
+    let _ = out.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+    let watcher = Watcher {
+        id,
+        out,
+        target: want.pane,
+        cols: want.cols,
+        rows: want.rows,
+        takeover: want.takeover,
+        pane: 0,
+        last: Vec::new(),
+    };
+
+    // Asked and answered before anything is streamed, because "no such pane"
+    // and "somebody else has it" are the two things the caller has to be told
+    // in a form it can read, and a stream is not that form.
+    //
+    // Answered by the loop rather than here: from the moment it holds a watcher
+    // it is the thread writing frames down this socket, and a reply written
+    // from this one could land in the middle of one.
+    let (back, wait) = std::sync::mpsc::sync_channel(1);
+    if tx
+        .send(Ev::Watch {
+            watcher: Box::new(watcher),
+            back,
+        })
+        .is_err()
+    {
+        return;
+    }
+    if !wait.recv().unwrap_or(false) {
+        return;
+    }
+
+    while let Ok(Some((kind, body))) = wire::recv(&mut reader) {
+        if kind != Kind::Input {
+            continue;
+        }
+        let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+            continue;
+        };
+        let Some(event) = input.into_event() else {
+            continue;
+        };
+        if tx.send(Ev::Watched(id, event)).is_err() {
+            return;
+        }
+    }
+    let _ = tx.send(Ev::Unwatch(id));
 }
 
 fn next_client_id() -> u64 {

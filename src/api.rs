@@ -386,6 +386,11 @@ pub const COMMANDS: &[Command] = &[
         answer: "pane, matched",
     },
     Command {
+        name: "pane.attach",
+        args: "<pane> [--takeover]",
+        answer: "pane, rows, cols, then that pane's screen until you detach",
+    },
+    Command {
         name: "pane.close",
         args: "<pane>",
         answer: "closed",

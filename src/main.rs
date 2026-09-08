@@ -377,6 +377,33 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // Not a request and a reply: what comes back is a stream, and the client
+    // owns the terminal for as long as it lasts. So it is intercepted here
+    // rather than answered by `ask`.
+    if command_args_are(&args, "pane", "attach") {
+        let words = words(&args);
+        let Some(target) = words.get(2) else {
+            eprintln!("dirk: pane attach needs a pane");
+            std::process::exit(1);
+        };
+        let target = match *target {
+            "--current" => std::env::var("DIRK_PANE_ID").unwrap_or_else(|_| target.to_string()),
+            other => other.to_string(),
+        };
+        if !server::is_running(&path) {
+            eprintln!("dirk: no session {session:?} is running");
+            std::process::exit(1);
+        }
+        let takeover = args.iter().any(|a| a == "--takeover");
+        return match client::watch(&path, &target, takeover) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("dirk: {e}");
+                std::process::exit(1);
+            }
+        };
+    }
+
     let command_args: Vec<String> = args
         .iter()
         .skip_while(|a| !NOUNS.contains(&a.as_str()))
@@ -759,6 +786,8 @@ struct App {
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
     badging: bool,
+    /// Terminals attached to one pane each, with no interface around them.
+    watchers: Vec<server::Watcher>,
     /// Questions whose answer does not exist yet.
     ///
     /// Settled at the end of every turn, which is after the states have been
@@ -841,6 +870,7 @@ impl App {
             },
             badges: std::collections::HashMap::new(),
             badging: false,
+            watchers: Vec::new(),
             waits: Vec::new(),
             copy: None,
             find: None,
@@ -1078,6 +1108,7 @@ impl App {
         // After the states, not before: a wait for `blocked` should end on the
         // turn the agent became blocked rather than on the next tick after it.
         self.settle();
+        self.repost();
         !(self.quit || self.session.is_empty())
     }
 
@@ -1281,6 +1312,14 @@ impl App {
                 }
                 let _ = reply.send(answer);
             }
+            Ev::Watch { watcher, back } => {
+                let answer = self.begin_watch(*watcher);
+                let _ = back.send(answer);
+            }
+            Ev::Watched(id, event) => self.watched(id, event),
+            Ev::Unwatch(id) => {
+                self.watchers.retain(|w| w.id != id);
+            }
             Ev::Detach(id) => {
                 // By id, so one client leaving cannot take another's view with
                 // it. The session does not end because nobody is watching.
@@ -1455,6 +1494,146 @@ impl App {
         if !quiet {
             sound::play(&self.cfg.sound, which);
         }
+    }
+
+    /// Accept a direct attach, or say why not.
+    ///
+    /// The pane is resolved here rather than by the socket thread because only
+    /// this loop knows what exists, and it is the same reason every other
+    /// command is answered here.
+    fn begin_watch(&mut self, mut watcher: server::Watcher) -> bool {
+        let refuse = |watcher: &mut server::Watcher, why: String| {
+            let _ = wire::send_json(&mut watcher.out, wire::Kind::Reply, &wire::Reply::err(why));
+            false
+        };
+        let Some(pane) = api::target_pane(&self.session, &watcher.target) else {
+            let why = format!("no such pane: {}", watcher.target);
+            return refuse(&mut watcher, why);
+        };
+        // One writer at a time. Two terminals typing into one shell is not a
+        // feature anybody asked for, and the character interleaving would be
+        // blamed on the program rather than on this.
+        if let Some(held) = self.watchers.iter().position(|w| w.pane == pane) {
+            if !watcher.takeover {
+                return refuse(
+                    &mut watcher,
+                    "another terminal is attached to that pane; pass --takeover to replace it"
+                        .into(),
+                );
+            }
+            // Dropped rather than told: the usual reason for a takeover is that
+            // the other end is a terminal somebody has already closed.
+            self.watchers.remove(held);
+        }
+        watcher.pane = pane;
+        let said = wire::Reply::ok(serde_json::json!({
+            "pane": api::pane_id_of(&self.session, pane),
+            "rows": watcher.rows,
+            "cols": watcher.cols,
+        }));
+        if wire::send_json(&mut watcher.out, wire::Kind::Reply, &said).is_err() {
+            return false;
+        }
+        // The attached terminal owns the size, which is what makes this a
+        // terminal for that pane rather than a window onto somebody else's.
+        self.session.resize_pane(pane, watcher.rows, watcher.cols);
+        self.watchers.push(watcher);
+        // The current screen follows the acceptance rather than waiting for the
+        // pane to say something next: attaching to a quiet pane should show you
+        // what is in it, not an empty terminal.
+        self.repost();
+        true
+    }
+
+    /// A key, a paste or a wheel from a terminal attached to one pane.
+    fn watched(&mut self, id: u64, event: Event) {
+        let Some(pane) = self.watchers.iter().find(|w| w.id == id).map(|w| w.pane) else {
+            return;
+        };
+        match event {
+            // Plain PageUp and PageDown move through what has gone past, and
+            // with a modifier they go to the program. Taking them outright
+            // would take them off `less` and off every agent's transcript,
+            // which is a worse trade than not having them here.
+            Event::Key(k)
+                if k.modifiers.is_empty()
+                    && matches!(k.code, KeyCode::PageUp | KeyCode::PageDown) =>
+            {
+                let back = self.session.scrolled_at(pane);
+                let page = self
+                    .watchers
+                    .iter()
+                    .find(|w| w.id == id)
+                    .map_or(1, |w| usize::from(w.rows.saturating_sub(1)).max(1));
+                let to = match k.code {
+                    KeyCode::PageUp => back + page,
+                    _ => back.saturating_sub(page),
+                };
+                self.session.scroll_to(pane, to);
+            }
+            Event::Key(k) if k.kind != KeyEventKind::Release => {
+                // Typing puts the view back at the bottom. Sending a keystroke
+                // to a program whose output you cannot see is the kind of thing
+                // you find out about afterwards.
+                self.session.scroll_to(pane, 0);
+                self.session.keys_to(pane, &[k]);
+            }
+            Event::Paste(text) => {
+                self.session.scroll_to(pane, 0);
+                self.session.write_to(pane, text.as_bytes());
+            }
+            Event::Mouse(m) => {
+                let back = self.session.scrolled_at(pane);
+                let step = 3;
+                match m.kind {
+                    MouseEventKind::ScrollUp => self.session.scroll_to(pane, back + step),
+                    MouseEventKind::ScrollDown => {
+                        self.session.scroll_to(pane, back.saturating_sub(step));
+                    }
+                    _ => {}
+                }
+            }
+            Event::Resize(cols, rows) => {
+                if let Some(w) = self.watchers.iter_mut().find(|w| w.id == id) {
+                    w.cols = cols;
+                    w.rows = rows;
+                    // Repainted from scratch at the new size: what was posted
+                    // for the old one is wrong everywhere.
+                    w.last.clear();
+                }
+                self.session.resize_pane(pane, rows, cols);
+            }
+            _ => {}
+        }
+    }
+
+    /// Post each attached pane's screen to whoever is watching it.
+    ///
+    /// Whole screens rather than the bytes the pane produced. dirk already has
+    /// exactly one renderer for exactly this reason — two of them drift, the
+    /// local one gets a fix and the remote one does not — and a screen that has
+    /// not changed is not sent at all, so a still terminal stays still.
+    fn repost(&mut self) {
+        if self.watchers.is_empty() {
+            return;
+        }
+        let mut gone = Vec::new();
+        for i in 0..self.watchers.len() {
+            let pane = self.watchers[i].pane;
+            let Some(screen) = self.session.pane_screen(pane) else {
+                gone.push(self.watchers[i].id);
+                continue;
+            };
+            if screen == self.watchers[i].last {
+                continue;
+            }
+            self.watchers[i].last = screen.clone();
+            let out = &mut self.watchers[i].out;
+            if wire::send(out, wire::Kind::Frame, &screen).is_err() {
+                gone.push(self.watchers[i].id);
+            }
+        }
+        self.watchers.retain(|w| !gone.contains(&w.id));
     }
 
     /// What happens to a command that the ordinary answer path does not handle.

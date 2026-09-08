@@ -3040,3 +3040,266 @@ fn a_script_can_cause_an_interruption_and_gets_the_same_rules() {
 
     drop(client);
 }
+
+/// A terminal attached to one pane, with no interface around it.
+///
+/// The dirk client under `Client` attaches to the whole session; this one runs
+/// `dirk pane attach`, which is a different program on the far side and has to
+/// be driven the same way — on a real pty, because what it produces is escape
+/// sequences for one.
+struct Attached {
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    screen: Arc<Mutex<vt100::Parser>>,
+    rows: u16,
+}
+
+impl Attached {
+    fn to(session: &str, pane: &str, takeover: bool) -> Self {
+        let (cols, rows) = (COLS, ROWS);
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_dirk"));
+        cmd.args(["--session", session, "pane", "attach", pane]);
+        if takeover {
+            cmd.arg("--takeover");
+        }
+        cmd.cwd(env!("CARGO_MANIFEST_DIR"));
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("XDG_CONFIG_HOME", config_home());
+        let child = pair.slave.spawn_command(cmd).expect("spawn dirk");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let screen = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let sink = Arc::clone(&screen);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 {
+                    return;
+                }
+                sink.lock().unwrap().process(&buf[..n]);
+            }
+        });
+        Self {
+            writer: pair.master.take_writer().expect("writer"),
+            child,
+            screen,
+            rows,
+        }
+    }
+
+    fn drawn(&self) -> String {
+        let s = self.screen.lock().unwrap();
+        (0..self.rows)
+            .map(|r| s.screen().contents_between(r, 0, r, u16::MAX))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn wait_for(&self, needle: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if self.drawn().contains(needle) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    fn send(&mut self, bytes: &[u8]) {
+        self.writer.write_all(bytes).expect("write");
+        self.writer.flush().expect("flush");
+    }
+
+    fn ended(&mut self, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn one_pane_in_your_own_terminal_with_nothing_around_it() {
+    // Attaching gives you the whole of dirk. Sometimes what you want is the one
+    // pane the agent is in: over ssh from a phone, inside another multiplexer,
+    // or in a terminal too small for a sidebar to be anything but in the way.
+    let session = unique("attach");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, out) = ask(&session, &["pane", "run", &pane, "printf 'zzBEFORE\\n'"]);
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &pane, "zzBEFORE", START),
+        "the pane never printed"
+    );
+
+    // What was already on the screen arrives first: attaching to a quiet pane
+    // should show you what is in it, not an empty terminal.
+    let mut direct = Attached::to(&session, &pane, false);
+    assert!(
+        direct.wait_for("zzBEFORE", START),
+        "the current screen did not arrive\n{}",
+        direct.drawn()
+    );
+    // And nothing of the interface came with it.
+    assert!(
+        !direct.drawn().contains("spaces"),
+        "the sidebar came too:\n{}",
+        direct.drawn()
+    );
+
+    // Typing goes to that pane and nowhere else.
+    direct.send(b"printf 'zzTYPED'\r");
+    assert!(
+        direct.wait_for("zzTYPED", START),
+        "what was typed never came back\n{}",
+        direct.drawn()
+    );
+    assert!(
+        appears_in_pane(&session, &pane, "zzTYPED", START),
+        "the session did not see what the direct attach typed"
+    );
+
+    // One writer at a time. Two terminals typing into one shell is not a
+    // feature anybody asked for.
+    let refused = Attached::to(&session, &pane, false);
+    assert!(
+        refused.wait_for("takeover", START),
+        "a second attachment was not refused\n{}",
+        refused.drawn()
+    );
+    drop(refused);
+
+    // Unless it says so, which is what somebody whose other terminal is already
+    // closed has to be able to do.
+    let mut taken = Attached::to(&session, &pane, true);
+    assert!(
+        taken.wait_for("zzTYPED", START),
+        "the takeover did not attach\n{}",
+        taken.drawn()
+    );
+    taken.send(b"printf 'zzTOOK'\r");
+    assert!(
+        appears_in_pane(&session, &pane, "zzTOOK", START),
+        "the terminal that took over could not type"
+    );
+
+    // The prefix keeps its meaning, and `d` leaves.
+    taken.send(b"\x00d");
+    assert!(
+        taken.ended(START),
+        "prefix-d did not detach\n{}",
+        taken.drawn()
+    );
+    // The pane it was showing is still running, which is the difference between
+    // leaving and quitting here as everywhere else in dirk.
+    let (ok, still) = ask(&session, &["pane", "read", &pane, "10"]);
+    assert!(ok, "the pane died with the terminal watching it: {still}");
+
+    drop(direct);
+    drop(client);
+}
+
+#[test]
+fn attaching_to_a_pane_that_does_not_exist_says_so_on_a_normal_screen() {
+    // Before the terminal is put into raw mode and cleared: "no such pane" is a
+    // thing to read, and a message painted onto an alternate screen that is
+    // then torn down is a message nobody sees.
+    let session = unique("attachbad");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, said) = ask(&session, &["pane", "attach", "p9999"]);
+    assert!(!ok, "attaching to a pane that does not exist succeeded");
+    assert!(
+        said.contains("no such pane"),
+        "the refusal did not say why: {said}"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_direct_attach_can_read_what_has_gone_past_and_typing_comes_back() {
+    // A pane being read from the past looks exactly like a program that has
+    // stopped, so the way back has to be something you would do anyway.
+    let session = unique("attachscroll");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    // More than a screenful, so there is a past to be in.
+    let (ok, out) = ask(
+        &session,
+        &[
+            "pane",
+            "run",
+            &pane,
+            "for i in $(seq 1 60); do printf 'zzLINE%s\\n' \"$i\"; done",
+        ],
+    );
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &pane, "zzLINE60", START),
+        "the pane never filled"
+    );
+
+    let mut direct = Attached::to(&session, &pane, false);
+    assert!(
+        direct.wait_for("zzLINE60", START),
+        "the current screen did not arrive\n{}",
+        direct.drawn()
+    );
+    assert!(
+        !direct.drawn().contains("zzLINE1\n"),
+        "the first line was still on screen; there is no past to scroll into"
+    );
+
+    // Page up reaches it.
+    direct.send(b"\x1b[5~");
+    assert!(
+        direct.wait_for("zzLINE1", START),
+        "page up did not move through the scrollback\n{}",
+        direct.drawn()
+    );
+
+    // And typing brings you back to the live screen, because sending a
+    // keystroke to a program whose output you cannot see is the kind of thing
+    // you find out about afterwards.
+    direct.send(b"printf 'zzBACK'\r");
+    assert!(
+        direct.wait_for("zzBACK", START),
+        "typing did not return to the bottom\n{}",
+        direct.drawn()
+    );
+
+    drop(direct);
+    drop(client);
+}
