@@ -2,7 +2,7 @@
 id: 118
 title: 'pane wait-output: the same, for things that are not agents'
 type: feature
-status: backlog
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
