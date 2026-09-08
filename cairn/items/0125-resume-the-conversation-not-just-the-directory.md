@@ -37,10 +37,35 @@ every workspace rather than only the focused one, so the work is running by the
 time you get to it.
 
 ## Acceptance criteria
-- [ ] The hook snippet reports a session reference alongside state
-- [ ] The reference is persisted with the pane and survives a restart
-- [ ] Restore relaunches with the harness's own resume argument
-- [ ] The resume argument is per-harness configuration, not a match arm
-- [ ] A missing, stale or unreadable reference restores a plain shell
-- [ ] `[session] resume_agents = false` turns it off
-- [ ] Resume waits for a client's terminal size, then runs for every workspace
+- [x] The hook snippet reports a session reference alongside state
+- [x] The reference is persisted with the pane and survives a restart
+- [x] Restore relaunches with the harness's own resume argument
+- [x] The resume argument is per-harness configuration, not a match arm
+- [x] A missing, stale or unreadable reference restores a plain shell
+- [x] `[session] resume_agents = false` turns it off
+- [x] Resume waits for a client's terminal size, then runs for every workspace
+
+## 2026-09-08
+
+The snippet does not extract the id. `--hook` says the harness has piped its
+payload in and dirk reads what it understands out of it — because pulling a JSON
+field in the snippet means depending on `jq`, and a hook that fails on a machine
+without it stops reporting *state* as well. So the cost of a missing tool would
+have been the whole feature, not this half of it.
+
+The reference is kept against the harness that issued it, as a pair. A reference
+means nothing to a program that did not mint it, and resuming codex on claude's
+id would start a conversation nobody had.
+
+Resume runs on the first attach rather than at restore. Twelve agents resumed on
+a server nobody may ever look at is twelve model sessions nobody asked for, and
+attaching is also the first moment there is a terminal size that belongs to a
+screen rather than to a fallback.
+
+Kept at the workspace rather than the pane. dirk's model is that a workspace
+exists in order to hold an agent — it is why naming is built around what the
+agent says it is doing — so that is where the conversation belongs too.
+
+`differs` had to learn about the new fields or a conversation reported after the
+last write would never reach the file, and the restart it exists for would find
+nothing.

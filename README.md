@@ -351,6 +351,33 @@ The second form needs no session at all. That is how a wrong detection becomes
 a test case instead of a bug report with a screenshot in it: capture the screen,
 run it through the same rule, and put the file in `tests/`.
 
+### Coming back to the conversation
+
+A session restored after the server stops brings back workspaces, panes, split
+trees, directories and focus — and a bare shell in each pane. The agent that was
+three hours into a refactor is gone, and its conversation is sitting on disk
+under an id nobody wrote down.
+
+The hook that reports state reports that id too — dirk reads it out of the
+payload the harness already pipes in, so the snippet needs no `jq` and cannot
+fail on a machine without one. It is written down with the workspace, and a
+restore starts the harness on it:
+
+```toml
+# ~/.config/dirk/agents/claude.toml
+resume = ["claude", "--resume", "{session}"]
+```
+
+Configuration rather than a table in the source, because every harness spells
+this differently and the spelling changes. claude and codex ship with one.
+
+It happens when the first client attaches, not at restore: resuming twelve
+agents on a server nobody may ever look at is twelve model sessions nobody asked
+for, and attaching is also the first moment there is a real terminal size to
+draw them at. A reference dirk cannot use — a harness with no template, a
+reference the harness has forgotten — restores a shell, which is what every
+restored pane used to be. `[session] resume_agents = false` turns it off.
+
 **Rank one is worth installing, so dirk installs it.** `install` adds two
 entries to the harness's own settings file and `uninstall` takes exactly those
 two back out; everything else in the file, including your other hooks and the
@@ -555,6 +582,9 @@ clipboard     = []           # empty finds pbcopy, wl-copy or xclip
 [server]
 headless_cols = 80
 headless_rows = 24
+
+[session]
+resume_agents = true         # start a restored agent on the conversation it had
 
 [nav]
 glyphs    = "unicode"        # unicode | ascii | round

@@ -316,6 +316,7 @@ pub struct Config {
     pub naming: Naming,
     pub notify: Notify,
     pub server: Server,
+    pub session: SessionCfg,
     pub sound: Sound,
     /// What to pipe a selection into. Empty means whatever this platform is
     /// likely to have -- `pbcopy`, `wl-copy`, `xclip`.
@@ -430,6 +431,11 @@ pub struct AgentDef {
     /// How to start one. Empty means its own name.
     #[serde(default)]
     pub command: Vec<String>,
+    /// How to start one again on the conversation it was having, with
+    /// `{session}` standing for whatever the harness calls its session. Empty
+    /// means dirk does not know, and a restored pane gets a shell.
+    #[serde(default)]
+    pub resume: Vec<String>,
     #[serde(default)]
     pub blocked: BlockedDef,
 }
@@ -451,6 +457,7 @@ impl AgentDef {
             blocked: self.blocked.markers.clone(),
             choices: self.blocked.menu,
             from,
+            resume: self.resume.clone(),
         }
     }
 }
@@ -465,6 +472,7 @@ struct AgentFile {
     names: Vec<String>,
     argv: Vec<String>,
     command: Vec<String>,
+    resume: Vec<String>,
     blocked: BlockedDef,
 }
 
@@ -475,6 +483,7 @@ impl AgentFile {
             names: self.names,
             argv: self.argv,
             command: self.command,
+            resume: self.resume,
             blocked: self.blocked,
         }
     }
@@ -726,6 +735,28 @@ impl Default for Notify {
     }
 }
 
+/// What a session brings back when it starts again.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SessionCfg {
+    /// Whether a restored pane whose agent left a session reference is started
+    /// on that conversation rather than as a shell.
+    ///
+    /// On, because restoring the shape of the work and losing the work is close
+    /// to the worst place to stop. Off is for somebody who would rather decide
+    /// each time, and for whom twelve agents coming back at once is twelve
+    /// model sessions they did not ask for.
+    pub resume_agents: bool,
+}
+
+impl Default for SessionCfg {
+    fn default() -> Self {
+        Self {
+            resume_agents: true,
+        }
+    }
+}
+
 /// How big the session is when nobody is looking at it.
 ///
 /// A pane is sized from the client watching it, and a session driven from a
@@ -949,6 +980,7 @@ impl Default for Config {
             naming: Naming::default(),
             notify: Notify::default(),
             server: Server::default(),
+            session: SessionCfg::default(),
             sound: Sound::default(),
             clipboard: Vec::new(),
             keys: std::collections::BTreeMap::new(),
@@ -1415,6 +1447,7 @@ mod tests {
             names: Vec::new(),
             argv: Vec::new(),
             command: Vec::new(),
+            resume: Vec::new(),
             blocked: BlockedDef::default(),
         });
         assert!(

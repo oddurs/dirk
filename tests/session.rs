@@ -3755,3 +3755,128 @@ fn a_harness_with_no_snippet_says_so_rather_than_pretending() {
         "nothing to paste: {said}"
     );
 }
+
+#[test]
+fn a_restored_session_comes_back_on_the_conversation_it_was_having() {
+    // Of everything in this milestone, the one that changes how the tool feels.
+    // Restoring the shape of the work while losing the work is close to the
+    // worst available place to stop.
+    let session = unique("resume");
+    let dir = config_home().join("cfg-resume");
+    std::fs::create_dir_all(dir.join("dirk").join("agents")).expect("agents dir");
+    // A stand-in harness: `printf` is not an agent, but what is being tested is
+    // that dirk starts the right command line with the right reference in it.
+    std::fs::write(
+        dir.join("dirk").join("agents").join("zzharness.toml"),
+        "names = [\"zzharness\"]\nresume = [\"printf\", \"zzRESUMED-{session}\"]\n",
+    )
+    .expect("rule file");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = first_id(&list);
+    // What a hook would report: a state, and the harness's own name for the
+    // conversation.
+    let (ok, said) = ask(
+        &session,
+        &["agent", "state", "done", &ws, "--session", "conv-42"],
+    );
+    assert!(ok, "the report was refused: {said}");
+
+    // The pane has to be holding that harness for the reference to be kept
+    // against it — a reference is only meaningful to the program that issued
+    // it. Reported again once the harness is what the pane is running.
+    let (ok, panes) = ask(&session, &["pane", "list", &ws]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, out) = ask(
+        &session,
+        &[
+            "pane",
+            "run",
+            &pane,
+            "exec sh -c 'exec -a zzharness sleep 30'",
+        ],
+    );
+    assert!(ok, "pane run failed: {out}");
+    let deadline = Instant::now() + START;
+    while Instant::now() < deadline {
+        let (_, said) = ask(
+            &session,
+            &["agent", "state", "done", &ws, "--session", "conv-42"],
+        );
+        if said.contains("conv-42") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let (ok, said) = ask(
+        &session,
+        &["agent", "state", "done", &ws, "--session", "conv-42"],
+    );
+    assert!(ok, "the report was refused: {said}");
+    assert!(
+        said.contains("conv-42"),
+        "the reference was not kept against the harness: {said}"
+    );
+
+    // Down and up again. The processes are gone; the conversation is not.
+    drop(client);
+    end(&session);
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = first_id(&list);
+    let (ok, panes) = ask(&session, &["pane", "list", &ws]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    assert!(
+        appears_in_pane(&session, &pane, "zzRESUMED-conv-42", START),
+        "the agent did not come back on its conversation\n{}",
+        ask(&session, &["pane", "read", &pane, "20"]).1
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_harness_dirk_cannot_resume_comes_back_as_a_shell() {
+    // Every restored pane used to be a shell, and one that stays a shell has
+    // lost nothing it had a moment ago. A reference dirk cannot use is
+    // therefore not an error.
+    let session = unique("noresume");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = first_id(&list);
+    // aider ships with no resume template, which is the case being tested.
+    let (ok, said) = ask(
+        &session,
+        &["agent", "state", "done", &ws, "--session", "conv-99"],
+    );
+    assert!(ok, "the report was refused: {said}");
+
+    drop(client);
+    end(&session);
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    // It came back, and it came back usable.
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, out) = ask(&session, &["pane", "run", &pane, "printf zzSHELL"]);
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &pane, "zzSHELL", START),
+        "the restored pane is not a working shell"
+    );
+
+    drop(client);
+}
