@@ -239,7 +239,7 @@ pub fn render(
         };
         let focused = session.focus == Focus::Ws { p, w };
 
-        let label = elide(&ws.label, 14, g.text(G::Ellipsis));
+        let label = crate::name::shorten(&ws.label, 14, g.text(G::Ellipsis));
         let text = format!("{} {}", n + 1, label);
         let width = cells(&text) + 2;
         if x + width > limit {

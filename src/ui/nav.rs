@@ -969,7 +969,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 buf,
                 x,
                 y,
-                &elide(&ws.tab_label(t), left, cx.g.text(G::Ellipsis)),
+                &crate::name::shorten(&ws.tab_label(t), left, cx.g.text(G::Ellipsis)),
                 style,
                 w,
             );
@@ -1130,7 +1130,7 @@ fn space_row(
         buf,
         x,
         y,
-        &elide(&ws.label, left, cx.g.text(G::Ellipsis)),
+        &crate::name::shorten(&ws.label, left, cx.g.text(G::Ellipsis)),
         style,
         w,
     );

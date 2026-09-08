@@ -94,14 +94,13 @@ A daemon, detach and reattach, persistence across restarts, and a socket API
 
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`########··` 72% · 21 of 29 done · due 2027-02-15
+`########··` 76% · 22 of 29 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ### backlog
 
 - [ ] `0097` The rail degrades by a ladder, not by whatever is measured first <sup>chore · p2 · chrome · rail</sup>
-- [ ] `0098` Elision throws away the word that distinguishes <sup>bug · p2 · naming · rail</sup>
 - [ ] `0105` Four levels of hierarchy where the rail has one <sup>feature · p1 · chrome · rail</sup>
 - [ ] `0106` The rail hides what is owed before it hides the clock <sup>bug · p0 · chrome · rail</sup>
 - [ ] `0107` An empty middle, and one place to look for what is owed <sup>feature · p1 · chrome · rail</sup>
@@ -132,6 +131,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 - [x] `0071` Boards that report without being opened <sup>feature · p2 · layout</sup>
 - [x] `0072` A tree that still reads at twenty projects <sup>feature · p2 · nav</sup>
 - [x] `0073` Start an agent from the nav <sup>feature · p1 · agents</sup>
+- [x] `0098` Elision throws away the word that distinguishes <sup>bug · p2 · naming · rail</sup>
 
 ## v1.0 — Production
 
