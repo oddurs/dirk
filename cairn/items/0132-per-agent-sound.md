@@ -2,10 +2,10 @@
 id: 132
 title: Per-agent sound
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p3
 area: agents
 effort: s
