@@ -475,10 +475,13 @@ fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
     spawn_ticker(tx.clone());
     server::listen(listener, tx.clone());
 
-    // No terminal to ask, so a size until a client says otherwise.
+    // No terminal to ask, so a size until a client says otherwise. It is
+    // configuration rather than a constant because a session can be driven
+    // with nobody attached at all, and then this is not a placeholder -- it is
+    // the size every pane the caller makes will have.
     let size = ratatui::layout::Size {
-        width: 80,
-        height: 24,
+        width: cfg.server.headless_cols,
+        height: cfg.server.headless_rows,
     };
     let session_state = Session::new(&cfg, tx.clone());
     let mut app = App::new(cfg, session_state, size, tx);
@@ -703,6 +706,12 @@ struct App {
     /// The content rectangle every pane is sized to: the smallest among the
     /// clients watching. `None` when nobody is, or when there is no server.
     shared: Option<Rect>,
+    /// Where `content` goes back to when the last client leaves.
+    ///
+    /// Kept rather than recomputed because `content` has by then been written
+    /// over with the departed client's size, and a pane made after that would
+    /// inherit the geometry of a terminal nobody is looking at.
+    headless: Rect,
     /// What each board last reported, by name.
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
@@ -775,6 +784,12 @@ impl App {
             keys,
             acting: None,
             shared: None,
+            headless: Rect {
+                x: sidebar_w,
+                y: 0,
+                width: width.saturating_sub(sidebar_w),
+                height: height.saturating_sub(1),
+            },
             badges: std::collections::HashMap::new(),
             badging: false,
             copy: None,
@@ -1166,6 +1181,14 @@ impl App {
                 // By id, so one client leaving cannot take another's view with
                 // it. The session does not end because nobody is watching.
                 self.views.retain(|v| v.id != id);
+                // Panes that exist keep the size they had -- what is in them
+                // was drawn for it. But the next one made belongs to a session
+                // nobody is watching, and sizing it from the terminal that
+                // just left is sizing it from a screen that no longer exists.
+                if self.views.is_empty() {
+                    self.content = self.headless;
+                    self.shared = None;
+                }
                 self.resize_panes();
             }
             Ev::Output(id) => {

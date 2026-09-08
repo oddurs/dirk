@@ -209,6 +209,7 @@ pub struct Config {
     pub scrollback: usize,
     pub naming: Naming,
     pub notify: Notify,
+    pub server: Server,
     pub sound: Sound,
     /// What to pipe a selection into. Empty means whatever this platform is
     /// likely to have -- `pbcopy`, `wl-copy`, `xclip`.
@@ -489,6 +490,35 @@ impl Default for Notify {
     }
 }
 
+/// How big the session is when nobody is looking at it.
+///
+/// A pane is sized from the client watching it, and a session driven from a
+/// script has no client. Without an answer here the geometry of a workspace
+/// created by `dirk workspace create` would be whatever the last person to
+/// attach happened to have, or the size the server started with -- so what a
+/// caller reads back from a pane it created depends on a terminal that is not
+/// there.
+///
+/// 80x24 because that is what a terminal is when nobody has said otherwise,
+/// and because it is what dirk already did. Raise it for orchestration: an
+/// agent's output read back at 80 columns is an agent's output with the wrap
+/// points of a screen nobody saw.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Server {
+    pub headless_cols: u16,
+    pub headless_rows: u16,
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Self {
+            headless_cols: 80,
+            headless_rows: 24,
+        }
+    }
+}
+
 /// The naming policy, as knobs.
 ///
 /// Every default is what the policy did before it was configurable, so a file
@@ -682,6 +712,7 @@ impl Default for Config {
             scrollback: 5000,
             naming: Naming::default(),
             notify: Notify::default(),
+            server: Server::default(),
             sound: Sound::default(),
             clipboard: Vec::new(),
             keys: std::collections::BTreeMap::new(),

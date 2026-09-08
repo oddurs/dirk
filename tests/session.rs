@@ -2242,3 +2242,91 @@ fn a_chosen_glyph_set_reaches_the_column() {
     drop(client);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// A configuration directory holding one file, for a test that needs the
+/// session to have been started with a setting rather than without it.
+fn configured(name: &str, body: &str) -> std::path::PathBuf {
+    let dir = config_home().join(format!("cfg-{name}"));
+    std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+    std::fs::write(dir.join("dirk").join("config.toml"), body).expect("config");
+    dir
+}
+
+/// The cols each pane reports, in the order `pane list` gave them.
+fn widths(json: &str) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut rest = json;
+    while let Some(at) = rest.find("\"cols\"") {
+        rest = &rest[at + 6..];
+        let digits: String = rest
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            break;
+        }
+        out.push(digits.parse().unwrap_or(0));
+    }
+    out
+}
+
+#[test]
+fn a_pane_made_with_nobody_watching_gets_the_size_that_was_configured() {
+    // A pane is sized from the client watching it, and a session driven from a
+    // script has no client. What it used to get was the size of whichever
+    // terminal had most recently been attached -- so a caller that created a
+    // workspace, read a pane, and parsed the output was parsing it at the wrap
+    // points of a screen that had gone home.
+    let session = unique("headless");
+    // Deliberately wider than any client this suite attaches, so the number can
+    // only have come from the configuration.
+    let dir = configured(
+        "headless",
+        "[server]\nheadless_cols = 200\nheadless_rows = 60\n",
+    );
+    let mut client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    // While somebody is watching, the client wins: that is the screen the pane
+    // is going to be drawn on.
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed: {list}");
+    let watched = widths(&list);
+    assert!(!watched.is_empty(), "no panes: {list}");
+    assert!(
+        watched.iter().all(|w| *w < COLS as u64),
+        "an attached client's pane was not sized from its terminal: {watched:?}"
+    );
+
+    // Leave. The panes that exist keep the size they were drawn at.
+    client.kill();
+    let gone = Instant::now() + START;
+    while Instant::now() < gone {
+        let (_, info) = ask(&session, &["session", "info"]);
+        if info.contains("\"attached\": false") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed after detaching: {list}");
+    assert_eq!(
+        widths(&list),
+        watched,
+        "detaching resized panes that already had a size"
+    );
+
+    // The next one made belongs to a session nobody is looking at.
+    let (ok, made) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed: {made}");
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed: {list}");
+    let after = widths(&list);
+    assert!(
+        after.iter().any(|w| *w > COLS as u64),
+        "a pane made with nobody watching was sized from a terminal that had left: {after:?}"
+    );
+
+    end(&session);
+}

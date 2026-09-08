@@ -146,10 +146,13 @@ The socket API can be asked things. This is the half that lets a program use
 - [ ] `0118` pane wait-output: the same, for things that are not agents <sup>feature · p1 · api</sup>
 - [ ] `0119` pane run: a command, submitted <sup>feature · p2 · api</sup>
 - [ ] `0120` Direct attach: one pane in your terminal, no interface <sup>feature · p2 · api</sup>
-- [ ] `0121` A terminal size when nobody is looking <sup>feature · p1 · server</sup>
 - [ ] `0122` dirk api schema: the socket protocol, as data <sup>feature · p2 · api</sup>
 - [ ] `0123` Shell completions <sup>feature · p2 · packaging</sup>
 - [ ] `0124` dirk notify: an interruption a script can cause <sup>feature · p3 · api</sup>
+
+### in review
+
+- [ ] `0121` A terminal size when nobody is looking <sup>feature · p1 · server</sup>
 
 ## v0.7 — Agents you do not have to babysit
 
