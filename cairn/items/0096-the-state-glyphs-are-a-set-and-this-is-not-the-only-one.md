@@ -2,7 +2,7 @@
 id: 96
 title: The state glyphs are a set, and this is not the only one
 type: chore
-status: backlog
+status: done
 milestone: v1.0
 created: 2026-09-07
 updated: 2026-09-07

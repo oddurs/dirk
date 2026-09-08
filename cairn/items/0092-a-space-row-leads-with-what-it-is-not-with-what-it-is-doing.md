@@ -2,7 +2,7 @@
 id: 92
 title: A space row leads with what it is, not with what it is doing
 type: feature
-status: review
+status: done
 milestone: v1.0
 created: 2026-09-07
 updated: 2026-09-07
