@@ -2047,3 +2047,80 @@ fn a_branch_with_nothing_to_compare_against_says_nothing_rather_than_zero() {
     drop(client);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn a_worktrees_space_hangs_off_the_checkout_the_others_hang_off() {
+    // A worktree is not a peer of the repository proper -- it is the same work
+    // on another branch, which is the whole reason somebody made one.
+    let repo = a_repo("hang");
+    let session = unique("hang");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["worktree", "add", "side"]);
+    assert!(ok, "worktree add failed: {out}");
+    let at = repo.parent().unwrap().join(format!(
+        "{}-side",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+    must_be_disposable(&at);
+    assert!(
+        client.wait_for("side", START),
+        "the worktree never reached the column\n{}",
+        client.drawn()
+    );
+
+    // The repository proper's space is flush and the worktree's hangs under
+    // it, one level in, off a connector. Measured at the branch rather than at
+    // the leading whitespace: the connector sits outside the indent, which is
+    // the whole of what a connector is for.
+    let rows = client.rows();
+    let from = rows
+        .iter()
+        .position(|line| line.trim_start().starts_with("spaces"))
+        .expect("the spaces heading");
+    // Columns, not byte offsets: a connector is three bytes and one column,
+    // and counting bytes would make the indent look bigger than it is.
+    let column = |line: &str, want: &str| line.find(want).map(|at| line[..at].chars().count());
+    let below = rows.iter().skip(from).collect::<Vec<_>>();
+    let flush = below
+        .iter()
+        .find_map(|line| column(line, "main"))
+        .expect("no space on the repository proper's branch");
+    let hung = below
+        .iter()
+        .find(|line| line.contains('└') || line.contains('├'))
+        .expect("no connector: nothing was drawn as hanging");
+    let hung_at = column(hung, "side").expect("the worktree's branch");
+    assert!(
+        hung_at > flush,
+        "the worktree was drawn as a peer of the repository proper: \
+         `side` at {hung_at}, `main` at {flush}\n{}",
+        client.drawn()
+    );
+
+    // And everything under it moves with it. A caption indented differently
+    // from the line it is a caption of reads as belonging to something else.
+    let caption = |branch: &str| {
+        let row = below.iter().position(|line| line.contains(branch))?;
+        below.get(row + 1).and_then(|line| {
+            let text = line.trim_start();
+            (!text.is_empty()).then(|| line.len() - text.len())
+        })
+    };
+    assert_eq!(
+        caption("side").zip(caption("main")).map(|(a, b)| a - b),
+        Some(hung_at - flush),
+        "the caption did not move in with the row it captions\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&at);
+    let _ = std::fs::remove_dir_all(&repo);
+}

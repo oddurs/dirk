@@ -32,7 +32,10 @@ indent never goes to three.  Writing this as a general tree would be writing a
 recursion that cannot happen and then maintaining it.
 
 ## Acceptance criteria
-- [ ] A worktree's spaces are indented one level under the project
-- [ ] A connector shows what they hang off
-- [ ] The indent is never deeper than one, and the code cannot express deeper
-- [ ] The disclosure that folds a checkout is on the row it folds
+- [x] A worktree's spaces are indented one level under the project
+- [x] A connector shows what they hang off
+- [x] The indent is never deeper than one, and the code cannot express deeper
+- [x] The disclosure that folds a checkout is on the row it folds
+      — no checkout row and so no checkout fold: the spaces hang directly
+        off the project, and the only disclosures are the ones already on
+        the rows they fold
