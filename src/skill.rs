@@ -31,7 +31,8 @@ pub fn text() -> String {
     out.push_str(HEAD);
 
     out.push_str("\n## Commands\n\n```\n");
-    for (name, args) in crate::api::COMMANDS {
+    for cmd in crate::api::COMMANDS {
+        let (name, args) = (cmd.name, cmd.args);
         let (noun, verb) = name.split_once('.').unwrap_or((name, ""));
         // Trimmed: most commands take nothing, and a line ending in a space is
         // a line somebody will copy with the space in it.
@@ -126,7 +127,7 @@ mod tests {
     fn the_skill_describes_the_surface_that_exists() {
         // Generated rather than written beside the code, so it cannot drift.
         let text = text();
-        for (name, _) in crate::api::COMMANDS {
+        for name in crate::api::COMMANDS.iter().map(|c| c.name) {
             let (noun, verb) = name.split_once('.').unwrap();
             assert!(
                 text.contains(&format!("dirk {noun} {verb}")),

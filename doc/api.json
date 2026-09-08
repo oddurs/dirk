@@ -1,0 +1,277 @@
+{
+  "commands": [
+    {
+      "answer": [
+        "version",
+        "nouns[]",
+        "commands[]",
+        "reply"
+      ],
+      "args": "",
+      "name": "api.schema"
+    },
+    {
+      "answer": [
+        "workspaces[]"
+      ],
+      "args": "",
+      "name": "workspace.list"
+    },
+    {
+      "answer": [
+        "focused"
+      ],
+      "args": "<workspace|pane>",
+      "name": "workspace.focus"
+    },
+    {
+      "answer": [
+        "workspace"
+      ],
+      "args": "[path]",
+      "name": "workspace.create"
+    },
+    {
+      "answer": [
+        "label"
+      ],
+      "args": "<workspace> <name...>",
+      "name": "workspace.rename"
+    },
+    {
+      "answer": [
+        "closed"
+      ],
+      "args": "<workspace>",
+      "name": "workspace.close"
+    },
+    {
+      "answer": [
+        "panes[]"
+      ],
+      "args": "[workspace]",
+      "name": "pane.list"
+    },
+    {
+      "answer": [
+        "focused"
+      ],
+      "args": "<pane>",
+      "name": "pane.focus"
+    },
+    {
+      "answer": [
+        "pane"
+      ],
+      "args": "<pane> [cols|rows]",
+      "name": "pane.split"
+    },
+    {
+      "answer": [
+        "text"
+      ],
+      "args": "<pane> [lines]",
+      "name": "pane.read"
+    },
+    {
+      "answer": [
+        "sent"
+      ],
+      "args": "<pane> <command...>",
+      "name": "pane.run"
+    },
+    {
+      "answer": [
+        "sent"
+      ],
+      "args": "<pane> <text...>",
+      "name": "pane.send-text"
+    },
+    {
+      "answer": [
+        "sent[]"
+      ],
+      "args": "<pane> <key...>",
+      "name": "pane.send-keys"
+    },
+    {
+      "answer": [
+        "closed"
+      ],
+      "args": "<pane>",
+      "name": "pane.close"
+    },
+    {
+      "answer": [
+        "layouts[]"
+      ],
+      "args": "",
+      "name": "layout.list"
+    },
+    {
+      "answer": [
+        "opened"
+      ],
+      "args": "<name>",
+      "name": "layout.open"
+    },
+    {
+      "answer": [
+        "tabs[]"
+      ],
+      "args": "[workspace]",
+      "name": "tab.list"
+    },
+    {
+      "answer": [
+        "tab"
+      ],
+      "args": "[workspace]",
+      "name": "tab.new"
+    },
+    {
+      "answer": [
+        "focused"
+      ],
+      "args": "<tab>",
+      "name": "tab.focus"
+    },
+    {
+      "answer": [
+        "renamed"
+      ],
+      "args": "<tab> <name...>",
+      "name": "tab.rename"
+    },
+    {
+      "answer": [
+        "closed"
+      ],
+      "args": "<tab>",
+      "name": "tab.close"
+    },
+    {
+      "answer": [
+        "worktrees[]"
+      ],
+      "args": "",
+      "name": "worktree.list"
+    },
+    {
+      "answer": [
+        "branch",
+        "path",
+        "workspace"
+      ],
+      "args": "<branch>",
+      "name": "worktree.add"
+    },
+    {
+      "answer": [
+        "removed"
+      ],
+      "args": "<branch|path> [--force]",
+      "name": "worktree.remove"
+    },
+    {
+      "answer": [
+        "agents[]"
+      ],
+      "args": "",
+      "name": "agent.list"
+    },
+    {
+      "answer": [
+        "state",
+        "workspace",
+        "seen"
+      ],
+      "args": "<blocked|working|done|idle|starting> [workspace|pane]",
+      "name": "agent.state"
+    },
+    {
+      "answer": [
+        "agent",
+        "pane",
+        "workspace"
+      ],
+      "args": "<kind> [pane]",
+      "name": "agent.start"
+    },
+    {
+      "answer": [
+        "agent"
+      ],
+      "args": "<workspace|pane> <text...> [--wait] [--until STATE]... [--timeout MS]",
+      "name": "agent.prompt"
+    },
+    {
+      "answer": [
+        "agent"
+      ],
+      "args": "<workspace|pane> [--until STATE]... [--timeout MS]",
+      "name": "agent.wait"
+    },
+    {
+      "answer": [
+        "kind",
+        "hooks"
+      ],
+      "args": "<kind>",
+      "name": "agent.hooks"
+    },
+    {
+      "answer": [
+        "version",
+        "workspaces",
+        "layouts",
+        "clients",
+        "attached"
+      ],
+      "args": "",
+      "name": "session.info"
+    },
+    {
+      "answer": [
+        "commands[]"
+      ],
+      "args": "",
+      "name": "session.commands"
+    },
+    {
+      "answer": [
+        "reloaded"
+      ],
+      "args": "",
+      "name": "session.reload"
+    },
+    {
+      "answer": [
+        "quit"
+      ],
+      "args": "",
+      "name": "session.quit"
+    }
+  ],
+  "nouns": [
+    "api",
+    "workspace",
+    "pane",
+    "layout",
+    "agent",
+    "session",
+    "worktree",
+    "tab"
+  ],
+  "reply": {
+    "err": {
+      "error": "what went wrong, as a sentence",
+      "ok": false
+    },
+    "ok": {
+      "ok": true,
+      "result": "the keys named by `answer`"
+    }
+  },
+  "version": "0.4.0"
+}

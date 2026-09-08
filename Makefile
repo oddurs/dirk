@@ -13,7 +13,7 @@ DIRK    := target/release/dirk
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DISTDIR := dirk-$(VERSION)
 
-.PHONY: all build check test fmt lint shellcheck shot shots site site-serve roadmap setup \
+.PHONY: all build check test fmt lint shellcheck shot shots site site-serve roadmap api setup \
         news ChangeLog dist install install-man uninstall clean distclean help
 
 all: build
@@ -110,6 +110,12 @@ shots:
 # Regenerate the roadmap from the backlog.
 roadmap:
 	cairn render
+
+# The socket surface, as data. Checked in so that changing it is a diff rather
+# than a surprise for whoever was speaking the old one; a test fails when this
+# has not been run.
+api:
+	$(CARGO) run --quiet -- api schema > doc/api.json
 
 # The release notes for the current version, as the release workflow cuts them.
 news:

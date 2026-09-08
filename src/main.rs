@@ -117,6 +117,7 @@ JSON; `--current` means the pane you are in.
   worktree  list|add|remove
   tab       list|new|focus|rename|close
   session   info|list|reload|commands|quit|prune
+  api       schema
 
 Options:
       --session NAME     which session, default \"default\"
@@ -337,6 +338,17 @@ fn main() -> io::Result<()> {
         if gone == 0 {
             say("nothing to remove\n");
         }
+        return Ok(());
+    }
+
+    // Answered without a session because it is about the surface rather than
+    // about any session of it, and because a caller generating a client wants
+    // it before there is one to ask.
+    if command_args_are(&args, "api", "schema") {
+        say(&format!(
+            "{}\n",
+            serde_json::to_string_pretty(&api::schema()).unwrap_or_default()
+        ));
         return Ok(());
     }
 

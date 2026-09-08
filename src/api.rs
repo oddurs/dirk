@@ -270,8 +270,27 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
         // to find out what it may ask is one that will guess.
         "session.commands" => Reply::ok(json!({ "commands": COMMANDS })),
 
+        // Also answered without a session, by the CLI. Here as well so that a
+        // caller already holding a socket does not have to shell out to ask
+        // what it may say down it.
+        "api.schema" => Reply::ok(schema()),
+
         _ => return None,
     })
+}
+
+/// One command, as the table below records it.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Command {
+    /// The noun and the verb, as they go over the socket.
+    pub name: &'static str,
+    /// What it takes, in the notation a usage line uses.
+    pub args: &'static str,
+    /// The keys its answer carries, comma-separated. A `[]` suffix is a list.
+    ///
+    /// Names rather than types: what a caller needs from this is which key to
+    /// read, and a type would be a promise about a value dirk does not police.
+    pub answer: &'static str,
 }
 
 /// The nouns a session answers to.
@@ -280,6 +299,7 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
 /// routing cannot disagree -- which they did, silently, the moment a noun was
 /// added to one of them.
 pub const NOUNS: &[&str] = &[
+    "api",
     "workspace",
     "pane",
     "layout",
@@ -289,51 +309,182 @@ pub const NOUNS: &[&str] = &[
     "tab",
 ];
 
-/// Every command, with what it takes. Kept beside the handlers so the two
-/// cannot drift without somebody noticing.
-pub const COMMANDS: &[(&str, &str)] = &[
-    ("workspace.list", ""),
-    ("workspace.focus", "<workspace|pane>"),
-    ("workspace.create", "[path]"),
-    ("workspace.rename", "<workspace> <name...>"),
-    ("workspace.close", "<workspace>"),
-    ("pane.list", "[workspace]"),
-    ("pane.focus", "<pane>"),
-    ("pane.split", "<pane> [cols|rows]"),
-    ("pane.read", "<pane> [lines]"),
-    ("pane.run", "<pane> <command...>"),
-    ("pane.send-text", "<pane> <text...>"),
-    ("pane.send-keys", "<pane> <key...>"),
-    ("pane.close", "<pane>"),
-    ("layout.list", ""),
-    ("layout.open", "<name>"),
-    ("tab.list", "[workspace]"),
-    ("tab.new", "[workspace]"),
-    ("tab.focus", "<tab>"),
-    ("tab.rename", "<tab> <name...>"),
-    ("tab.close", "<tab>"),
-    ("worktree.list", ""),
-    ("worktree.add", "<branch>"),
-    ("worktree.remove", "<branch|path> [--force]"),
-    ("agent.list", ""),
-    (
-        "agent.state",
-        "<blocked|working|done|idle|starting> [workspace|pane]",
-    ),
-    ("agent.start", "<kind> [pane]"),
-    (
-        "agent.prompt",
-        "<workspace|pane> <text...> [--wait] [--until STATE]... [--timeout MS]",
-    ),
-    (
-        "agent.wait",
-        "<workspace|pane> [--until STATE]... [--timeout MS]",
-    ),
-    ("agent.hooks", "<kind>"),
-    ("session.info", ""),
-    ("session.commands", ""),
-    ("session.reload", ""),
-    ("session.quit", ""),
+/// Every command: what it takes, and what its answer carries.
+///
+/// Kept beside the handlers so the two cannot drift without somebody noticing,
+/// and read by three things — the agent skill, the shell completions and
+/// `dirk api schema` — so that none of them is a second copy of this one.
+pub const COMMANDS: &[Command] = &[
+    Command {
+        name: "api.schema",
+        args: "",
+        answer: "version, nouns[], commands[], reply",
+    },
+    Command {
+        name: "workspace.list",
+        args: "",
+        answer: "workspaces[]",
+    },
+    Command {
+        name: "workspace.focus",
+        args: "<workspace|pane>",
+        answer: "focused",
+    },
+    Command {
+        name: "workspace.create",
+        args: "[path]",
+        answer: "workspace",
+    },
+    Command {
+        name: "workspace.rename",
+        args: "<workspace> <name...>",
+        answer: "label",
+    },
+    Command {
+        name: "workspace.close",
+        args: "<workspace>",
+        answer: "closed",
+    },
+    Command {
+        name: "pane.list",
+        args: "[workspace]",
+        answer: "panes[]",
+    },
+    Command {
+        name: "pane.focus",
+        args: "<pane>",
+        answer: "focused",
+    },
+    Command {
+        name: "pane.split",
+        args: "<pane> [cols|rows]",
+        answer: "pane",
+    },
+    Command {
+        name: "pane.read",
+        args: "<pane> [lines]",
+        answer: "text",
+    },
+    Command {
+        name: "pane.run",
+        args: "<pane> <command...>",
+        answer: "sent",
+    },
+    Command {
+        name: "pane.send-text",
+        args: "<pane> <text...>",
+        answer: "sent",
+    },
+    Command {
+        name: "pane.send-keys",
+        args: "<pane> <key...>",
+        answer: "sent[]",
+    },
+    Command {
+        name: "pane.close",
+        args: "<pane>",
+        answer: "closed",
+    },
+    Command {
+        name: "layout.list",
+        args: "",
+        answer: "layouts[]",
+    },
+    Command {
+        name: "layout.open",
+        args: "<name>",
+        answer: "opened",
+    },
+    Command {
+        name: "tab.list",
+        args: "[workspace]",
+        answer: "tabs[]",
+    },
+    Command {
+        name: "tab.new",
+        args: "[workspace]",
+        answer: "tab",
+    },
+    Command {
+        name: "tab.focus",
+        args: "<tab>",
+        answer: "focused",
+    },
+    Command {
+        name: "tab.rename",
+        args: "<tab> <name...>",
+        answer: "renamed",
+    },
+    Command {
+        name: "tab.close",
+        args: "<tab>",
+        answer: "closed",
+    },
+    Command {
+        name: "worktree.list",
+        args: "",
+        answer: "worktrees[]",
+    },
+    Command {
+        name: "worktree.add",
+        args: "<branch>",
+        answer: "branch, path, workspace",
+    },
+    Command {
+        name: "worktree.remove",
+        args: "<branch|path> [--force]",
+        answer: "removed",
+    },
+    Command {
+        name: "agent.list",
+        args: "",
+        answer: "agents[]",
+    },
+    Command {
+        name: "agent.state",
+        args: "<blocked|working|done|idle|starting> [workspace|pane]",
+        answer: "state, workspace, seen",
+    },
+    Command {
+        name: "agent.start",
+        args: "<kind> [pane]",
+        answer: "agent, pane, workspace",
+    },
+    Command {
+        name: "agent.prompt",
+        args: "<workspace|pane> <text...> [--wait] [--until STATE]... [--timeout MS]",
+        answer: "agent",
+    },
+    Command {
+        name: "agent.wait",
+        args: "<workspace|pane> [--until STATE]... [--timeout MS]",
+        answer: "agent",
+    },
+    Command {
+        name: "agent.hooks",
+        args: "<kind>",
+        answer: "kind, hooks",
+    },
+    Command {
+        name: "session.info",
+        args: "",
+        answer: "version, workspaces, layouts, clients, attached",
+    },
+    Command {
+        name: "session.commands",
+        args: "",
+        answer: "commands[]",
+    },
+    Command {
+        name: "session.reload",
+        args: "",
+        answer: "reloaded",
+    },
+    Command {
+        name: "session.quit",
+        args: "",
+        answer: "quit",
+    },
 ];
 
 /// A pane's full handle, from the pane alone.
@@ -344,6 +495,34 @@ pub const COMMANDS: &[(&str, &str)] = &[
 pub fn pane_id_of(session: &Session, pane: PaneId) -> Option<String> {
     let (p, w) = locate(session, pane)?;
     Some(pane_id(session.workspace(p, w)?.id, pane))
+}
+
+/// The whole surface, as data.
+///
+/// Generated from the table above rather than written beside it, for the same
+/// reason the skill is: a description of a surface that no longer exists is
+/// worse than no description. Checked into the repository as `doc/api.json` so
+/// that "the API changed" arrives as a diff in a pull request rather than as a
+/// bug report from whoever was speaking it.
+///
+/// Ordered as the table is, which is by noun and then by the order the verbs
+/// were added — stable, so the diff is about what changed.
+pub fn schema() -> Value {
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "nouns": NOUNS,
+        "commands": COMMANDS.iter().map(|c| json!({
+            "name": c.name,
+            "args": c.args,
+            "answer": c.answer.split(", ").filter(|k| !k.is_empty()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        // Every answer is one of these two, which is the thing a caller most
+        // needs to be told and the thing a usage line cannot say.
+        "reply": {
+            "ok": { "ok": true, "result": "the keys named by `answer`" },
+            "err": { "ok": false, "error": "what went wrong, as a sentence" },
+        },
+    })
 }
 
 /// Look a pane up wherever it is, with the workspace that holds it.
@@ -381,12 +560,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_checked_in_schema_is_the_one_this_binary_speaks() {
+        // The point of checking it in: a change to the surface arrives as a
+        // diff in a pull request rather than as a bug report from whoever was
+        // speaking the old one.
+        let want = include_str!("../doc/api.json");
+        let have = serde_json::to_string_pretty(&schema()).expect("the schema serialises");
+        assert_eq!(
+            have.trim(),
+            want.trim(),
+            "doc/api.json is stale — run `make api`"
+        );
+    }
+
+    #[test]
     fn the_listed_commands_are_the_ones_that_exist() {
         // A surface that says it accepts something it does not is worse than
         // one that says nothing.
         let session = None::<()>;
         let _ = session;
-        for (name, _) in COMMANDS {
+        for cmd in COMMANDS {
+            let name = cmd.name;
             assert!(name.contains('.'), "{name} is not a noun and a verb");
             let (noun, _) = name.split_once('.').unwrap();
             assert!(

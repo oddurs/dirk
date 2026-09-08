@@ -2845,3 +2845,41 @@ fn a_prompt_that_starts_nothing_says_so_rather_than_waiting_it_out() {
 
     drop(client);
 }
+
+#[test]
+fn the_surface_describes_itself_without_a_session_to_ask() {
+    // A caller generating a client wants this before there is a session to ask,
+    // which is most of why it is not just another command.
+    let session = unique("schema");
+    let (ok, said) = ask(&session, &["api", "schema"]);
+    assert!(ok, "api schema needed a session: {said}");
+    assert!(
+        said.contains("\"api.schema\""),
+        "the schema omits itself: {said}"
+    );
+    assert!(
+        said.contains("\"agent.wait\""),
+        "the schema omits a command: {said}"
+    );
+    assert!(
+        said.contains("\"answer\""),
+        "the schema does not say what an answer carries: {said}"
+    );
+    let socket = std::env::temp_dir()
+        .join(format!("dirk-{}", unsafe { libc::getuid() }))
+        .join(format!("{session}.sock"));
+    assert!(!socket.exists(), "asking for the schema started a session");
+
+    // Twice, byte for byte. A schema that reordered itself between runs would
+    // make every diff of the checked-in copy unreadable.
+    let (_, again) = ask(&session, &["api", "schema"]);
+    assert_eq!(said, again, "the schema is not stable between runs");
+
+    // And a running session answers the same thing down the socket, so a caller
+    // already holding one does not have to shell out to ask what it may say.
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+    let (ok, over_socket) = ask(&session, &["api", "schema"]);
+    assert!(ok, "the session refused api schema: {over_socket}");
+    drop(client);
+}
