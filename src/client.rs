@@ -266,7 +266,13 @@ fn copy(mut from: impl Read, mut to: impl Write) -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    // Decided here, on the machine with the mouse, for the same reason the
+    // noise is: this is the end with the pointing device, and `--remote` should
+    // do what the laptop's configuration says rather than the build box's.
+    if config().ui.mouse {
+        execute!(io::stdout(), EnableMouseCapture)?;
+    }
 
     // A panic in raw mode leaves the terminal unusable and the backtrace
     // unreadable. Restore first, then let the default hook print.

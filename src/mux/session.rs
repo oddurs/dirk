@@ -515,6 +515,10 @@ pub struct Session {
     /// How a pane's shell is started, and where a pane made beside another one
     /// begins. Cached like `shell` is, and refreshed on reload.
     pub terminal: crate::config::Terminal,
+    /// Whether a pane gives its top row to a rule. Cached here as well as read
+    /// where things are drawn, because resizing has to agree with drawing about
+    /// it or the program inside is told a size it does not have.
+    pub ui: crate::config::Ui,
     /// Transitions with no new intent that count as stale. Zero is off.
     stale_after: u32,
     scrollback: usize,
@@ -537,6 +541,7 @@ impl Session {
             repos: std::collections::HashMap::new(),
             shell: cfg.shell(),
             terminal: cfg.terminal.clone(),
+            ui: cfg.ui.clone(),
             stale_after: if cfg.naming.show_stale {
                 cfg.naming.stale_after_turns
             } else {
@@ -814,7 +819,7 @@ impl Session {
                 };
                 // The label takes the pane's top row, so the program gets what
                 // is left rather than what the tree allotted.
-                let inner = content_of(label.is_some(), r);
+                let inner = content_of(self.ui.ruled(label.is_some()), r);
 
                 let how = crate::mux::pty::Setup {
                     rows: inner.height,
@@ -1272,7 +1277,7 @@ impl Session {
             .rects(area)
             .into_iter()
             .find(|(x, _)| *x == id)
-            .map(|(_, r)| content_of(label.is_some(), r))
+            .map(|(_, r)| content_of(self.ui.ruled(label.is_some()), r))
             .unwrap_or(area);
 
         let new_id = self.id();
@@ -1342,17 +1347,20 @@ impl Session {
     /// Panes in unfocused workspaces are left at their old size until they are
     /// shown, so switching workspaces does not resize a tree of sleeping shells.
     pub fn resize_visible(&mut self, area: Rect) {
+        // Taken before the workspace is borrowed mutably, which is also the
+        // guarantee that resizing and drawing use the same answer.
+        let ui = self.ui.clone();
         match self.focus {
             Focus::Layout(i) => {
                 if let Some(ws) = self.layouts.get_mut(i).and_then(|l| l.ws.as_mut()) {
-                    resize_tree(ws, area);
+                    resize_tree(ws, area, &ui);
                 }
             }
             Focus::Ws { p, w } => {
                 let Some(ws) = self.workspace_mut(p, w) else {
                     return;
                 };
-                resize_tree(ws, area);
+                resize_tree(ws, area, &ui);
             }
         }
     }
@@ -1568,11 +1576,11 @@ pub fn explain(ws: &Workspace, now: Instant) -> Explained {
 
 /// The part of a pane's rectangle that carries terminal content.
 ///
-/// A labelled pane gives its top row to the label, so this is the one place
-/// that arithmetic lives — drawing and resizing must agree about it or the
-/// program inside is told a size it does not have.
-pub fn content_of(labelled: bool, r: Rect) -> Rect {
-    if !labelled || r.height < 2 {
+/// A ruled pane gives its top row to the rule, so this is the one place that
+/// arithmetic lives — drawing and resizing must agree about it or the program
+/// inside is told a size it does not have.
+pub fn content_of(ruled: bool, r: Rect) -> Rect {
+    if !ruled || r.height < 2 {
         return r;
     }
     Rect {
@@ -1606,10 +1614,10 @@ pub fn submission(text: &str, bracketed: bool) -> Vec<u8> {
     bytes
 }
 
-fn resize_tree(ws: &mut Workspace, area: Rect) {
+fn resize_tree(ws: &mut Workspace, area: Rect, ui: &crate::config::Ui) {
     for (id, r) in ws.tree().rects(area) {
         if let Some(pane) = ws.every_pane_mut().find(|p| p.id == id) {
-            let inner = content_of(pane.label.is_some(), r);
+            let inner = content_of(ui.ruled(pane.label.is_some()), r);
             pane.resize(inner.height, inner.width);
         }
     }

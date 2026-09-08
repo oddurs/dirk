@@ -26,11 +26,36 @@ the nav, no drag-select, and the outer terminal's own selection back. All or
 nothing, because a half-captured mouse is a mode you have to remember.
 
 ## Acceptance criteria
-- [ ] `pane_borders` with three values; `auto` is unchanged behaviour
-- [ ] `always` frames a single pane
-- [ ] `mouse = false` requests no mouse reporting at all
-- [ ] With the mouse off, everything reachable by click is reachable by key
-- [ ] Both apply on reload without a restart
+- [x] `ui.pane_rules` with three values; `auto` is unchanged behaviour
+- [x] `always` rules every pane, a single one included
+- [x] `mouse = false` requests no mouse reporting at all
+- [x] With the mouse off, everything reachable by click is reachable by key
+- [x] Both apply on reload without a restart
+
+## 2026-09-08
+
+Not borders. dirk draws no boxes and says why in `src/main.rs`: three sides of
+one only repeat what the neighbouring pane's own edge already says, and the
+fourth is a row of terminal nobody gets to use. What it draws is a rule — the
+top line, carrying the label and the focus mark — and only for a pane with a
+label, which is a board's panel.
+
+The gap underneath the item is real, though: two shells side by side have no
+visible boundary at all and nothing says which has the keyboard. So the setting
+is `pane_rules`, with the same three values doing the same three jobs.
+
+`content_of` is the one place the arithmetic lives and drawing and resizing must
+agree about it, so the policy is cached on the `Session` as well as read where
+things are drawn — the same shape `shell` and `terminal` already have.
+
+`mouse = false` drops mouse events as well as declining to ask for them. The
+setting means dirk does not use the mouse, and that has to stay true when
+something else has turned reporting on — an outer multiplexer, or a terminal
+that reports without being asked. It also makes the behaviour testable, which
+asking-and-not-asking is not.
+
+Decided on the client, like sound and notifications: that is the end with the
+pointing device, and `--remote` should do what the laptop says.
 
 **Related.** `splits resize by dragging the border between them` needs a
 border to grab, so if that lands first this one is its blocker rather than a

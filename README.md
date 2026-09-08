@@ -101,6 +101,10 @@ Every row in the sidebar, every chip in the rail and every pane is a click
 target. The hit map is built by the renderer as it paints, so there is no second
 layout pass that can disagree with the first.
 
+`mouse = false` turns all of it off: dirk asks the terminal for no mouse events
+and ignores any that arrive anyway, so your terminal's own selection works and
+everything a click reaches still has a key.
+
 Clicks reach the program inside a pane too — dirk asks the pane's own terminal
 state whether it turned mouse reporting on. So a click means "focus this pane"
 in a shell and "click this line" in lazygit, with no mode to remember.
@@ -651,6 +655,15 @@ resume_agents = true         # start a restored agent on the conversation it had
 [terminal]
 shell_mode = "auto"          # auto | login | non_login
 new_cwd    = "follow"        # follow | home | current | a path
+
+[ui]
+# A rule, not a border: three sides of a box only repeat what the neighbouring
+# pane's own edge already says, and the fourth is a row of terminal nobody gets
+# to use. `auto` draws one where there is something to say — a pane with a
+# label. `always` draws one on every pane, which is what tells two shells side
+# by side apart and says which has the keyboard. `off` draws none.
+pane_rules = "auto"          # auto | always | off
+mouse      = true            # false leaves the mouse to your terminal
 
 [nav]
 glyphs    = "unicode"        # unicode | ascii | round

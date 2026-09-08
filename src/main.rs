@@ -722,7 +722,7 @@ fn alone() -> io::Result<()> {
     spawn_input(tx.clone());
     spawn_ticker(tx.clone());
 
-    let mut terminal = setup()?;
+    let mut terminal = setup(cfg.ui.mouse)?;
     let size = terminal.size()?;
 
     let session = Session::new(&cfg, tx.clone());
@@ -742,10 +742,17 @@ type Term = Terminal<CrosstermBackend<io::Stdout>>;
 /// the nav is there.
 const MIN_NAV: u16 = 20;
 
-fn setup() -> io::Result<Term> {
+fn setup(mouse: bool) -> io::Result<Term> {
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(out, EnterAlternateScreen)?;
+    // All or nothing. dirk captures so that it can decide per pane whether the
+    // program inside wanted the click; declining to capture hands the outer
+    // terminal its own selection back, and everything a click reaches has a
+    // key.
+    if mouse {
+        execute!(out, EnableMouseCapture)?;
+    }
 
     // A panic in raw mode leaves the terminal unusable and the backtrace
     // unreadable. Restore first, then let the default hook print.
@@ -1434,6 +1441,11 @@ impl App {
             Ev::Term(from, Event::Key(k)) if k.kind != KeyEventKind::Release => {
                 self.as_viewer(from, |app| app.on_key(k));
             }
+            // Dropped rather than merely not asked for. The setting means dirk
+            // does not use the mouse, and that has to stay true when something
+            // else has turned reporting on -- an outer multiplexer, or a
+            // terminal that reports without being asked.
+            Ev::Term(_, Event::Mouse(_)) if !self.cfg.ui.mouse => {}
             Ev::Term(from, Event::Mouse(m)) => {
                 self.as_viewer(from, |app| app.on_mouse(m));
             }
@@ -3209,7 +3221,7 @@ impl App {
             && let Ok(t) = pane.term.lock()
             && let Some(pos) = ui::pane::cursor(
                 t.screen(),
-                mux::session::content_of(pane.label.is_some(), rect),
+                mux::session::content_of(self.cfg.ui.ruled(pane.label.is_some()), rect),
             )
         {
             f.set_cursor_position(pos);
@@ -4153,7 +4165,7 @@ impl App {
         })?;
         let r = rects[index];
         let labelled = self.visible_pane(index).is_some_and(|p| p.label.is_some());
-        let inner = mux::session::content_of(labelled, r);
+        let inner = mux::session::content_of(self.cfg.ui.ruled(labelled), r);
         if m.row < inner.y {
             return Some(false);
         }
@@ -4232,14 +4244,15 @@ impl App {
             ws.set_focus(id);
         }
 
+        let ui = self.cfg.ui.clone();
         let Some(pane) = self.visible_pane_mut(index) else {
             return;
         };
 
-        // A labelled pane's terminal starts below the rule, so the event has to
-        // be measured from there. Measuring from the rectangle would put every
+        // A ruled pane's terminal starts below the rule, so the event has to be
+        // measured from there. Measuring from the rectangle would put every
         // click one row low -- selecting the line above the one you pointed at.
-        let inner = mux::session::content_of(pane.label.is_some(), r);
+        let inner = mux::session::content_of(ui.ruled(pane.label.is_some()), r);
         if m.row < inner.y {
             // The rule itself is chrome. Focusing was the whole of that click.
             return;
@@ -4284,15 +4297,18 @@ fn draw_content(
     for (i, (id, r)) in ws.rects(area).into_iter().enumerate() {
         let Some(pane) = ws.pane(id) else { continue };
 
-        // A labelled pane gives its top row to a rule carrying the label, which
-        // is how a five-pane dashboard says which panel is which.
-        let inner = mux::session::content_of(pane.label.is_some(), r);
-        if let Some(label) = &pane.label {
+        // A ruled pane gives its top row to a rule carrying the label, which is
+        // how a five-pane board says which panel is which. With no label the
+        // rule still says which pane has the keyboard, which is what tells two
+        // shells side by side apart.
+        let ruled = session.ui.ruled(pane.label.is_some());
+        let inner = mux::session::content_of(ruled, r);
+        if ruled {
             rule(
                 buf,
                 Rect { height: 1, ..r },
                 g,
-                label,
+                pane.label.as_deref().unwrap_or_default(),
                 pane.exit.as_deref(),
                 id == ws.focus(),
             );
