@@ -991,12 +991,27 @@ pub struct SessionCfg {
     /// each time, and for whom twelve agents coming back at once is twelve
     /// model sessions they did not ask for.
     pub resume_agents: bool,
+    /// Whether each pane's last screen is written to disk and painted back when
+    /// the session is restored.
+    ///
+    /// **Off, and it stays off unless you say otherwise.** A pane's output holds
+    /// whatever went past in it: tokens echoed by a failed request, keys in an
+    /// environment somebody dumped while debugging, the contents of a file that
+    /// should not have been catted. Turning this on writes that to
+    /// `sessions/<name>.history.json` in your configuration directory, in plain
+    /// text, where it stays until the session is written again.
+    ///
+    /// That is a reasonable trade for a machine you alone use and an
+    /// unreasonable one for a shared host, and dirk is not in a position to know
+    /// which it is on. Turning it off again deletes what was already stored.
+    pub pane_history: bool,
 }
 
 impl Default for SessionCfg {
     fn default() -> Self {
         Self {
             resume_agents: true,
+            pane_history: false,
         }
     }
 }

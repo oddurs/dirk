@@ -1131,10 +1131,25 @@ impl App {
         if saved.projects.is_empty() {
             return false;
         }
+        // Only when it is asked for. A file left behind by a run that had the
+        // setting on is not a reason to paint it now.
+        let history = self
+            .cfg
+            .session
+            .pane_history
+            .then(|| state::read_history(&state::base(), &name))
+            .flatten();
+        let said = |pi: usize, wi: usize, ti: usize| -> Option<&str> {
+            let text = history.as_ref()?.projects.get(pi)?.get(wi)?.get(ti)?;
+            (!text.trim().is_empty()).then_some(text.as_str())
+        };
 
         let (rows, cols) = (self.content.height, self.content.width);
+        // From the configured set, because this is drawn inside a pane on a
+        // terminal that may be the reason the ascii set was chosen.
+        let rule = self.glyphs.text(glyph::G::Rule).to_string();
         let mut pending: Vec<(usize, u64)> = Vec::new();
-        for project in &saved.projects {
+        for (pi, project) in saved.projects.iter().enumerate() {
             // Only when there is nothing else to go on. Each space opens its
             // own checkout below, and opening the repository proper as well
             // would leave a checkout with no spaces in it -- polled by git
@@ -1142,7 +1157,7 @@ impl App {
             if project.workspaces.is_empty() {
                 self.session.open_project(&project.path);
             }
-            for want in &project.workspaces {
+            for (wi, want) in project.workspaces.iter().enumerate() {
                 // In the checkout it was in. A space that was in a worktree
                 // goes back to that worktree; without this every one of them
                 // would come back in the repository proper, which is the one
@@ -1193,6 +1208,14 @@ impl App {
                         // would freeze what the number happened to be.
                         if *name != (i + 1).to_string() {
                             tab.label = name.clone();
+                        }
+                        // Before the shell has anything to say, so what it says
+                        // lands under the rule rather than in the middle of
+                        // yesterday's output.
+                        if let Some(text) = said(pi, wi, i)
+                            && let Some(pane) = tab.pane(tab.focus)
+                        {
+                            paint_history(pane, text, &rule);
                         }
                     }
                 }
@@ -1293,6 +1316,16 @@ impl App {
         {
             return;
         }
+        // Beside the session and on the same occasions, so the two files agree
+        // about the shape they are both describing. `None` when the setting is
+        // off, which deletes whatever a previous run left there.
+        let history = self
+            .cfg
+            .session
+            .pane_history
+            .then(|| state::history_of(&self.session));
+        state::save_history(&state::base(), &name, history.as_ref());
+
         match state::save(&state::base(), &name, &now) {
             Ok(()) => self.written = Some(now),
             // Once, not once a second: the usual causes -- a full disk, a
@@ -4739,6 +4772,35 @@ impl App {
         if let Some(b) = bytes {
             pane.write(&b);
         }
+    }
+}
+
+/// Paint what a pane last said into the pane that replaced it.
+///
+/// Into the terminal, never to the pty. The pty is the shell's input, and
+/// writing a screenful of somebody's old output into it would run every line of
+/// it -- which is the difference between restoring a screen and executing one.
+///
+/// The rule underneath is the whole of what makes this defensible. `state.rs`
+/// argues that a screenful of text with nothing behind it is worse than an
+/// empty pane, because it looks like something you can type into. It still is,
+/// unless it says where it stops.
+fn paint_history(pane: &mux::Pane, text: &str, rule: &str) {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        out.extend_from_slice(line.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    // Dim, and named. Neither on its own is enough: dim text is what a finished
+    // build looks like, and a bright rule in the middle of a pane is something
+    // a program might have drawn.
+    out.extend_from_slice(b"\x1b[2m");
+    out.extend_from_slice(rule.repeat(3).as_bytes());
+    out.extend_from_slice(b" history ");
+    out.extend_from_slice(rule.repeat(3).as_bytes());
+    out.extend_from_slice(b"\x1b[0m\r\n");
+    if let Ok(mut term) = pane.term.lock() {
+        term.process(&out);
     }
 }
 
