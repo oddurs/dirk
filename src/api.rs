@@ -381,6 +381,11 @@ pub const COMMANDS: &[Command] = &[
         answer: "sent[]",
     },
     Command {
+        name: "pane.wait-output",
+        args: "<pane> <text...> [--regex] [--lines N] [--timeout MS]",
+        answer: "pane, matched",
+    },
+    Command {
         name: "pane.close",
         args: "<pane>",
         answer: "closed",
@@ -571,6 +576,49 @@ mod tests {
             want.trim(),
             "doc/api.json is stale — run `make api`"
         );
+    }
+
+    #[test]
+    fn every_command_the_code_answers_is_in_the_table() {
+        // The drift this caught: `pane.wait-output` was answered, documented
+        // and tested, and was not in the table — so the skill, the schema and
+        // the completions all quietly stopped mentioning it. The table is read
+        // by three things and written by hand, which is exactly the shape that
+        // rots.
+        //
+        // Scanned out of the source because there is no way to ask the match
+        // arms what they match. A literal that looks like a command is one.
+        let sources = [include_str!("main.rs"), include_str!("api.rs")];
+        let listed: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
+        for text in sources {
+            for literal in text.split('"').skip(1).step_by(2) {
+                let Some((noun, verb)) = literal.split_once('.') else {
+                    continue;
+                };
+                if !NOUNS.contains(&noun) || verb.is_empty() {
+                    continue;
+                }
+                // Decided on rather than merely mentioned. `"api.rs"` is a
+                // filename and `"agent.state"` in a sentence is prose; what
+                // makes a literal a command is that something branches on it.
+                let branched = [
+                    format!("\"{literal}\" =>"),
+                    format!("\"{literal}\" |"),
+                    format!("== \"{literal}\""),
+                    format!("!= \"{literal}\""),
+                ];
+                if !branched
+                    .iter()
+                    .any(|pattern| text.contains(pattern.as_str()))
+                {
+                    continue;
+                }
+                assert!(
+                    listed.contains(&literal),
+                    "{literal} is answered somewhere and is not in COMMANDS"
+                );
+            }
+        }
     }
 
     #[test]

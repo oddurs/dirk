@@ -2883,3 +2883,78 @@ fn the_surface_describes_itself_without_a_session_to_ask() {
     assert!(ok, "the session refused api schema: {over_socket}");
     drop(client);
 }
+
+#[test]
+fn the_completion_scripts_are_scripts_the_shells_accept() {
+    // Generated text that does not parse is worse than none: it is sourced from
+    // a startup file, and a syntax error there is a shell that complains on
+    // every new terminal.
+    let session = unique("completion");
+    for shell in ["bash", "zsh", "fish"] {
+        let (ok, text) = ask(&session, &["completion", shell]);
+        assert!(ok, "no {shell} completions: {text}");
+        assert!(
+            text.contains("wait-output"),
+            "the {shell} script is missing a verb the table has"
+        );
+
+        // Skipped rather than failed when the shell is not installed: a suite
+        // that needs three shells present is one that is red on most machines.
+        if std::process::Command::new(shell)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            continue;
+        }
+        let file = std::env::temp_dir().join(format!("dirk-completion-{shell}"));
+        std::fs::write(&file, &text).expect("write the script");
+        let out = std::process::Command::new(shell)
+            .arg("-n")
+            .arg(&file)
+            .output()
+            .expect("run the shell");
+        assert!(
+            out.status.success(),
+            "{shell} rejected its own completion script:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_file(&file);
+    }
+
+    // A shell there is no script for is said so, rather than handed an empty
+    // file that would silently complete nothing.
+    let (ok, said) = ask(&session, &["completion", "nushell"]);
+    assert!(!ok, "a shell with no script was accepted: {said}");
+}
+
+#[test]
+fn ids_complete_from_the_session_that_has_them() {
+    // The half that makes this worth having: `w7:p12` is not a thing anybody
+    // remembers, and it is the argument almost every command wants. The scripts
+    // get it by asking `dirk pane list`, so what has to hold is that the answer
+    // is still shaped the way they read it.
+    let session = unique("completeids");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let expected = first_id(&panes);
+    let plucked: Vec<String> = panes
+        .lines()
+        .filter_map(|line| {
+            let at = line.find("\"id\"")?;
+            let rest = &line[at + 4..];
+            let open = rest.find('"')?;
+            let rest = &rest[open + 1..];
+            Some(rest[..rest.find('"')?].to_string())
+        })
+        .collect();
+    assert!(
+        plucked.contains(&expected),
+        "the shape the completions pluck ids out of has changed: {panes}"
+    );
+
+    drop(client);
+}
