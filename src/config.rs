@@ -423,6 +423,52 @@ pub struct AgentDef {
     pub blocked: BlockedDef,
 }
 
+impl AgentDef {
+    /// The rules this block describes.
+    fn kind(&self, from: crate::agent::From) -> crate::agent::Kind {
+        crate::agent::Kind {
+            name: self.name.clone(),
+            names: match self.names.is_empty() {
+                true => vec![self.name.clone()],
+                false => self.names.clone(),
+            },
+            argv: self.argv.clone(),
+            command: match self.command.is_empty() {
+                true => vec![self.name.clone()],
+                false => self.command.clone(),
+            },
+            blocked: self.blocked.markers.clone(),
+            choices: self.blocked.menu,
+            from,
+        }
+    }
+}
+
+/// One harness's rules, as its own file.
+///
+/// The same fields as an `[[agent]]` block without the name, which the filename
+/// already carries.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AgentFile {
+    names: Vec<String>,
+    argv: Vec<String>,
+    command: Vec<String>,
+    blocked: BlockedDef,
+}
+
+impl AgentFile {
+    fn into_def(self) -> AgentDef {
+        AgentDef {
+            name: String::new(),
+            names: self.names,
+            argv: self.argv,
+            command: self.command,
+            blocked: self.blocked,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlockedDef {
@@ -495,29 +541,92 @@ impl Config {
     /// a merge would make "which markers am I actually using" unanswerable
     /// without reading two files.
     pub fn kinds(&self) -> Vec<crate::agent::Kind> {
-        let mut out = crate::agent::defaults();
-        for def in &self.agents {
-            let kind = crate::agent::Kind {
-                name: def.name.clone(),
-                names: match def.names.is_empty() {
-                    true => vec![def.name.clone()],
-                    false => def.names.clone(),
-                },
-                argv: def.argv.clone(),
-                command: match def.command.is_empty() {
-                    true => vec![def.name.clone()],
-                    false => def.command.clone(),
-                },
-                blocked: def.blocked.markers.clone(),
-                choices: def.blocked.menu,
-            };
-            match out.iter().position(|k| k.name == kind.name) {
-                Some(i) => out[i] = kind,
-                None => out.push(kind),
-            }
-        }
-        out
+        self.kinds_and_complaints().0
     }
+
+    /// The same, and whatever was wrong with the files it read.
+    ///
+    /// Separated so that startup can print the complaints on a terminal that
+    /// still exists, and a reload can hand them back to whoever asked for it.
+    pub fn kinds_and_complaints(&self) -> (Vec<crate::agent::Kind>, Vec<String>) {
+        let mut out = crate::agent::defaults();
+        let mut said = Vec::new();
+
+        // config.toml first, then the files, so that a file wins. A file is the
+        // more specific statement: somebody wrote a document about that one
+        // harness, and the block in config.toml is the older way of saying the
+        // same thing.
+        for def in &self.agents {
+            replace(&mut out, def.kind(crate::agent::From::Config));
+        }
+        for (def, from) in agent_files(&mut said) {
+            replace(&mut out, def.kind(from));
+        }
+        (out, said)
+    }
+}
+
+/// Replace the rules of that name whole, or add them.
+///
+/// Whole rather than merged: somebody overriding claude's markers does not want
+/// to inherit half of ours, and a merge would leave them with a set they never
+/// wrote and cannot see.
+fn replace(out: &mut Vec<crate::agent::Kind>, kind: crate::agent::Kind) {
+    match out.iter().position(|k| k.name == kind.name) {
+        Some(i) => out[i] = kind,
+        None => out.push(kind),
+    }
+}
+
+/// Every `agents/<name>.toml`, in name order.
+///
+/// One file per harness so that fixing one marker is an edit to a document
+/// about that harness rather than to the file that also holds your projects,
+/// your boards and your theme -- and so that the fix is a thing you can hand to
+/// somebody.
+///
+/// A file that does not parse is complained about and skipped. Detection rules
+/// that fail to load must not be able to take out the session that was going to
+/// draw with them.
+fn agent_files(said: &mut Vec<String>) -> Vec<(AgentDef, crate::agent::From)> {
+    let dir = config_home().join("dirk").join("agents");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        .collect();
+    // Ordered, so that two files cannot decide between themselves which of them
+    // was read last.
+    paths.sort();
+
+    let mut out = Vec::new();
+    for path in paths {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) => {
+                said.push(format!("{}: {e}", path.display()));
+                continue;
+            }
+        };
+        match toml::from_str::<AgentFile>(&text) {
+            Ok(file) => {
+                let mut def = file.into_def();
+                // The filename names the harness. A `name` inside that
+                // disagreed with it would leave two ways to say which harness a
+                // file is about, and no way to tell which one won.
+                def.name = stem.to_string();
+                out.push((def, crate::agent::From::File));
+            }
+            Err(e) => said.push(format!("{}: {e}", path.display())),
+        }
+    }
+    out
 }
 
 impl Config {
@@ -1086,6 +1195,12 @@ impl Config {
         // printed after that is written onto the alternate screen and vanishes
         // with it.
         for line in complaints(&cfg) {
+            eprintln!("dirk: {line}");
+        }
+        // A rule file that does not parse is said out loud and then ignored.
+        // Detection rules that fail to load must not be able to take out the
+        // session that was going to draw with them.
+        for line in cfg.kinds_and_complaints().1 {
             eprintln!("dirk: {line}");
         }
         cfg.layouts.retain(|l| l.runnable());

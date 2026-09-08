@@ -114,7 +114,7 @@ JSON; `--current` means the pane you are in.
   workspace list|focus|create|rename|close
   pane      list|focus|split|read|run|send-text|send-keys|close
   layout    list|open
-  agent     list|start|state|prompt|wait|hooks
+  agent     list|rules|start|state|prompt|wait|hooks
   worktree  list|add|remove
   tab       list|new|focus|rename|close
   session   info|list|reload|commands|notify|quit|prune
@@ -1858,7 +1858,7 @@ impl App {
     /// polling the session would clear every notification it exists to show.
     fn ask(&mut self, req: &wire::Request) -> wire::Reply {
         use wire::Reply;
-        if let Some(answer) = api::read(&self.session, &req.cmd, &req.args) {
+        if let Some(answer) = api::read(&self.session, &self.kinds, &req.cmd, &req.args) {
             return answer;
         }
         let area = self.content;
@@ -1867,9 +1867,15 @@ impl App {
         match req.cmd.as_str() {
             "session.reload" => match Config::reload(&mut self.cfg, &mut self.session) {
                 Ok(said) => {
-                    // Rebuilt here, which is the only place it can change.
+                    // Rebuilt here, which is the only place it can change. The
+                    // rule files are read again too: a reload that took the
+                    // config and not the rules beside it would be a reload
+                    // somebody had to know the shape of.
                     self.glyphs = self.cfg.nav.glyphs();
-                    self.kinds = std::sync::Arc::new(self.cfg.kinds());
+                    let (kinds, mut notes) = self.cfg.kinds_and_complaints();
+                    self.kinds = std::sync::Arc::new(kinds);
+                    let mut said = said;
+                    said.append(&mut notes);
                     Reply::ok(serde_json::json!({
                         "reloaded": true,
                         // Whatever the file was wrong about. Empty is the usual

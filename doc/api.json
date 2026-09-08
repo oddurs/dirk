@@ -209,6 +209,13 @@
     },
     {
       "answer": [
+        "agents[]"
+      ],
+      "args": "",
+      "name": "agent.rules"
+    },
+    {
+      "answer": [
         "agent",
         "pane",
         "workspace"
