@@ -46,6 +46,20 @@ Be the session. Started for you; not usually typed.
 A session on standard input and output. What
 .B \-\-remote
 runs on the far side.
+.TP
+.B update \fR[\fB\-\-check\fR]
+Replace this binary with the newest release: the asset for this platform,
+verified against the published checksum, written beside the running binary and
+renamed over it.
+.B \-\-check
+reports what it would do and changes nothing.
+.IP
+An installation made by a package manager is refused rather than replaced \(em
+Homebrew, nix and cargo own their copies, and a binary swapped underneath one
+is a broken installation the next time that package manager has an opinion
+about it. The command that would upgrade it is printed instead.
+.IP
+Sessions already running keep the old binary until they are ended.
 .
 .SS Watching one pane
 .TP

@@ -55,6 +55,20 @@ $ git clone https://github.com/oddurs/dirk && cd dirk
 $ make && sudo make install
 ```
 
+Once it is installed, `dirk update` replaces the binary with the newest
+release: the asset for this platform, checked against the published checksum,
+written beside the running binary and renamed over it so an interrupted update
+cannot leave half a program where dirk was. `dirk update --check` says what it
+would do and does nothing.
+
+It refuses to touch an installation it did not make. Homebrew, nix and cargo own
+their copies, and a binary swapped underneath one of them is a broken
+installation two weeks later, when that package manager next has an opinion
+about a file that is no longer the file it put there — so those are named and
+the command that would upgrade them is printed instead. Sessions already running
+keep the old binary until they are ended; nothing is swapped underneath a
+program that is using it — unless you ask it to, which is the next paragraph.
+
 **`dirk session handoff` replaces the binary without ending the work.**
 Upgrading otherwise means stopping the session, which means ending every shell
 and every agent — so people do not upgrade while they are working, which is
@@ -82,6 +96,7 @@ a truncated download, the wrong architecture — is caught while the session is
 still entirely intact, and a failed `exec` simply returns. What that cannot
 catch is a binary that starts and then fails, and the thing at risk is every
 running pane in the session.
+
 
 [INSTALL](INSTALL) has the rest: verifying a download, `PREFIX` and `DESTDIR`,
 uninstalling, and what a packager needs. There is no crates.io release — the

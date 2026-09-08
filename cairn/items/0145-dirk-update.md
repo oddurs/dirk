@@ -29,8 +29,8 @@ One channel. Two is a project with a release manager, and this one does not have
 one.
 
 ## Acceptance criteria
-- [ ] `--check` reports the available version and does nothing else
-- [ ] The asset for the running platform, verified against its checksum
-- [ ] Atomic replacement; a failure leaves the working binary in place
-- [ ] Package-manager installs are detected and refused with their own command
-- [ ] Says whether a running session needs restarting, and how
+- [x] `--check` reports the available version and does nothing else
+- [x] The asset for the running platform, verified against its checksum
+- [x] Atomic replacement; a failure leaves the working binary in place
+- [x] Package-manager installs are detected and refused with their own command
+- [x] Says whether a running session needs restarting, and how
