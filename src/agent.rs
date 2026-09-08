@@ -163,9 +163,18 @@ pub fn defaults() -> Vec<Kind> {
 /// Programs that are somebody else's identity.
 ///
 /// A process running one of these has told us nothing about itself, so its
-/// arguments are worth reading. Closed on purpose: this is the only case where
-/// dirk looks at a command line at all.
-const INTERPRETERS: &[&str] = &["node", "python", "python3", "deno", "bun", "ruby", "perl"];
+/// arguments are worth reading. Closed on purpose in the sense that matters:
+/// this is the only case where dirk looks at a command line at all, and the
+/// list says which programs are in it rather than the rule being "read
+/// everybody's argv".
+///
+/// Interpreters were the first members. Sandboxes and container shims are the
+/// same shape — `fence -- claude`, `nono run --profile claude-code -- claude`
+/// — and they matter more, because an agent behind one is exactly the agent
+/// most likely to be left running unattended. They are configuration rather
+/// than a constant because the field adds one a month and dirk cannot ship
+/// them all.
+pub const INTERPRETERS: &[&str] = &["node", "python", "python3", "deno", "bun", "ruby", "perl"];
 
 /// Shells, so that "at a prompt" is a state rather than an unrecognised
 /// program. `agent start` will need to know a pane is free.
@@ -213,7 +222,10 @@ pub struct Proc {
 }
 
 /// Classify a process.
-pub fn identify(proc: &Proc, kinds: &[Kind]) -> Occupant {
+///
+/// `wrappers` are the programs whose command line is worth reading because they
+/// are running something else — interpreters, sandboxes, container shims.
+pub fn identify(proc: &Proc, kinds: &[Kind], wrappers: &[String]) -> Occupant {
     let base = basename(&proc.program);
     if base.is_empty() {
         return Occupant::Unknown;
@@ -231,7 +243,7 @@ pub fn identify(proc: &Proc, kinds: &[Kind]) -> Occupant {
         return Occupant::Agent(kind.clone());
     }
 
-    if INTERPRETERS.contains(&base)
+    if wrappers.iter().any(|w| w == base)
         && let Some(kind) = kinds
             .iter()
             .find(|k| k.argv.iter().any(|m| proc.args.contains(m.as_str())))
@@ -547,6 +559,21 @@ pub const PROMPT_ROWS: u16 = 12;
 #[derive(Debug)]
 pub struct Reading {
     pub panes: Vec<(crate::mux::PaneId, Option<Occupant>)>,
+    /// Panes whose harness was found behind a wrapper, and which wrapper.
+    ///
+    /// Kept so `agent explain` can say that, rather than leaving somebody to
+    /// wonder how dirk came to recognise a program called `fence`.
+    pub hinted: Vec<(crate::mux::PaneId, String)>,
+}
+
+/// Was this agent found behind something, rather than being it?
+///
+/// True when the foreground program is not one of the harness's own names,
+/// which is the only way the argv rule can have been what matched.
+pub fn behind(proc: &Proc, kind: &Kind) -> Option<String> {
+    let base = basename(&proc.program);
+    let its_own = kind.names.iter().any(|n| n == base || n.starts_with(base));
+    (!its_own).then(|| base.to_string())
 }
 
 #[cfg(test)]
@@ -559,12 +586,18 @@ mod tests {
 
     /// Most of these ask about a program name alone, which is the common case.
     fn classify(program: &str) -> Occupant {
+        with_args(program, "")
+    }
+
+    fn with_args(program: &str, args: &str) -> Occupant {
+        let wrappers: Vec<String> = INTERPRETERS.iter().map(|s| s.to_string()).collect();
         identify(
             &Proc {
                 program: program.to_string(),
-                args: String::new(),
+                args: args.to_string(),
             },
             &defaults(),
+            &wrappers,
         )
     }
 
