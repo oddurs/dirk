@@ -1,0 +1,94 @@
+{#- The backlog, as items rather than as a picture of them. -#}
+{% extends "base.html" %}
+{% block content %}
+<div class="shell with-sidebar">
+
+  <nav class="sidebar" aria-label="Documentation">
+    {%- for section in site.nav %}
+    <section>
+      <h2>{{ section.title }}</h2>
+      <ul>
+        {%- for link in section.links %}
+        <li><a href="{{ site.base }}{{ link.url | trim('/') }}{% if link.url != '/' %}/{% endif %}"
+               {% if link.url == page.url %}aria-current="page"{% endif %}>{{ link.title }}</a></li>
+        {%- endfor %}
+      </ul>
+    </section>
+    {%- endfor %}
+    {%- if page.stages %}
+    <section>
+      <h2>Milestones</h2>
+      <ul>
+        {%- for stage in page.stages %}
+        <li><a href="#{{ stage.key }}">{{ stage.key }}<span class="pct">{{ stage.percent }}%</span></a></li>
+        {%- endfor %}
+      </ul>
+    </section>
+    {%- endif %}
+  </nav>
+
+  <div>
+    <article class="prose">
+      <h1>{{ page.title }}</h1>
+      <p class="lede">{{ page.description }}</p>
+
+      <p>Every item below is a Markdown file in the repository, carrying the
+      problem, the proposal and the acceptance criteria that produced it. The
+      numbers are the same ones <code>cairn next</code> prints; this page and
+      <code>ROADMAP.md</code> are two views of one set of files.</p>
+
+      {%- if page.doing %}
+      <section class="now">
+        <h2 id="now">Being worked on now</h2>
+        <div class="items">
+          {%- for item in page.doing %}
+          <a class="item" data-status="{{ item.status }}" href="{{ site.repo }}/blob/main/{{ item.path }}">
+            <b class="ref">{{ item.ref_ }}</b>
+            <span class="what">{{ item.title }}</span>
+            <span class="tags">
+              <i data-tag="status">{{ item.status }}</i>
+              {%- if item.priority %}<i data-tag="p" data-p="{{ item.priority }}">{{ item.priority }}</i>{% endif %}
+              {%- if item.area %}<i data-tag="area">{{ item.area }}</i>{% endif %}
+            </span>
+          </a>
+          {%- endfor %}
+        </div>
+      </section>
+      {%- endif %}
+
+      {%- for stage in page.stages %}
+      {#- A milestone that is finished opens closed. What is left is what the
+          page is for, and eighty rows of shipped work in front of it is a
+          history lesson nobody asked for -- but it is still here, one click
+          away, because it is the evidence. -#}
+      <details class="stage" id="{{ stage.key }}" {% if stage.percent < 100 %}open{% endif %}>
+        <summary class="stage-head">
+          <h2><span class="key">{{ stage.key }}</span> {{ stage.title }}</h2>
+          <div class="meter" role="img"
+               aria-label="{{ stage.done }} of {{ stage.total }} done">
+            <div class="bar"><i style="width:{{ stage.percent }}%"></i></div>
+            <span class="count">{{ stage.percent }}% · {{ stage.done }} of {{ stage.total }}
+              {%- if stage.due %} · due {{ stage.due }}{% endif %}</span>
+          </div>
+        </summary>
+        {%- if stage.summary %}<p class="stage-why">{{ stage.summary }}</p>{% endif %}
+        <div class="items">
+          {%- for item in stage.items %}
+          <a class="item" data-status="{{ item.status }}" href="{{ site.repo }}/blob/main/{{ item.path }}">
+            <b class="ref">{{ item.ref_ }}</b>
+            <span class="what">{{ item.title }}</span>
+            <span class="tags">
+              {%- if item.kind != "feature" %}<i data-tag="kind" data-kind="{{ item.kind }}">{{ item.kind }}</i>{% endif %}
+              {%- if item.priority %}<i data-tag="p" data-p="{{ item.priority }}">{{ item.priority }}</i>{% endif %}
+              {%- if item.area %}<i data-tag="area">{{ item.area }}</i>{% endif %}
+            </span>
+          </a>
+          {%- endfor %}
+        </div>
+      </details>
+      {%- endfor %}
+    </article>
+  </div>
+
+</div>
+{% endblock %}
