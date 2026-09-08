@@ -69,3 +69,10 @@ walks every setting and every word, and fails if dirk offers a value and then
 complains about it. Its companion checks the other direction. Both read from one
 list of settings, so the failure they cannot catch — a setting added to
 `choice!` and to nothing else — is the one the list itself is a comment about.
+
+CI caught the new test rather than the code, and caught it doing the exact thing
+the audit filed items about: it asserted that *nothing* complained, and the
+shipped layouts complain on a machine with no `ptop` installed. That is a true
+thing for `complaints` to say and a false thing for this test to mind, so it
+asks about the setting under test now. It passed here and failed there, which is
+the signature.

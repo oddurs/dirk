@@ -2075,10 +2075,20 @@ mod tests {
                     }
                     other => panic!("{other} is in the list and not in this test"),
                 }
-                let said = complaints(&cfg);
+                // About this setting, not about everything. The default
+                // config ships layouts whose programs may not be installed,
+                // and a complaint about `ptop` is a true thing to say on a
+                // machine without `ptop` -- which CI is, and this author's is
+                // not, which is how a test like this passes here and fails
+                // there.
+                let prefix = field.trim_end_matches("<name>");
+                let about: Vec<String> = complaints(&cfg)
+                    .into_iter()
+                    .filter(|c| c.starts_with(prefix))
+                    .collect();
                 assert!(
-                    said.is_empty(),
-                    "{field} = {word:?} is offered and complained about: {said:?}"
+                    about.is_empty(),
+                    "{field} = {word:?} is offered and complained about: {about:?}"
                 );
             }
         }
