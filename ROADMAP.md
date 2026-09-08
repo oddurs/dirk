@@ -293,11 +293,10 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 ## Unscheduled
 
-`#·········` 10% · 1 of 10 done
+`##········` 20% · 2 of 10 done
 
 ### backlog
 
-- [ ] `0178` An abandoned wait leaks a thread and a socket <sup>bug · p2 · api</sup>
 - [ ] `0179` The manual page has fallen behind the commands <sup>docs · p2 · docs</sup>
 - [ ] `0180` Two hand-rolled gethostname wrappers <sup>chore · p3 · config</sup>
 - [ ] `0181` The hot path runs the diagnostic path <sup>chore · p3 · perf</sup>
@@ -309,5 +308,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 ### done
 
+- [x] `0178` An abandoned wait leaks a thread and a socket <sup>bug · p2 · api</sup>
 - [x] `0184` The smoke suite's git fixture trusts the environment <sup>bug · p2 · mux</sup>
 

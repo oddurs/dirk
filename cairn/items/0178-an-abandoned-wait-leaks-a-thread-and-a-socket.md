@@ -2,7 +2,7 @@
 id: 178
 title: An abandoned wait leaks a thread and a socket
 type: bug
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
