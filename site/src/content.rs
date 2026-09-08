@@ -72,13 +72,18 @@ pub fn split_front(source: &str, path: &str) -> (Front, String) {
     (front, body.trim_start().to_string())
 }
 
-/// Markdown to HTML, with the two fences that are not code.
+/// Markdown to HTML, with the three fences that are not code.
 ///
-/// ```` ```shot <name> ```` inlines a terminal render from `site/shots`, and
-/// ```` ```callout <kind> ```` opens an aside. Both are fences rather than
-/// shortcodes because a fence is still legible when the file is read as plain
-/// Markdown, which is how it is read in a pull request.
-pub fn to_html(markdown: &str, shots: &BTreeMap<String, String>) -> (String, Vec<Heading>) {
+/// ```` ```shot <name> ```` inlines a terminal render from `site/shots`,
+/// ```` ```callout <kind> ```` opens an aside, and ```` ```from <file> <head>
+/// ```` lifts one section out of a document already in the repository. They
+/// are fences rather than shortcodes because a fence is still legible when the
+/// file is read as plain Markdown, which is how it is read in a pull request.
+pub fn to_html(
+    markdown: &str,
+    shots: &BTreeMap<String, String>,
+    sources: &dyn Fn(&str, &str) -> Option<String>,
+) -> (String, Vec<Heading>) {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -144,6 +149,22 @@ pub fn to_html(markdown: &str, shots: &BTreeMap<String, String>) -> (String, Vec
 
                 let mut words = info.split_whitespace();
                 match (words.next(), words.next()) {
+                    // The section is lifted, not copied: a page that retypes a
+                    // keymap is a keymap that will be wrong within a release,
+                    // and it will be the copy nobody thought of.
+                    (Some("from"), Some(file)) => {
+                        let heading = info
+                            .splitn(3, char::is_whitespace)
+                            .nth(2)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+                        let lifted = sources(file, &heading)
+                            .unwrap_or_else(|| panic!("{file} has no section called {heading:?}"));
+                        let (html, inner) = to_html(&lifted, shots, sources);
+                        toc.extend(inner);
+                        out.push(Event::Html(html.into()));
+                    }
                     (Some("shot"), name) => {
                         let name = name.unwrap_or("").trim();
                         let render = shots.get(name).unwrap_or_else(|| {
