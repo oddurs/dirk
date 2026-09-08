@@ -2,7 +2,7 @@
 id: 183
 title: Every enum setting is a string, checked twice
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
