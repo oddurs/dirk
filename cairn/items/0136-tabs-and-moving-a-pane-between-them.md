@@ -2,10 +2,10 @@
 id: 136
 title: Tabs, and moving a pane between them
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p1
 area: mux
 effort: l
