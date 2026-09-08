@@ -2,7 +2,7 @@
 id: 181
 title: The hot path runs the diagnostic path
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
@@ -49,6 +49,27 @@ actually ran, not a second implementation of it.
 
 ## Acceptance criteria
 
-- [ ] `update_states` allocates no explanation strings
-- [ ] `agent explain` still reports every signal it reports now
-- [ ] The two cannot drift: there is still one pass, not two
+- [x] `update_states` allocates no explanation strings
+- [x] `agent explain` still reports every signal it reports now
+- [x] The two cannot drift: there is still one pass, not two
+
+## 2026-09-08
+
+The recorder, which was the shape the item preferred and is the right one: a
+flag would have left `explain` free to drift into a second implementation of the
+decision, and an explanation of a decision that was not the one taken is worse
+than no explanation.
+
+So `pass` decides, `observe` and `explain` are the two ways in, and what varies
+is what gets written down. A signal's sentence is a closure the recorder may
+decline to call — the sentences were the expensive half, not the pushing.
+
+Two more things came off the hot path with them. `found` is the screen rule's
+whole working, and `window` is a copy of a corner of the terminal; both were
+built and returned on every pass and read only by `agent explain`. The
+`examine` call itself stays where it is, because `blocked` is decided by it.
+
+The test that the two agree is the structure rather than an assertion: they call
+one function. What is asserted is the part a structure cannot promise — that the
+deciding pass builds no sentence, checked by handing it a closure that panics if
+anybody calls it.

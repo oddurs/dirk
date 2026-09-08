@@ -1537,28 +1537,73 @@ pub struct Explained {
     pub window: Option<String>,
 }
 
+/// Somewhere to put the working, or nowhere.
+///
+/// `observe` wants the answer and `agent explain` wants the reasoning, and the
+/// reasoning is only worth anything if it is the reasoning that actually ran —
+/// so there is one pass and the recording is what varies. A sentence explaining
+/// a signal is built by a closure the recorder may decline to call, which is
+/// what keeps the explanation off the cost of every turn of the event loop.
+enum Note {
+    /// Deciding. Nothing is written down and no sentence is built.
+    Nothing,
+    /// Explaining, for somebody who asked why.
+    Kept(Vec<(&'static str, Option<crate::agent::State>, String)>),
+}
+
+impl Note {
+    /// Record one signal. The sentence is a closure because building it is the
+    /// expensive half and the hot path wants none of it.
+    fn say(
+        &mut self,
+        name: &'static str,
+        said: Option<crate::agent::State>,
+        why: impl FnOnce() -> String,
+    ) {
+        if let Note::Kept(kept) = self {
+            kept.push((name, said, why()));
+        }
+    }
+
+    /// Is anybody going to read this? Also gates the screen text, which is a
+    /// copy of a corner of the terminal and is kept for the same reason.
+    fn wanted(&self) -> bool {
+        matches!(self, Note::Kept(_))
+    }
+
+    fn signals(self) -> Vec<(&'static str, Option<crate::agent::State>, String)> {
+        match self {
+            Note::Kept(kept) => kept,
+            Note::Nothing => Vec::new(),
+        }
+    }
+}
+
 fn observe(ws: &Workspace, now: Instant) -> Observed {
-    explain(ws, now).observed
+    pass(ws, now, Note::Nothing).observed
 }
 
 /// The same pass, with its working kept.
 pub fn explain(ws: &Workspace, now: Instant) -> Explained {
+    pass(ws, now, Note::Kept(Vec::new()))
+}
+
+fn pass(ws: &Workspace, now: Instant, mut note: Note) -> Explained {
     use crate::agent::State;
-    let mut signals: Vec<(&'static str, Option<State>, String)> = Vec::new();
-    let done = |observed, signals, found, window| Explained {
+    let done = |observed, note: Note, found, window| Explained {
         observed,
-        signals,
+        signals: note.signals(),
         found,
         window,
     };
 
     let Some(pane) = ws.active_pane() else {
-        signals.push(("pane", None, "there is no pane here".into()));
-        return done(Observed::NoAgent, signals, None, None);
+        note.say("pane", None, || "there is no pane here".into());
+        return done(Observed::NoAgent, note, None, None);
     };
     if pane.dead {
-        signals.push(("pane", None, "its program has exited".into()));
-        return done(Observed::NoAgent, signals, None, None);
+        note.say("pane", None, || "its program has exited".into());
+        return done(Observed::NoAgent, note, None, None);
     }
 
     // Rank one, and the only source here that is not a guess. Taken before the
@@ -1579,41 +1624,33 @@ pub fn explain(ws: &Workspace, now: Instant) -> Explained {
     // screen for the screen rule to find.
     match ws.reported {
         Some((said, at)) if pane.touched <= at => {
-            signals.push(("reported", Some(said), "the agent said so".into()));
-            return done(Observed::Said(said), signals, None, None);
+            note.say("reported", Some(said), || "the agent said so".into());
+            return done(Observed::Said(said), note, None, None);
         }
-        Some((said, _)) => signals.push((
-            "reported",
-            None,
+        Some((said, _)) => note.say("reported", None, || {
             format!(
                 "it reported {} and has said something since",
                 said.glyph_name()
-            ),
-        )),
-        None => signals.push(("reported", None, "no hook has reported here".into())),
+            )
+        }),
+        None => note.say("reported", None, || "no hook has reported here".into()),
     }
 
     let Some(kind) = pane.occupant.agent() else {
-        signals.push((
-            "process",
-            None,
-            "the foreground process is not a harness dirk recognises".into(),
-        ));
-        return done(Observed::NoAgent, signals, None, None);
+        note.say("process", None, || {
+            "the foreground process is not a harness dirk recognises".into()
+        });
+        return done(Observed::NoAgent, note, None, None);
     };
-    signals.push((
-        "process",
-        None,
-        match &pane.hinted {
-            // Worth saying plainly: otherwise somebody is left wondering how
-            // dirk came to recognise a program called `fence`.
-            Some(wrapper) => format!(
-                "{} is running behind {wrapper}, found in its command line",
-                kind.name
-            ),
-            None => format!("the foreground process is {}", kind.name),
-        },
-    ));
+    note.say("process", None, || match &pane.hinted {
+        // Worth saying plainly: otherwise somebody is left wondering how dirk
+        // came to recognise a program called `fence`.
+        Some(wrapper) => format!(
+            "{} is running behind {wrapper}, found in its command line",
+            kind.name
+        ),
+        None => format!("the foreground process is {}", kind.name),
+    });
 
     // Only panes holding an agent are read, which is what keeps this off the
     // cost of every tick.
@@ -1637,39 +1674,37 @@ pub fn explain(ws: &Workspace, now: Instant) -> Explained {
         let prompt = screen.contents_between(from, 0, to, cols);
         let seen = crate::agent::examine(kind, &prompt);
         let blocked = seen.blocked();
-        signals.push((
-            "screen",
-            blocked.then_some(State::Blocked),
+        note.say("screen", blocked.then_some(State::Blocked), || {
             match seen.why_not() {
                 Some(why) => why.to_string(),
                 None => format!("{:?} is on the screen, with a menu under it", seen.marker),
-            },
-        ));
-        found = Some(seen);
-        window = Some(prompt);
+            }
+        });
+        // Both are for the answer to "why", and `window` is a copy of a corner
+        // of the terminal. Nobody deciding a state reads either.
+        if note.wanted() {
+            found = Some(seen);
+            window = Some(prompt);
+        }
         if blocked {
-            return done(Observed::Blocked, signals, found, window);
+            return done(Observed::Blocked, note, found, window);
         }
     }
 
     let quiet = now.duration_since(pane.touched);
     if quiet < WORKING_FOR {
-        signals.push((
-            "silence",
-            Some(State::Working),
-            format!("it produced output {}ms ago", quiet.as_millis()),
-        ));
-        return done(Observed::Working, signals, found, window);
+        note.say("silence", Some(State::Working), || {
+            format!("it produced output {}ms ago", quiet.as_millis())
+        });
+        return done(Observed::Working, note, found, window);
     }
-    signals.push((
-        "silence",
-        None,
+    note.say("silence", None, || {
         format!(
             "nothing for {}s, which may promote working to done and may never say blocked",
             quiet.as_secs()
-        ),
-    ));
-    done(Observed::Waiting, signals, found, window)
+        )
+    });
+    done(Observed::Waiting, note, found, window)
 }
 
 /// The part of a pane's rectangle that carries terminal content.
@@ -2814,7 +2849,30 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use super::Note;
     use super::submission;
+
+    #[test]
+    fn deciding_writes_nothing_down() {
+        // The whole point of the split. `observe` runs on every workspace on
+        // every turn of the event loop; a sentence explaining a signal to
+        // somebody who asked is a sentence nobody asked for here.
+        let mut quiet = Note::Nothing;
+        quiet.say("screen", None, || panic!("the sentence was built anyway"));
+        assert!(!quiet.wanted());
+        assert!(quiet.signals().is_empty());
+    }
+
+    #[test]
+    fn explaining_keeps_what_it_was_told() {
+        let mut kept = Note::Kept(Vec::new());
+        kept.say("screen", None, || "because".into());
+        assert!(kept.wanted());
+        let signals = kept.signals();
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].0, "screen");
+        assert_eq!(signals[0].2, "because");
+    }
 
     #[test]
     fn a_prompt_is_bracketed_when_the_program_asked_for_it() {
