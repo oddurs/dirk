@@ -3887,3 +3887,108 @@ fn a_harness_dirk_cannot_resume_comes_back_as_a_shell() {
 
     drop(client);
 }
+
+/// A pane holding a process named after a harness.
+///
+/// A symlink rather than `exec -a`, which is a bashism: CI's /bin/sh is dash,
+/// where it fails and takes the pane's shell with it.
+fn pretend_to_be(session: &str, pane: &str, harness: &str) {
+    let bin = config_home().join(format!("{harness}-bin"));
+    std::fs::create_dir_all(&bin).expect("bin dir");
+    let link = bin.join(harness);
+    if !link.exists() {
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .iter()
+            .map(std::path::Path::new)
+            .find(|p| p.exists())
+            .expect("a sleep to borrow a name from");
+        std::os::unix::fs::symlink(sleep, &link).expect("symlink");
+    }
+    let running = format!("{} 30", link.display());
+    let (ok, out) = ask(session, &["pane", "run", pane, &running]);
+    assert!(ok, "pane run failed: {out}");
+    let deadline = Instant::now() + START;
+    while Instant::now() < deadline {
+        if ask(session, &["agent", "list"]).1.contains(harness) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    panic!("{harness} was never recognised in {pane}");
+}
+
+/// Report a blocked claude in a workspace nobody is looking at, and say whether
+/// the machine with the speakers made a noise about it.
+fn rings_for_claude(name: &str, says: &str) -> bool {
+    let session = unique(name);
+    let dir = config_home().join(format!("cfg-{name}"));
+    std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+    let rang = dir.join("rang");
+    let _ = std::fs::remove_file(&rang);
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        format!(
+            "[sound]\nenabled = true\nblocked = [\"sh\", \"-c\", \"touch {}\"]\n\n\
+             [sound.agents]\nclaude = \"{says}\"\n",
+            rang.display()
+        ),
+    )
+    .expect("config");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    // Somewhere that is not on screen, because a workspace you are looking at
+    // is one you already know about.
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let all = ids(&list);
+    let ws = all.last().expect("a second workspace").clone();
+    let (ok, _) = ask(&session, &["workspace", "focus", &all[0]]);
+    assert!(ok, "workspace focus failed");
+
+    let (ok, panes) = ask(&session, &["pane", "list", &ws]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    pretend_to_be(&session, &pane, "claude");
+
+    let (ok, out) = ask(&session, &["agent", "state", "blocked", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    // The state reaches the column either way; only the noise is in question.
+    let (ok, agents) = ask(&session, &["agent", "list"]);
+    assert!(
+        ok && agents.contains("blocked"),
+        "the state did not reach the column: {agents}"
+    );
+
+    let heard = match says {
+        // Waited for when it should ring, and waited out when it should not.
+        "on" => appears(&rang, START),
+        _ => {
+            std::thread::sleep(Duration::from_secs(3));
+            rang.exists()
+        }
+    };
+    drop(client);
+    heard
+}
+
+#[test]
+fn one_chatty_harness_can_be_silenced_without_silencing_the_others() {
+    // The shape of the problem when three are running: one is chatty and the
+    // other two are not, and the answers available were "all" and "none" — or
+    // silencing the whole repository, which silences the two you wanted to
+    // hear. Both directions, so this cannot pass because nothing rings for some
+    // unrelated reason.
+    assert!(
+        !rings_for_claude("soundoff", "off"),
+        "the harness that asked to be quiet made a noise"
+    );
+    assert!(
+        rings_for_claude("soundon", "on"),
+        "the harness that asked to be heard was silent"
+    );
+}

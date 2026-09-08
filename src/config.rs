@@ -372,6 +372,41 @@ pub struct Sound {
     /// no file and no player.
     pub blocked: Vec<String>,
     pub done: Vec<String>,
+    /// Per harness: `on`, `off`, or `default`.
+    ///
+    /// The shape of the problem when you run three at once. One of them is
+    /// chatty and the other two are not, and the only answers available were
+    /// "all of them" and "none of them" — or silencing the whole repository,
+    /// which silences the two you wanted to hear.
+    #[serde(rename = "agents")]
+    pub per_agent: std::collections::BTreeMap<String, String>,
+}
+
+/// What a per-harness or per-project answer says about making a noise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Says {
+    Yes,
+    No,
+    /// Nothing: whatever the next answer down says.
+    Nothing,
+}
+
+impl Sound {
+    /// What this harness's own entry says.
+    ///
+    /// An entry dirk does not understand says nothing rather than guessing,
+    /// and is complained about at load — a typo that silently meant `off` is a
+    /// notification you never hear and never find out about.
+    pub fn about(&self, agent: Option<&str>) -> Says {
+        match agent
+            .and_then(|a| self.per_agent.get(a))
+            .map(String::as_str)
+        {
+            Some("on") => Says::Yes,
+            Some("off") => Says::No,
+            _ => Says::Nothing,
+        }
+    }
 }
 
 impl Sound {
@@ -1078,6 +1113,20 @@ pub fn home() -> PathBuf {
 /// asked, whether that is a terminal at startup or a client that said `reload`.
 pub fn complaints(cfg: &Config) -> Vec<String> {
     let mut out = Vec::new();
+    let known: Vec<String> = cfg.kinds().into_iter().map(|k| k.name).collect();
+    for (name, says) in &cfg.sound.per_agent {
+        if !matches!(says.as_str(), "on" | "off" | "default") {
+            out.push(format!(
+                "sound.agents.{name}: {says:?} is not on, off or default; ignored"
+            ));
+        }
+        // A name nobody recognises is a rule that can never apply, and silence
+        // about it is exactly the shape of "I turned that off and it still
+        // rings".
+        if !known.contains(name) {
+            out.push(format!("sound.agents.{name}: no harness of that name"));
+        }
+    }
     for l in &cfg.layouts {
         for bad in crate::mux::layout::bad_sizes(l) {
             out.push(format!(
@@ -1381,6 +1430,53 @@ mod tests {
             complaints(&cfg).iter().any(|c| c.contains("floor")),
             "an interval under the floor was accepted in silence"
         );
+    }
+
+    #[test]
+    fn a_harness_can_be_the_only_one_that_makes_a_noise() {
+        // The shape of the problem when three are running: one is chatty and
+        // the other two are not, and the answers available were all or none.
+        let cfg = parsed(
+            r#"
+            [sound]
+            enabled = true
+
+            [sound.agents]
+            claude = "off"
+            codex = "on"
+            aider = "default"
+            "#,
+        );
+        assert_eq!(cfg.sound.about(Some("claude")), Says::No);
+        assert_eq!(cfg.sound.about(Some("codex")), Says::Yes);
+        // `default` and absent are the same answer: say nothing, and let the
+        // project or the global setting decide.
+        assert_eq!(cfg.sound.about(Some("aider")), Says::Nothing);
+        assert_eq!(cfg.sound.about(Some("goose")), Says::Nothing);
+        assert_eq!(cfg.sound.about(None), Says::Nothing);
+    }
+
+    #[test]
+    fn a_sound_rule_that_can_never_apply_is_complained_about() {
+        // Silence here is the shape of "I turned that off and it still rings".
+        let cfg = parsed(
+            r#"
+            [sound.agents]
+            nosuchagent = "off"
+            claude = "quiet"
+            "#,
+        );
+        let said = complaints(&cfg);
+        assert!(
+            said.iter().any(|c| c.contains("no harness of that name")),
+            "a rule for a harness that does not exist passed in silence: {said:?}"
+        );
+        assert!(
+            said.iter().any(|c| c.contains("not on, off or default")),
+            "a value nobody understands passed in silence: {said:?}"
+        );
+        // And the one it does not understand says nothing rather than guessing.
+        assert_eq!(cfg.sound.about(Some("claude")), Says::Nothing);
     }
 
     #[test]
