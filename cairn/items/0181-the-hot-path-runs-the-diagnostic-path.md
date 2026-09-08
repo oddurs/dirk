@@ -2,7 +2,7 @@
 id: 181
 title: The hot path runs the diagnostic path
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
