@@ -1411,12 +1411,33 @@ fn a_worktree_and_somewhere_to_work_in_it_are_one_action() {
     ));
     assert!(at.is_dir(), "no worktree at {}: {out}", at.display());
 
-    // And a space open in it, on the branch, named from it.
-    let (ok, list) = ask(&session, &["workspace", "list"]);
-    assert!(ok, "workspace list failed");
+    // And a space open in it, on the branch. Polled, because what git says
+    // about a checkout arrives on a thread of its own and a space that was made
+    // a moment ago has not been asked about yet.
+    let deadline = Instant::now() + START;
+    let mut list = String::new();
+    while Instant::now() < deadline {
+        let (ok, out) = ask(&session, &["workspace", "list"]);
+        list = out;
+        if ok && list.contains("feat/parallel") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
     assert!(
-        list.contains("feat-parallel") || list.contains("feat/parallel"),
-        "no space opened in the new worktree: {list}"
+        list.contains("feat/parallel"),
+        "no space opened on the new branch: {list}"
+    );
+    // Under the repository it belongs to, rather than as a project of its own
+    // wearing a directory name nobody chose.
+    assert_eq!(
+        list.matches("\"project\"").count(),
+        list.matches(&format!(
+            "\"project\": \"{}\"",
+            repo.file_name().unwrap().to_string_lossy()
+        ))
+        .count(),
+        "the worktree opened as a separate project: {list}"
     );
 
     // Listing does not require leaving dirk, and says which one you are in.
@@ -1635,4 +1656,107 @@ fn a_pane_is_as_wide_as_the_narrowest_screen_showing_it() {
 
     drop(narrow);
     drop(wide);
+}
+
+#[test]
+fn a_worktree_joins_the_project_it_is_a_worktree_of() {
+    // A project is keyed by its repository, not by its path. Keyed by path,
+    // every worktree opened as its own top-level project wearing whatever the
+    // directory happened to be called.
+    let repo = a_repo("group");
+    let session = unique("group");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["worktree", "add", "side"]);
+    assert!(ok, "worktree add failed: {out}");
+    let at = repo.parent().unwrap().join(format!(
+        "{}-side",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let name = repo.file_name().unwrap().to_string_lossy().into_owned();
+    // Two spaces, one project, two directories.
+    assert_eq!(
+        list.matches("\"id\"").count(),
+        2,
+        "expected two spaces: {list}"
+    );
+    assert_eq!(
+        list.matches(&format!("\"project\": \"{name}\"")).count(),
+        2,
+        "the worktree opened as a project of its own: {list}"
+    );
+    assert!(
+        list.contains(&at.to_string_lossy().into_owned()),
+        "no space in the worktree's own directory: {list}"
+    );
+
+    // And removing the worktree leaves the repository open.
+    let (ok, out) = ask(&session, &["worktree", "remove", "side", "--force"]);
+    assert!(ok, "worktree remove failed: {out}");
+    let (ok, after) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    assert_eq!(
+        after.matches("\"id\"").count(),
+        1,
+        "removing a worktree closed the repository too: {after}"
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&at);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn each_checkout_reports_its_own_branch() {
+    // Two worktrees of one repository are on two branches -- which is the
+    // entire reason somebody made the second one. One answer for both would be
+    // wrong for at least one of them.
+    let repo = a_repo("branches");
+    let session = unique("branches");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, out) = ask(&session, &["worktree", "add", "other"]);
+    assert!(ok, "worktree add failed: {out}");
+
+    let deadline = Instant::now() + START;
+    let mut list = String::new();
+    while Instant::now() < deadline {
+        let (ok, out) = ask(&session, &["workspace", "list"]);
+        list = out;
+        if ok && list.contains("\"branch\": \"other\"") && list.contains("\"branch\": \"main\"") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        list.contains("\"branch\": \"main\""),
+        "the repository proper lost its branch: {list}"
+    );
+    assert!(
+        list.contains("\"branch\": \"other\""),
+        "the worktree reported the wrong branch: {list}"
+    );
+
+    drop(client);
+    let at = repo.parent().unwrap().join(format!(
+        "{}-other",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&at);
+    let _ = std::fs::remove_dir_all(&repo);
 }

@@ -60,6 +60,28 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// What repository a directory belongs to, and where that repository lives.
+///
+/// `--git-common-dir` answers the same path from a repository and from every
+/// worktree of it, which is exactly the identity a project wants: two
+/// directories are the same project when they are two checkouts of one
+/// repository, and no amount of comparing their own paths can tell you that.
+///
+/// The repository proper is that directory's parent -- `<main>/.git` -- which
+/// is where the name comes from. A bare repository has no parent worth naming
+/// and answers `None`, as does a directory that is not a repository at all.
+pub fn belongs_to(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let common = git(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common = PathBuf::from(common);
+    let main = common.parent()?.to_path_buf();
+    // A worktree's own git dir is under the common one; the repository proper's
+    // *is* it. Either way the answer above is the same, which is the point.
+    Some((common, main))
+}
+
 /// Read the branch and worktree status of a directory, or `None` when it is not
 /// a repository at all.
 pub fn read(dir: &Path) -> Option<Repo> {

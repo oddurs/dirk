@@ -79,7 +79,12 @@ fn workspace_json(session: &Session, p: usize, w: usize) -> Value {
         "id": workspace_id(ws.id),
         "label": ws.label,
         "project": proj.name,
-        "path": proj.path,
+        // The space's own checkout, not the project's. A project is a
+        // repository now and a repository has more than one directory; saying
+        // the repository proper for a space that is in a worktree is a wrong
+        // answer rather than a vague one.
+        "path": ws.at,
+        "repository": proj.path,
         "state": ws.state.glyph_name(),
         "seen": ws.seen,
         "held": ws.naming.held,

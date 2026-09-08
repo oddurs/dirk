@@ -241,7 +241,7 @@ pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
             out.push(Row::Workspace { p, w, n });
             // Only when there is something to say. A row with nothing for its
             // second line draws one line rather than a blank one.
-            if cfg.nav.tall() && proj.repo.as_ref().is_some_and(|r| !r.branch.is_empty()) {
+            if cfg.nav.tall() && proj.repo_of(w).is_some_and(|r| !r.branch.is_empty()) {
                 out.push(Row::Branch { p, w });
             }
             // A workspace with one tab holding one pane draws no subtree: there
@@ -884,7 +884,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             let worktree = session
                 .projects
                 .get(p)
-                .is_some_and(|x| x.repo.as_ref().is_some_and(|r| r.worktree));
+                .is_some_and(|x| x.repo_of(wi).is_some_and(|r| r.worktree));
             space_row(buf, cx, ws, p, wi, Some(n), worktree);
         }
 
@@ -898,12 +898,15 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             let worktree = session
                 .projects
                 .get(p)
-                .is_some_and(|x| x.repo.as_ref().is_some_and(|r| r.worktree));
+                .is_some_and(|x| x.repo_of(wi).is_some_and(|r| r.worktree));
             space_row(buf, cx, ws, p, wi, None, worktree);
         }
 
-        Row::Branch { p, w: _ } => {
-            let Some(repo) = session.projects.get(p).and_then(|x| x.repo.as_ref()) else {
+        Row::Branch { p, w: wi } => {
+            // The space's own checkout, not the project's: two worktrees of one
+            // repository are on two branches, which is why there are two of
+            // them.
+            let Some(repo) = session.projects.get(p).and_then(|x| x.repo_of(wi)) else {
                 return;
             };
             let style = if selected && active {

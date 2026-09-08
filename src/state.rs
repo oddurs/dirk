@@ -54,6 +54,14 @@ pub struct Project {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub label: String,
+    /// Which checkout of the project it was in.
+    ///
+    /// A project is a repository, so restoring one directory is not enough:
+    /// the worktrees somebody had open are part of the arrangement, and
+    /// putting every space back in the repository proper would quietly undo
+    /// the reason they made them.
+    #[serde(default)]
+    pub at: PathBuf,
     /// Whether a human named this one. Kept, or a restart would quietly hand a
     /// name you wrote back to the naming policy.
     pub held: bool,
@@ -165,9 +173,28 @@ pub fn read(base: &Path, session: &str) -> Stored {
 /// right now -- keeps the project, because those all come back and a project
 /// dropped here is a project erased by the next write.
 pub fn prune(mut saved: Saved) -> Saved {
-    saved.projects.retain(|p| match std::fs::metadata(&p.path) {
-        Ok(m) => m.is_dir(),
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    saved.projects.retain_mut(|p| {
+        // A checkout that has gone is dropped from the project rather than
+        // taking the project with it: removing a worktree is an ordinary thing
+        // to do, and the repository it came from is still there.
+        let had = !p.workspaces.is_empty();
+        p.workspaces.retain(|w| {
+            w.at.as_os_str().is_empty()
+                || match std::fs::metadata(&w.at) {
+                    Ok(m) => m.is_dir(),
+                    Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+                }
+        });
+        // Only when there were some and they all went. A project that never had
+        // any is a different thing, and dropping it here would make `prune`
+        // mean two rules rather than one.
+        if had && p.workspaces.is_empty() {
+            return false;
+        }
+        match std::fs::metadata(&p.path) {
+            Ok(m) => m.is_dir(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        }
     });
     saved
 }
@@ -186,6 +213,7 @@ pub fn current(session: &crate::mux::Session) -> Saved {
                     .iter()
                     .map(|w| Workspace {
                         label: w.label.clone(),
+                        at: w.at.clone(),
                         held: w.naming.held,
                         tabs: (0..w.tabs.len()).map(|i| w.tab_label(i)).collect(),
                     })
@@ -211,7 +239,7 @@ pub fn differs(a: &Saved, b: &Saved) -> bool {
                     p.expanded,
                     p.workspaces
                         .iter()
-                        .map(|w| (w.label.clone(), w.held, w.tabs.clone()))
+                        .map(|w| (w.label.clone(), w.at.clone(), w.held, w.tabs.clone()))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -235,6 +263,7 @@ mod tests {
                     workspaces: labels
                         .iter()
                         .map(|l| Workspace {
+                            at: PathBuf::new(),
                             tabs: Vec::new(),
                             label: (*l).to_string(),
                             held: false,
