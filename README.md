@@ -342,6 +342,7 @@ everything below it is dirk guessing at something the agent already knows.
 ```console
 $ dirk agent hooks claude          # what to paste, and where
 $ dirk agent list                  # state, and which signal decided it
+$ dirk agent wait w7 --until blocked   # return when it needs you
 ```
 
 A report is a claim about a moment, not a lease. It stands until the next one,
@@ -723,8 +724,20 @@ $ dirk pane list
 $ dirk pane split w7:p12 rows
 $ dirk pane send-keys --current "cargo test"
 $ dirk agent list
+$ dirk agent wait --current --until done --timeout 600000
 $ dirk session commands          # the whole surface
 ```
+
+**Waiting is a question like any other.** `dirk agent wait <target>` returns when
+the agent reaches one of the states named by `--until`, which repeats and
+defaults to the three that mean it has stopped needing the processor —
+`blocked`, `done`, `idle`. It returns immediately if the agent is already in
+one, and `--timeout` is milliseconds; without one it waits as long as you do.
+
+The session holds the question rather than the caller polling for it, so a
+state entered and left between two polls is not one anybody misses — and an
+agent that exits while you are waiting ends the wait saying so, which is a
+different thing from a timeout and wants a different response.
 
 Answers are JSON, including the failures — a caller is a program, and prose on
 stderr is not something a program can branch on.

@@ -30,8 +30,31 @@ naming that, rather than with a timeout — the two mean different things to the
 caller.
 
 ## Acceptance criteria
-- [ ] `--until` accepts each state, repeats, and defaults to blocked/done/idle
-- [ ] Returns immediately when the agent is already in a named state
-- [ ] The agent exiting ends the wait with a distinct error
-- [ ] `--timeout` in milliseconds; no timeout means wait indefinitely
-- [ ] A wait survives the pane being renamed or the workspace being refocused
+- [x] `--until` accepts each state, repeats, and defaults to blocked/done/idle
+- [x] Returns immediately when the agent is already in a named state
+- [x] The agent exiting ends the wait with a distinct error
+- [x] `--timeout` in milliseconds; no timeout means wait indefinitely
+- [x] A wait survives the pane being renamed or the workspace being refocused
+
+## 2026-09-07
+
+The whole of it is that the socket thread is *already* blocked on the reply
+channel while the event loop answers. So a held question needed no change to
+the wire and no second thread: it is one whose reply is sent from a later turn
+of the loop. `src/wait.rs` is the shape of a held question; `App::hold`
+recognises one and `App::settle` answers the ones that can be.
+
+Settling happens after `update_states`, so a wait for `blocked` ends on the
+turn the agent became blocked rather than on the tick after it. And `turn` now
+wakes on the nearest deadline as well as on events — with a one-second ticker
+as the only other wakeup, a `--timeout 250` was being answered a second late,
+which is not a timeout.
+
+Waits are keyed by pane, not by workspace. Renaming and refocusing both happen
+to a workspace an agent is working in, continuously, and neither is the thing
+being waited for.
+
+A caller that dies while waiting leaves its `Held` in the list until the agent
+or pane goes away, because nothing tells the session the far end has hung up.
+It is one small struct, and the alternative is probing a channel nobody is
+reading.
