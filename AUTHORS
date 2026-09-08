@@ -1,0 +1,16 @@
+dirk — a terminal multiplexer that knows what its sessions are for.
+
+The following people have contributed to dirk. Names are added here on a
+contributor's first accepted change; see `git log` for the full record.
+
+Oddur Sigurdsson  <oddurs@gmail.com>   original author and maintainer
+
+dirk carries work from two of the author's earlier projects, both under the
+same terms: the Gotham palette and the sidebar and rail designs come from
+smali, and the naming policy in src/name.rs is a port of namesync.
+
+Copyright (C) 2026 Oddur Sigurdsson.
+
+Copying and distribution of this file, with or without modification, are
+permitted in any medium without royalty provided the copyright notice and this
+notice are preserved.

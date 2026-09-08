@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Formatting and lints are platform-independent, so they run once rather than
+  # once per operating system.
+  style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # dirk is a program about pseudo-terminals, and tests/smoke.rs drives the real
+  # binary on a real one. Both supported platforms therefore run the full suite;
+  # a pty difference between them is exactly the kind of bug worth catching.
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: linux }
+          - { os: macos-latest, name: macos }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - run: cargo test
+      - run: cargo build --release
+
+  # The declared rust-version is a promise; this checks it.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: msrv
+        run: echo "version=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo check --all-targets
+
+  # Almost every type in dirk carries an argument for why it is shaped the way
+  # it is, so the documentation is load-bearing rather than decorative. This
+  # catches the ways it rots quietly: a link to something that was renamed, a
+  # code block that stopped compiling, a doc comment on an item that went.
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs
+      - run: cargo doc --no-deps --document-private-items
+
+  # What ships and is not Rust: the manual page, the shell that drives the
+  # workflow, and the commit messages. All three take seconds.
+  shipped:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The attribution check needs a merge base to compare against.
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mandoc
+      - name: the manual page parses
+        run: mandoc -T lint doc/dirk.1
+      - name: the scripts and hooks are clean
+        # Warnings and up. The info level is where shellcheck versions
+        # disagree with each other, and a CI job that fails when the runner
+        # image bumps a linter is a job nobody trusts.
+        run: shellcheck -S warning scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
+      - name: no tool attribution in the history this branch adds
+        run: |
+          base=$(git merge-base origin/${{ github.base_ref || 'main' }} HEAD 2>/dev/null || echo HEAD~1)
+          if git log --format=%B "$base..HEAD" | grep -niE 'co-authored-by:.*(claude|anthropic|copilot|cursor)|generated with \[*claude'; then
+            echo "::error::a commit on this branch credits a tool; .githooks/commit-msg strips these — run make setup"
+            exit 1
+          fi
+          echo "clean"
+
+  # The site is built on every pull request and deployed on none of them: a
+  # change that breaks it should fail in review rather than after the merge.
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: site
+      - run: cargo run --locked -p site -- build --base /dirk/
+      - name: the build produced a site
+        run: |
+          test -s site/dist/index.html
+          test -s site/dist/css/tokens.css
+          test -s site/dist/docs/install/index.html
+          echo "$(find site/dist -type f | wc -l) files"

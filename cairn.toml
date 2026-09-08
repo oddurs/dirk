@@ -1,0 +1,264 @@
+# cairn.toml — the schema for this project's roadmap and issues.
+#
+# Everything here is configurable: the item types, the statuses they move
+# through, any extra fields you want to track, the milestones, the saved views,
+# and how ROADMAP.md gets rendered. Delete what you do not need.
+#
+#   cairn config          show the resolved schema
+#   cairn check           validate every item against it
+#   man cairn             full reference
+
+# On-disk format version. cairn refuses to open a project written in a format it
+# does not know, rather than misreading it. See "Compatibility" in the manual.
+format = 2
+
+[project]
+name = "dirk"
+description = "A terminal multiplexer that knows what its sessions are for."
+dir = "cairn/items"           # where item files live, relative to this file
+id_width = 4              # 0001, 0002, ...
+default_type = "feature"
+default_status = "backlog"
+# filename_max = 255      # longest filename your filesystem accepts, in bytes;
+                          # titles are only shortened as much as this demands
+url = "https://github.com/oddurs/dirk/blob/main"
+
+# ─── Item types ──────────────────────────────────────────────────────────────
+# `template` seeds the body of new items of that type, so every bug report and
+# every feature arrives with the same headings.
+
+[[type]]
+name = "feature"
+icon = "+"
+color = "cyan"
+template = """
+## Problem
+
+## Proposal
+
+## Acceptance criteria
+
+- [ ]
+"""
+
+[[type]]
+name = "bug"
+icon = "!"
+color = "red"
+template = """
+## What happens
+
+## What should happen
+
+## Reproduction
+
+1.
+"""
+
+[[type]]
+name = "chore"
+icon = "~"
+color = "gray"
+
+[[type]]
+name = "spike"
+icon = "?"
+color = "magenta"
+template = """
+## Question
+
+## Why it needs answering before the work
+
+## What would settle it
+
+## Answer
+
+<!-- Filled in when the spike closes. A spike with no answer recorded was a
+     waste of the time it took. -->
+"""
+
+[[type]]
+name = "docs"
+icon = "*"
+color = "blue"
+
+[[type]]
+name = "milestone"
+description = "a release, or whatever this project ships"
+
+# ─── Statuses ────────────────────────────────────────────────────────────────
+# Order matters: it is the column order on the board and the sort order in
+# listings. `category` is what the tool reasons about — open / active / done /
+# dropped — so you can rename the statuses themselves to anything you like.
+
+[[status]]
+name = "backlog"
+category = "open"
+color = "gray"
+
+[[status]]
+name = "planned"
+category = "open"
+color = "blue"
+
+[[status]]
+name = "doing"
+label = "in progress"
+category = "active"
+color = "yellow"
+
+[[status]]
+name = "blocked"
+category = "active"
+color = "red"
+
+[[status]]
+name = "review"
+label = "in review"
+category = "active"
+color = "magenta"
+
+[[status]]
+name = "done"
+category = "done"
+color = "green"
+
+[[status]]
+name = "dropped"
+category = "dropped"
+color = "gray"
+board = false             # hide this column on `cairn board`
+
+# ─── Custom fields ───────────────────────────────────────────────────────────
+# kind = text | enum | list | date | number | bool
+# `column = true` puts the field in the default `cairn list` table.
+# Enum values are ordered: `cairn list --sort priority` respects that order.
+
+[[field]]
+name = "priority"
+kind = "enum"
+values = ["p0", "p1", "p2", "p3"]
+default = "p2"
+column = true
+description = "p0 is a release blocker"
+
+[[field]]
+name = "effort"
+kind = "enum"
+values = ["s", "m", "l", "xl"]
+description = "Rough size, not an estimate"
+
+[[field]]
+name = "area"
+kind = "enum"
+values = [
+  "nav",        # the sidebar: layouts, spaces, agents
+  "layout",     # named multi-pane arrangements, and the split tree under them
+  "mux",        # panes, splits, focus, scrollback
+  "pty",        # the process end: spawn, resize, signals, terminal emulation
+  "agents",     # detecting coding agents and reading their lifecycle
+  "naming",     # the namesync policy
+  "git",        # branches, worktrees, repository state
+  "server",     # the daemon, detach, persistence
+  "api",        # the socket protocol and the dirk CLI that speaks it
+  "config",     # config.toml, keybindings, themes
+  "chrome",     # the rail and everything drawn that is not a pane or the nav
+  "perf",
+  "docs",
+  "packaging",
+  "web",        # the website, and the generator that builds it
+]
+column = true
+description = "Subsystem this touches"
+
+[[field]]
+name = "due"
+kind = "date"
+description = "when a milestone is meant to land"
+
+[[field]]
+name = "milestone"
+kind = "ref"
+target = "milestone"
+by = "key"
+rollup = true
+inverse = "scheduled"
+description = "what this ships in"
+
+# ─── Saved views ─────────────────────────────────────────────────────────────
+# `cairn list --view next`, `cairn board --view triage`
+
+[[view]]
+name = "now"
+description = "What is actually being worked on"
+filter = "category=active"
+sort = "priority,id"
+
+[[view]]
+name = "next"
+description = "Planned work for the nearest milestone"
+filter = "status=planned"
+sort = "priority,milestone"
+
+[[view]]
+name = "nav"
+description = "The sidebar, which is the point of the whole project"
+filter = "area=nav,category!=done"
+sort = "priority,id"
+
+[[view]]
+name = "blockers"
+description = "Everything that would hold a release"
+filter = "priority=p0,category!=done"
+sort = "milestone,id"
+
+[[view]]
+name = "triage"
+description = "Items that still need a milestone or a priority"
+filter = "milestone=,category!=done"
+columns = ["id", "type", "title", "created"]
+
+# ─── Hooks ───────────────────────────────────────────────────────────────────
+# cairn does not embed a scripting language; it runs yours. A hook takes one of
+# two forms:
+#
+#   a string  runs through the platform shell — convenient, and therefore
+#             platform-specific ($VAR on Unix is %VAR% under cmd.exe)
+#   an array  is executed directly with no shell at all — portable
+#
+# Each runs from the project root with the event in the environment and the
+# full item as JSON on stdin:
+#
+#   CAIRN_EVENT CAIRN_ROOT CAIRN_CONFIG
+#   CAIRN_ITEM_ID CAIRN_ITEM_PATH CAIRN_ITEM_TITLE
+#   CAIRN_ITEM_STATUS CAIRN_ITEM_TYPE CAIRN_ITEM_MILESTONE CAIRN_ITEM_CATEGORY
+#
+# Hooks run after the change is on disk, so a failing hook warns but never rolls
+# anything back. Suppress them with --no-hooks or CAIRN_NO_HOOKS=1.
+
+# Keeping the rendered roadmap current is the tool's whole point, so it is done
+# for you. Comment these out if you would rather render by hand — but a roadmap
+# that drifts from the items is the rot cairn exists to prevent, and leaving it
+# to discipline is how it starts.
+
+[hooks]
+after-create = "cairn render -q"
+after-change = "cairn render -q"
+after-remove = "cairn render -q"
+# after-render = "git add ROADMAP.md"
+# after-change = ["python3", "scripts/notify.py"]   # portable form
+
+# ─── Rendered roadmap ────────────────────────────────────────────────────────
+
+[render]
+target = "ROADMAP.md"
+title = "Roadmap"
+group_by = "milestone"    # any field works: milestone, area, assignee, type
+include = "category!=dropped"
+checkbox = true           # render items as a task list
+show_ids = true
+progress = true           # per-milestone progress bar
+group_by_status = true    # sub-group each section by status
+link_items = false        # requires project.url
+# header = "docs/roadmap-intro.md"   # spliced in above the generated body
+# footer = "docs/roadmap-outro.md"
