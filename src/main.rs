@@ -780,6 +780,29 @@ fn spawn_input(tx: Sender<Ev>) {
     });
 }
 
+/// What this machine is called, for a title that says which one it is.
+///
+/// Trimmed to the first label: a session on `build.example.com` is on `build`,
+/// and the rest is a domain nobody is choosing a window by.
+fn hostname() -> String {
+    let mut buf = [0i8; 256];
+    // SAFETY: the buffer is ours and the length is its own.
+    let ok = unsafe { libc::gethostname(buf.as_mut_ptr(), buf.len()) } == 0;
+    if !ok {
+        return String::new();
+    }
+    let bytes: Vec<u8> = buf
+        .iter()
+        .take_while(|b| **b != 0)
+        .map(|b| *b as u8)
+        .collect();
+    String::from_utf8_lossy(&bytes)
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// One tick a second: the clock needs it, and so does naming — a title that
 /// went quiet mid-debounce has no further output to wake the loop with.
 fn spawn_ticker(tx: Sender<Ev>) {
@@ -924,6 +947,11 @@ struct App {
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
     badging: bool,
+    /// The last title posted, so an unchanged one is not sent again.
+    ///
+    /// A title rewritten every tick makes some terminals flash their tab, and a
+    /// window manager that logs title changes logs one a second.
+    titled: Option<String>,
     /// Terminals attached to one pane each, with no interface around them.
     watchers: Vec<server::Watcher>,
     /// Workspaces whose agent is to be started again on the conversation it was
@@ -1011,6 +1039,7 @@ impl App {
             },
             badges: std::collections::HashMap::new(),
             badging: false,
+            titled: None,
             watchers: Vec::new(),
             to_resume: Vec::new(),
             waits: Vec::new(),
@@ -1283,37 +1312,7 @@ impl App {
         while let Ok(next) = rx.try_recv() {
             self.handle(next);
         }
-        // A board that does not keep its panes loses them when you look away.
-        // Checked here rather than at every place focus can move, because focus
-        // moves from keys, clicks, the API and a workspace closing under you.
-        let now = match self.session.focus {
-            Focus::Layout(i) => self.session.layouts.get(i).map(|l| l.def.name.clone()),
-            Focus::Ws { .. } => None,
-        };
-        if let Some(left) = self.was.take().filter(|name| Some(name) != now.as_ref())
-            && let Some(i) = self
-                .session
-                .layouts
-                .iter()
-                .position(|l| l.def.name == left && !l.def.keep)
-        {
-            self.session.close_layout(i);
-        }
-        self.was = now;
-
-        // Everywhere anybody is looking. With nobody attached that is where
-        // the session itself is pointed, which is what it was before there
-        // could be more than one client.
-        let watched: Vec<Focus> = match self.views.is_empty() {
-            true => vec![self.session.focus],
-            false => self.views.iter().map(|v| v.focus).collect(),
-        };
-        let changes = self.session.update_states(Instant::now(), &watched);
-        self.announce(changes);
-        // After the states, not before: a wait for `blocked` should end on the
-        // turn the agent became blocked rather than on the next tick after it.
-        self.settle();
-        self.repost();
+        self.after_events();
         !(self.quit || self.session.is_empty())
     }
 
@@ -1419,15 +1418,7 @@ impl App {
             // busy pane produces an event, and working out every agent's state
             // locks each agent pane's terminal and reads its screen. Doing that
             // per chunk contends with the reader threads holding the same lock.
-            // Everywhere anybody is looking. With nobody attached that is where
-            // the session itself is pointed, which is what it was before there
-            // could be more than one client.
-            let watched: Vec<Focus> = match self.views.is_empty() {
-                true => vec![self.session.focus],
-                false => self.views.iter().map(|v| v.focus).collect(),
-            };
-            let changes = self.session.update_states(Instant::now(), &watched);
-            self.announce(changes);
+            self.after_events();
             if self.quit || self.session.is_empty() {
                 return Ok(());
             }
@@ -1834,6 +1825,83 @@ impl App {
                 self.session.resize_pane(pane, rows, cols);
             }
             _ => {}
+        }
+    }
+
+    /// Everything that happens after a batch of events, whichever loop drained
+    /// them.
+    ///
+    /// One place, because there are two loops — the session's and the one that
+    /// runs with no session at all — and they had already drifted: the second
+    /// was not doing any of the work the first had gained since.
+    fn after_events(&mut self) {
+        // A board that does not keep its panes loses them when you look away.
+        // Checked here rather than at every place focus can move, because focus
+        // moves from keys, clicks, the API and a workspace closing under you.
+        let now = match self.session.focus {
+            Focus::Layout(i) => self.session.layouts.get(i).map(|l| l.def.name.clone()),
+            Focus::Ws { .. } => None,
+        };
+        if let Some(left) = self.was.take().filter(|name| Some(name) != now.as_ref())
+            && let Some(i) = self
+                .session
+                .layouts
+                .iter()
+                .position(|l| l.def.name == left && !l.def.keep)
+        {
+            self.session.close_layout(i);
+        }
+        self.was = now;
+
+        // Everywhere anybody is looking. With nobody attached that is where
+        // the session itself is pointed, which is what it was before there
+        // could be more than one client.
+        let watched: Vec<Focus> = match self.views.is_empty() {
+            true => vec![self.session.focus],
+            false => self.views.iter().map(|v| v.focus).collect(),
+        };
+        let changes = self.session.update_states(Instant::now(), &watched);
+        self.announce(changes);
+        // After the states, not before: a wait for `blocked` should end on the
+        // turn the agent became blocked rather than on the next tick after it.
+        self.settle();
+        self.repost();
+        self.retitle();
+    }
+
+    /// Say what the terminal dirk is running in should be called.
+    ///
+    /// Composed here because these are the session's facts — `{host}` is the
+    /// machine the panes are on, which under `--remote` is not the machine the
+    /// window is on — and written by whoever has a terminal.
+    fn retitle(&mut self) {
+        let ws = self.session.focused_workspace();
+        let workspace = ws.map(|w| w.label.clone()).unwrap_or_default();
+        let tab = ws
+            .filter(|w| w.tabs.len() > 1)
+            .map(|w| w.tab_label(w.tab))
+            .unwrap_or_default();
+        let pane = self
+            .session
+            .active_pane()
+            .and_then(|p| p.title())
+            .unwrap_or_default();
+        let want = self.cfg.ui.title(&hostname(), &workspace, &tab, &pane);
+        let Some(want) = want else { return };
+        if self.titled.as_ref() == Some(&want) {
+            return;
+        }
+        self.titled = Some(want.clone());
+        if self.views.is_empty() {
+            // No client: this is the single-process mode, and the terminal is
+            // ours to write to directly.
+            if self.socket.is_none() {
+                let _ = execute!(io::stdout(), crossterm::terminal::SetTitle(&want));
+            }
+            return;
+        }
+        for view in &mut self.views {
+            let _ = wire::send(&mut view.out, wire::Kind::Title, want.as_bytes());
         }
     }
 

@@ -61,10 +61,40 @@ struct Harness {
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     screen: Arc<Mutex<vt100::Parser>>,
+    /// Every window title dirk has asked the outer terminal for, in order.
+    titles: Arc<Mutex<Vec<String>>>,
     /// Kept so a test can narrow the terminal. Most of what the rail does is
     /// decide what to give up as it runs out of room, and that cannot be
     /// tested at one width.
     master: Box<dyn portable_pty::MasterPty + Send>,
+}
+
+/// Take the complete window titles out of a byte stream.
+///
+/// `ESC ] 0 ;` and `ESC ] 2 ;` both set one — 0 is icon-and-window and is what
+/// crossterm writes — and either ends at BEL or at an escape. Whatever is left
+/// of a partial one stays in the buffer, because a title can arrive across two
+/// reads.
+fn take_titles(buf: &mut Vec<u8>) -> Vec<String> {
+    let opener = |w: &[u8]| w == b"\x1b]0;" || w == b"\x1b]2;";
+    const OPEN: &[u8] = b"\x1b]0;";
+    let mut out = Vec::new();
+    loop {
+        let Some(start) = buf.windows(OPEN.len()).position(opener) else {
+            // Keep only enough to recognise an opener split across two reads.
+            if buf.len() > OPEN.len() {
+                buf.drain(..buf.len() - OPEN.len());
+            }
+            return out;
+        };
+        let body = start + OPEN.len();
+        let Some(end) = buf[body..].iter().position(|b| *b == 0x07 || *b == 0x1b) else {
+            buf.drain(..start);
+            return out;
+        };
+        out.push(String::from_utf8_lossy(&buf[body..body + end]).into_owned());
+        buf.drain(..body + end + 1);
+    }
 }
 
 /// What every test in this file wants on top of whatever it configures.
@@ -138,13 +168,23 @@ impl Harness {
         let mut reader = pair.master.try_clone_reader().expect("reader");
         let screen = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
         let sink = Arc::clone(&screen);
+        // vt100 drops window titles unless a callback claims them, and what
+        // dirk writes to the terminal *it* is in never reaches a pane's parser
+        // at all. Kept as raw bytes and read back below.
+        let titles = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&titles);
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
+            let mut carry = Vec::new();
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
                     return;
                 }
                 sink.lock().unwrap().process(&buf[..n]);
+                carry.extend_from_slice(&buf[..n]);
+                for title in take_titles(&mut carry) {
+                    seen.lock().unwrap().push(title);
+                }
             }
         });
 
@@ -152,8 +192,14 @@ impl Harness {
             writer: pair.master.take_writer().expect("writer"),
             child,
             screen,
+            titles,
             master: pair.master,
         }
+    }
+
+    /// The last window title dirk asked for, if it asked for one.
+    fn title(&self) -> Option<String> {
+        self.titles.lock().unwrap().last().cloned()
     }
 
     /// Narrow the terminal, and the parser with it.
@@ -2139,4 +2185,30 @@ fn the_mouse_can_be_left_to_the_terminal_that_owns_it() {
         "a click did nothing with the mouse on\n{}",
         on.drawn()
     );
+}
+
+#[test]
+fn dirk_says_what_the_window_it_is_in_should_be_called() {
+    // dirk emulates the terminals in its panes, so a title written inside one
+    // stops at dirk — and it wrote none of its own, leaving the window holding
+    // fourteen panes labelled whatever it was called before dirk started.
+    let mut h = Harness::start_with_config("[ui]\nwindow_title = \"zzT {workspace}\"\n");
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    assert!(
+        h.wait_until(START, |h| h.title().is_some_and(|t| t.starts_with("zzT "))),
+        "dirk did not name the window it is in: {:?}",
+        h.title()
+    );
+    drop(h);
+
+    // Empty leaves the terminal's own title alone, which is what dirk did
+    // before it wrote one at all.
+    let mut quiet = Harness::start_with_config("[ui]\nwindow_title = \"\"\n");
+    assert!(
+        quiet.wait_for(READY, START),
+        "never started\n{}",
+        quiet.drawn()
+    );
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(quiet.title(), None, "an empty template still wrote a title");
 }

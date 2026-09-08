@@ -664,6 +664,13 @@ new_cwd    = "follow"        # follow | home | current | a path
 # by side apart and says which has the keyboard. `off` draws none.
 pane_rules = "auto"          # auto | always | off
 mouse      = true            # false leaves the mouse to your terminal
+# What dirk calls the terminal it is running in. dirk emulates the terminals in
+# its panes, so a title written inside one stops at dirk — and window managers,
+# tab bars and application switchers all read the outer one. Tokens are {host},
+# {workspace}, {tab} and {pane}; `{{` and `}}` are literal braces. Composed on
+# the session end, so `--remote` names the machine the panes are on. Empty
+# leaves the title alone.
+window_title = "{workspace}"
 
 [nav]
 glyphs    = "unicode"        # unicode | ascii | round
