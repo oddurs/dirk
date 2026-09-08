@@ -60,6 +60,31 @@ exception.
 
 ## Acceptance criteria
 
-- [ ] One repository fixture, shared by both suites
-- [ ] It clears the git environment, and says why
-- [ ] The suites pass with `GIT_DIR` set to something else
+- [x] One repository fixture, shared by both suites
+- [x] It clears the git environment, and says why
+- [x] The suites pass with `GIT_DIR` set to something else
+
+## 2026-09-08
+
+`tests/fixture/` — a directory rather than a file, so cargo takes it as a module
+to include and not a suite to run. Both suites use it now, and the careful one
+is the one that survived.
+
+Three things guard it rather than one comment.
+
+The command is built and then run, which lets a test assert the clearing
+instead of trusting it. Asserted on the command because `GIT_DIR` is
+process-global: a test that set it would be setting it for every other test in
+the binary at the same time, and the race would be the flake.
+
+`repo()` checks that the directory it just initialised has a `.git` in it. That
+is the assertion that would have caught this directly, and it is one line: the
+failure mode here is not an error, it is a warning nobody reads and an exit
+status of zero.
+
+And the whole suite was run with `GIT_DIR` pointing somewhere else. It passes.
+
+The other half of the note — that `smoke.rs` still starts dirk in the checkout
+by default — is left alone. It is a different property with different tests
+depending on it, and folding it into this change would have made a fixture fix
+into a change to what every test in the file is looking at.

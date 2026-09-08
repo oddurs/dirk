@@ -22,6 +22,8 @@
 //! that is to give it one: spawn the real binary on a real pty, read what it
 //! paints, and drive it with real keystrokes.
 
+mod fixture;
+
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -44,36 +46,13 @@ const READY: &str = "+ workspace";
 const START: Duration = Duration::from_secs(30);
 
 /// A repository on a named branch, made for one test to read back.
-///
-/// One commit, because a branch with nothing on it is unborn and
-/// `rev-parse HEAD` has no answer for it. Identity comes from `-c` rather than
-/// from whoever the machine thinks is running: CI has no `user.email`, and a
-/// commit is what this needs to exist at all.
 fn a_repo_on(branch: &str) -> (std::path::PathBuf, String) {
     let dir = std::env::temp_dir().join("dirk-smoke").join(format!(
         "repo-{}-{}",
         std::process::id(),
         next_config_id()
     ));
-    std::fs::create_dir_all(&dir).expect("repo dir");
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(["-c", "user.name=dirk", "-c", "user.email=dirk@example"])
-            .args(args)
-            .current_dir(&dir)
-            .output()
-            .expect("git");
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
-    git(&["init", "-q", "-b", branch]);
-    std::fs::write(dir.join("a-file"), "one line\n").expect("a file");
-    git(&["add", "a-file"]);
-    git(&["commit", "-qm", "one"]);
-    (dir, branch.to_string())
+    (fixture::repo(&dir, branch), branch.to_string())
 }
 
 /// Unique per config directory, so concurrent tests do not share one.

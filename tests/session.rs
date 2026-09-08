@@ -22,6 +22,8 @@
 //! test gets a session of its own, because they would otherwise all attach to
 //! whichever server started first.
 
+mod fixture;
+
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -1417,41 +1419,12 @@ fn must_be_disposable(at: &std::path::Path) {
     );
 }
 
-/// Run git in a fixture, and only there.
-///
-/// The environment is cleared because `GIT_DIR` beats `-C`. A suite run from a
-/// git alias -- which `git work ship` is -- inherits one, and every fixture
-/// here would quietly become a branch in whatever repository that pointed at.
-fn git_at(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    let mut cmd = std::process::Command::new("git");
-    for var in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_COMMON_DIR",
-        "GIT_INDEX_FILE",
-    ] {
-        cmd.env_remove(var);
-    }
-    cmd.arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@example.com")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@example.com")
-        .output()
-        .expect("git")
-}
+use fixture::git as git_at;
 
 fn a_repo(name: &str) -> std::path::PathBuf {
     let dir = config_home().join(format!("repo-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("repo dir");
-    git_at(&dir, &["init", "-q", "-b", "main"]);
-    std::fs::write(dir.join("a.txt"), b"one\n").expect("a file");
-    git_at(&dir, &["add", "-A"]);
-    git_at(&dir, &["commit", "-qm", "one"]);
-    dir
+    fixture::repo(&dir, "main")
 }
 
 /// Give a repository an upstream it has drifted from: two commits ahead of it
