@@ -2,7 +2,7 @@
 id: 176
 title: dirk does not build for aarch64 Linux
 type: bug
-status: backlog
+status: done
 milestone: v1.0
 created: 2026-09-08
 updated: 2026-09-08
