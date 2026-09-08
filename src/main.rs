@@ -1415,10 +1415,33 @@ impl App {
     /// that misspelled a state should not learn about it when its timeout
     /// expires.
     fn hold(&mut self, req: &wire::Request) -> Result<Option<wait::What>, String> {
+        let (words, opts) = wait::options(&req.args);
+        if req.cmd == "pane.wait-output" {
+            if let Some(bad) = wait::unknown(&opts, &["regex", "lines", "timeout"]) {
+                return Err(format!("pane.wait-output takes no --{bad}"));
+            }
+            let Some(target) = words.first() else {
+                return Err("pane.wait-output needs a pane".into());
+            };
+            let Some(pane) = api::target_pane(&self.session, target) else {
+                return Err(format!("no such pane: {target}"));
+            };
+            let text = words[1..].join(" ");
+            if text.is_empty() {
+                return Err("pane.wait-output needs something to look for".into());
+            }
+            return Ok(Some(wait::What::Output {
+                pane,
+                looking_for: wait::Match::read(&text, &opts)?,
+                lines: wait::lines(&opts, api::READ_LINES)?,
+            }));
+        }
         if req.cmd != "agent.wait" {
             return Ok(None);
         }
-        let (words, opts) = wait::options(&req.args);
+        if let Some(bad) = wait::unknown(&opts, &["until", "timeout"]) {
+            return Err(format!("agent.wait takes no --{bad}"));
+        }
         let Some(target) = words.first() else {
             return Err("agent.wait needs a workspace or a pane".into());
         };
@@ -1484,6 +1507,24 @@ impl App {
                 state
                     .is_some_and(|s| until.contains(&s))
                     .then_some(serde_json::json!({ "agent": agent }))
+            }
+            wait::What::Output {
+                pane,
+                looking_for,
+                lines,
+            } => {
+                let Some(text) = self.session.pane_text(*pane, *lines) else {
+                    return Some(wait::Settled::Gone("that pane is gone"));
+                };
+                // Searched the moment it is asked as well as on every turn
+                // after, so a caller that starts a command and then waits for
+                // its output does not lose the race to text already on screen.
+                looking_for.first_in(&text).map(|line| {
+                    serde_json::json!({
+                        "pane": api::pane_id_of(&self.session, *pane),
+                        "matched": line,
+                    })
+                })
             }
         };
         match reached {

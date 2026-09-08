@@ -25,6 +25,15 @@ crossterm = "0.29"
 libc = "0.2.189"
 portable-pty = "0.9"
 ratatui = "0.30"
+# Only for `pane wait-output --regex`, and deliberately for that: this engine
+# has no backtracking, so a pattern out of a caller's shell cannot be made to
+# take exponential time in the session that holds every one of their panes.
+# Written by hand, it would be a worse engine with that property missing.
+regex = { version = "1.13.1", default-features = false, features = [
+  "std",
+  "perf",
+  "unicode-perl",
+] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"

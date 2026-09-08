@@ -51,6 +51,43 @@ pub struct Held {
 pub enum What {
     /// An agent reaching one of these states.
     Agent { pane: PaneId, until: Vec<State> },
+    /// A line matching this, in what a pane has recently said.
+    Output {
+        pane: PaneId,
+        looking_for: Match,
+        lines: u16,
+    },
+}
+
+/// What counts as a match, on one line.
+///
+/// A line at a time rather than the whole snapshot: a pattern anchored with `^`
+/// should mean the start of a line, which is what a caller writing one means by
+/// it, and a `.` should not cross into the next line's output.
+pub enum Match {
+    Text(String),
+    Pattern(Box<regex::Regex>),
+}
+
+impl Match {
+    /// Read `--regex` if it was given, or take the words as literal text.
+    pub fn read(text: &str, opts: &[(String, String)]) -> Result<Match, String> {
+        if !opts.iter().any(|(k, _)| k == "regex") {
+            return Ok(Match::Text(text.to_string()));
+        }
+        match regex::Regex::new(text) {
+            Ok(re) => Ok(Match::Pattern(Box::new(re))),
+            Err(e) => Err(format!("not a pattern: {e}")),
+        }
+    }
+
+    /// The first line of `text` this matches.
+    pub fn first_in<'a>(&self, text: &'a str) -> Option<&'a str> {
+        text.lines().find(|line| match self {
+            Match::Text(needle) => line.contains(needle.as_str()),
+            Match::Pattern(re) => re.is_match(line),
+        })
+    }
 }
 
 /// Why a held question is finished, once it is.
@@ -74,7 +111,15 @@ impl Settled {
     }
 }
 
-/// Read `--until` and `--timeout` out of the words a caller sent.
+/// Which options take a value. Everything else is a switch.
+///
+/// Named rather than guessed. A parser that gave every option the next word
+/// turned `--regex --timeout 30000` into a pattern of `--timeout`, a positional
+/// `30000`, and a wait with no deadline at all — which is to say it hung, in
+/// the one place a hang is hardest to notice.
+const VALUED: &[&str] = &["until", "timeout", "lines"];
+
+/// Read the options out of the words a caller sent.
 ///
 /// The positional words come back in order and the options are taken out, so a
 /// handler reads its target from `words[0]` whether or not flags were passed
@@ -90,12 +135,25 @@ pub fn options(args: &[String]) -> (Vec<String>, Vec<(String, String)>) {
         };
         match name.split_once('=') {
             Some((k, v)) => opts.push((k.to_string(), v.to_string())),
-            // A flag whose value is missing takes an empty one rather than
-            // swallowing the next word, which might be the target.
-            None => opts.push((name.to_string(), rest.next().cloned().unwrap_or_default())),
+            None if VALUED.contains(&name) => {
+                opts.push((name.to_string(), rest.next().cloned().unwrap_or_default()))
+            }
+            None => opts.push((name.to_string(), String::new())),
         }
     }
     (words, opts)
+}
+
+/// The first option here that this command does not take.
+///
+/// An option nobody reads is worse here than anywhere else: the command it was
+/// passed to is one that waits, so a misspelling is not a wrong answer, it is
+/// no answer until the timeout that was also misspelled.
+pub fn unknown(opts: &[(String, String)], allowed: &[&str]) -> Option<String> {
+    opts.iter()
+        .map(|(k, _)| k)
+        .find(|k| !allowed.contains(&k.as_str()))
+        .cloned()
 }
 
 /// The states `--until` means when a caller does not say.
@@ -122,6 +180,17 @@ pub fn until(opts: &[(String, String)]) -> Result<Vec<State>, String> {
         true => SETTLED.to_vec(),
         false => out,
     })
+}
+
+/// Read `--lines`, or the screenful that a read defaults to.
+pub fn lines(opts: &[(String, String)], fallback: u16) -> Result<u16, String> {
+    let Some((_, v)) = opts.iter().find(|(k, _)| k == "lines") else {
+        return Ok(fallback);
+    };
+    match v.parse::<u16>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(format!("--lines wants a count, not {v:?}")),
+    }
 }
 
 /// Read `--timeout`, in milliseconds.
@@ -159,6 +228,36 @@ mod tests {
     }
 
     #[test]
+    fn a_switch_does_not_swallow_the_option_after_it() {
+        // `--regex --timeout 30000` used to parse as a pattern of "--timeout",
+        // a positional "30000", and no deadline. The command did not fail; it
+        // waited for ever for a line that could not be printed.
+        let (words, opts) = options(&strings(&[
+            "w1:p2",
+            "^done$",
+            "--regex",
+            "--timeout",
+            "30000",
+        ]));
+        assert_eq!(words, vec!["w1:p2", "^done$"]);
+        assert_eq!(
+            opts,
+            vec![
+                ("regex".to_string(), String::new()),
+                ("timeout".to_string(), "30000".to_string()),
+            ]
+        );
+        assert!(deadline(&opts).unwrap().is_some());
+    }
+
+    #[test]
+    fn an_option_this_command_does_not_take_is_named() {
+        let (_, opts) = options(&strings(&["w1:p2", "--regexp"]));
+        assert_eq!(unknown(&opts, &["regex"]), Some("regexp".to_string()));
+        assert_eq!(unknown(&opts, &["regex", "regexp"]), None);
+    }
+
+    #[test]
     fn until_repeats_and_defaults_to_having_stopped() {
         assert_eq!(until(&[]).unwrap(), SETTLED);
         let opts = vec![
@@ -174,6 +273,30 @@ mod tests {
         // which is what a silently ignored `--until` would produce.
         let opts = vec![("until".to_string(), "finished".to_string())];
         assert!(until(&opts).is_err());
+    }
+
+    #[test]
+    fn a_match_is_a_line_at_a_time() {
+        // A caller writing `^` means the start of a line, and a `.` should not
+        // reach into the next line's output. Matching the snapshot whole would
+        // make both of those wrong in a way that only shows up occasionally.
+        let text = "building\nerror: nope\ndone\n";
+        let literal = Match::read("error", &[]).unwrap();
+        assert_eq!(literal.first_in(text), Some("error: nope"));
+
+        let regex = vec![("regex".to_string(), String::new())];
+        let anchored = Match::read("^done$", &regex).unwrap();
+        assert_eq!(anchored.first_in(text), Some("done"));
+        let across = Match::read("building.error", &regex).unwrap();
+        assert_eq!(across.first_in(text), None, "a match crossed a line ending");
+    }
+
+    #[test]
+    fn a_pattern_that_does_not_parse_is_refused() {
+        let regex = vec![("regex".to_string(), String::new())];
+        assert!(Match::read("(unclosed", &regex).is_err());
+        // Without --regex the same text is what it looks like.
+        assert!(Match::read("(unclosed", &[]).is_ok());
     }
 
     #[test]

@@ -2588,3 +2588,106 @@ fn appears_in_pane(session: &str, pane: &str, needle: &str, within: Duration) ->
     }
     false
 }
+
+#[test]
+fn waiting_for_a_line_out_of_a_pane_that_holds_no_agent() {
+    // Half of what runs in a pane is not an agent: a test watcher, a dev
+    // server, a deploy. `agent wait` cannot help there and there was nothing
+    // else, so the caller polled `pane read` on a timer.
+    let session = unique("output");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let id = first_id(&panes);
+
+    // Held: the line has not been printed yet.
+    let waiting = ask_later(
+        &session,
+        &["pane", "wait-output", &id, "zzLANDED", "--timeout", "30000"],
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !waiting.is_finished(),
+        "the wait returned before the line was printed"
+    );
+
+    let (ok, out) = ask(&session, &["pane", "run", &id, "printf 'zzLANDED\\n'"]);
+    assert!(ok, "pane run failed: {out}");
+
+    let (ok, said) = waiting.join().expect("the wait thread");
+    assert!(ok, "the wait failed: {said}");
+    assert!(
+        said.contains("zzLANDED"),
+        "the wait did not answer with the line it matched: {said}"
+    );
+
+    // Text already on the screen matches at once. A caller that starts a
+    // command and then waits for its output must not lose that race.
+    let at = Instant::now();
+    let (ok, said) = ask(&session, &["pane", "wait-output", &id, "zzLANDED"]);
+    assert!(ok, "a wait for a line already printed failed: {said}");
+    assert!(
+        at.elapsed() < Duration::from_secs(5),
+        "a wait for a line already printed did not return promptly"
+    );
+
+    // A pattern, matched one line at a time.
+    let (ok, out) = ask(&session, &["pane", "run", &id, "printf 'zzOK 7 passed\\n'"]);
+    assert!(ok, "pane run failed: {out}");
+    let (ok, said) = ask(
+        &session,
+        &[
+            "pane",
+            "wait-output",
+            &id,
+            "^zzOK [0-9]+ passed$",
+            "--regex",
+            "--timeout",
+            "30000",
+        ],
+    );
+    assert!(ok, "the pattern never matched: {said}");
+
+    // One that does not parse is refused rather than waited out.
+    let (ok, said) = ask(
+        &session,
+        &["pane", "wait-output", &id, "(unclosed", "--regex"],
+    );
+    assert!(!ok, "a pattern that does not parse was accepted: {said}");
+
+    // So is an option this command does not take. On a command that waits, a
+    // misspelling is not a wrong answer -- it is no answer at all, until a
+    // timeout that was probably misspelled too.
+    let (ok, said) = ask(
+        &session,
+        &[
+            "pane",
+            "wait-output",
+            &id,
+            "zzNEVER",
+            "--regexp",
+            "--timeout",
+            "700",
+        ],
+    );
+    assert!(!ok, "an option that does not exist was accepted: {said}");
+    assert!(
+        said.contains("regexp"),
+        "the failure did not name the option it did not understand: {said}"
+    );
+
+    // And patience that runs out says timeout.
+    let (ok, said) = ask(
+        &session,
+        &["pane", "wait-output", &id, "zzNEVER", "--timeout", "700"],
+    );
+    assert!(!ok, "a wait that should have timed out succeeded: {said}");
+    assert!(
+        said.contains("timeout"),
+        "the failure did not say timeout: {said}"
+    );
+
+    drop(client);
+}
