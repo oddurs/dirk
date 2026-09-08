@@ -1013,6 +1013,21 @@ pub struct SessionCfg {
     /// unreasonable one for a shared host, and dirk is not in a position to know
     /// which it is on. Turning it off again deletes what was already stored.
     pub pane_history: bool,
+    /// Whether `dirk session handoff` will replace the running binary without
+    /// stopping the work.
+    ///
+    /// **Experimental, and off.** It clears `FD_CLOEXEC` on every pty and
+    /// `exec`s the new binary over this process, so every shell and agent keeps
+    /// the parent and the terminal it had. When it works nothing notices; when
+    /// it does not, the thing at risk is every running pane in the session,
+    /// which is the most expensive thing dirk holds.
+    ///
+    /// The new binary is run once before anything is committed to, so the
+    /// realistic failure -- a truncated download, the wrong architecture -- is
+    /// caught while this process is still entirely intact. What that cannot
+    /// catch is a binary that starts and then fails, and that is the reason
+    /// this is off.
+    pub handoff: bool,
 }
 
 impl Default for SessionCfg {
@@ -1020,6 +1035,7 @@ impl Default for SessionCfg {
         Self {
             resume_agents: true,
             pane_history: false,
+            handoff: false,
         }
     }
 }

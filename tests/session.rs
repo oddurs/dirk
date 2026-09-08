@@ -4720,3 +4720,124 @@ fn a_caller_that_gives_up_is_not_waited_for() {
         waiting(&session) == 0
     });
 }
+
+#[test]
+fn a_handoff_replaces_the_binary_and_keeps_every_pane_running() {
+    // Upgrading meant ending every shell and every agent, so people did not
+    // upgrade while they were working -- which is always.
+    let home = config_home().join("handoff-on");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("dirk")).expect("config dir");
+    std::fs::write(
+        home.join("dirk").join("config.toml"),
+        "[session]\nhandoff = true\n",
+    )
+    .expect("config");
+
+    let session = unique("handoff");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let home = home.clone();
+        move |cmd| {
+            cmd.env("XDG_CONFIG_HOME", &home);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    // Something that will still be there afterwards if the pty survived, and
+    // will not be if the pane was restarted.
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let (ok, why) = ask(&session, &["pane", "run", &pane, "printf", "zzBEFORE"]);
+    assert!(ok, "pane run failed: {why}");
+    assert!(client.wait_for("zzBEFORE", START), "the pane never printed");
+
+    let before = pane_pid(&session, &pane);
+    assert!(before > 0, "no process behind the pane");
+
+    let (ok, why) = ask(&session, &["session", "handoff"]);
+    // Never ok: on success this process becomes the new binary partway through
+    // and there is nobody left to answer.
+    assert!(!ok, "the handoff answered, which means it did not happen");
+    // "did not answer" is what success looks like from out here: the process
+    // became the new binary partway through the call, so the connection closed
+    // with no reply. Anything else is a refusal, and a refusal names a reason.
+    assert!(
+        why.contains("did not answer"),
+        "the handoff was refused rather than performed: {why}"
+    );
+
+    // The session is still there, answering, with the same process behind the
+    // same pane.
+    let deadline = Instant::now() + START;
+    let mut after = 0;
+    while Instant::now() < deadline {
+        after = pane_pid(&session, &pane);
+        if after > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(
+        after, before,
+        "the pane's process changed across the handoff: it was restarted, not kept"
+    );
+
+    // And it is the same pty: the shell still has the history it had.
+    let (ok, why) = ask(&session, &["pane", "run", &pane, "printf", "zzAFTER"]);
+    assert!(ok, "the pane stopped working after the handoff: {why}");
+    let (ok, text) = ask(&session, &["pane", "read", &pane, "50"]);
+    assert!(ok, "pane read failed");
+    assert!(
+        text.contains("zzBEFORE"),
+        "what was on the screen before the handoff did not come across:\n{text}"
+    );
+
+    drop(client);
+    end(&session);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_handoff_is_refused_until_it_is_asked_for() {
+    // The thing at risk is every running pane in the session, which is the
+    // most expensive thing dirk holds.
+    let session = unique("nohandoff");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, why) = ask(&session, &["session", "handoff"]);
+    assert!(!ok, "a handoff happened without being asked for");
+    assert!(
+        why.contains("experimental") && why.contains("handoff"),
+        "the refusal did not say how to turn it on: {why}"
+    );
+    // And the session is untouched.
+    let (ok, _) = ask(&session, &["session", "info"]);
+    assert!(ok, "the refused handoff disturbed the session");
+
+    drop(client);
+    end(&session);
+}
+
+/// The process behind a pane, or zero.
+fn pane_pid(session: &str, pane: &str) -> i64 {
+    let (ok, list) = ask(session, &["pane", "list"]);
+    if !ok {
+        return 0;
+    }
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&list) else {
+        return 0;
+    };
+    doc.get("panes")
+        .and_then(|p| p.as_array())
+        .and_then(|panes| {
+            panes.iter().find(|p| {
+                p.get("id")
+                    .and_then(|i| i.as_str())
+                    .is_some_and(|i| i == pane || pane.ends_with(i) || i.ends_with(pane))
+            })
+        })
+        .and_then(|p| p.get("pid").and_then(|v| v.as_i64()))
+        .unwrap_or(0)
+}

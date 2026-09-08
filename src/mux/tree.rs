@@ -158,6 +158,43 @@ impl Node {
 
     /// Every pane, in the order it is drawn. That order is also the order focus
     /// cycles in, which is why it is tree order and not insertion order.
+    /// Drop any leaf that is not in the list, and collapse what that empties.
+    ///
+    /// A handoff can lose a pane -- a descriptor that did not survive, a
+    /// process already gone -- and a tree still pointing at it would lay out a
+    /// rectangle for something that does not exist.
+    pub fn without_missing(self, kept: &[PaneId]) -> Node {
+        match self {
+            Node::Leaf(id) => Node::Leaf(id),
+            Node::Split { dir, children } => {
+                let mut left: Vec<_> = children
+                    .into_iter()
+                    .filter_map(|(c, n)| match &n {
+                        Node::Leaf(id) if !kept.contains(id) => None,
+                        _ => Some((c, n.without_missing(kept))),
+                    })
+                    .filter(|(_, n)| !n.is_empty(kept))
+                    .collect();
+                // A split with one child left is not a split.
+                match left.len() {
+                    1 => left.remove(0).1,
+                    _ => Node::Split {
+                        dir,
+                        children: left,
+                    },
+                }
+            }
+        }
+    }
+
+    /// Whether nothing under here survived.
+    fn is_empty(&self, kept: &[PaneId]) -> bool {
+        match self {
+            Node::Leaf(id) => !kept.contains(id),
+            Node::Split { children, .. } => children.iter().all(|(_, n)| n.is_empty(kept)),
+        }
+    }
+
     pub fn leaves(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);

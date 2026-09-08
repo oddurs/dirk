@@ -28,7 +28,7 @@
 //! it is doing arrives that way, and it is the entire input to `name.rs`.
 
 use crate::mux::Ev;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -118,10 +118,26 @@ pub struct Pane {
     /// seen to stop.
     pub touched: std::time::Instant,
     writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    /// The pty, whether this process opened it or inherited it across a
+    /// handoff. Panes from before the binary changed are otherwise identical.
+    pub(crate) master: super::adopt::Master,
+    child: super::adopt::Kid,
     rows: u16,
     cols: u16,
+}
+
+/// What a pane is made of, once the pty and the process exist.
+///
+/// A struct because `assemble` is reached from two directions -- spawning and
+/// adopting -- and six positional arguments in two places is five chances to
+/// put two of them the wrong way round.
+struct Made {
+    id: PaneId,
+    cwd: std::path::PathBuf,
+    argv: Vec<String>,
+    rows: u16,
+    cols: u16,
+    scrollback: usize,
 }
 
 /// Everything about starting a pane that is not what to run or where.
@@ -227,13 +243,85 @@ impl Pane {
             cmd.env("DIRK_SESSION", session);
         }
 
-        let child = slave.spawn_command(cmd).map_err(oops)?;
+        let child = super::adopt::Kid::Owned(slave.spawn_command(cmd).map_err(oops)?);
         // The slave fd must go, or the pty never reports EOF when the child
         // exits and the reader thread blocks for the life of the process.
         drop(slave);
 
-        let mut reader = master.try_clone_reader().map_err(oops)?;
-        let writer = master.take_writer().map_err(oops)?;
+        Self::assemble(
+            super::adopt::Master::Owned(master),
+            child,
+            Made {
+                id,
+                cwd: cwd.to_path_buf(),
+                argv: argv.to_vec(),
+                rows,
+                cols,
+                scrollback,
+            },
+            tx,
+        )
+    }
+
+    /// A pane whose pty and process were already running when this image
+    /// started, handed over by the one it replaced.
+    ///
+    /// Everything below the descriptor is identical: the same reader thread,
+    /// the same terminal, the same events. What differs is only that nothing
+    /// here opened the pty or started the program.
+    pub fn adopt(
+        note: &crate::handoff::Pane,
+        scrollback: usize,
+        tx: Sender<Ev>,
+    ) -> std::io::Result<Self> {
+        if !super::adopt::alive(note.fd) {
+            return Err(std::io::Error::other(format!(
+                "pane {}: descriptor {} did not survive",
+                note.id, note.fd
+            )));
+        }
+        let mut pane = Self::assemble(
+            super::adopt::Master::Adopted(super::adopt::Adopted::new(note.fd)),
+            super::adopt::Kid::Inherited(super::adopt::Inherited::new(note.pid)),
+            Made {
+                id: note.id,
+                cwd: note.cwd.clone(),
+                argv: note.argv.clone(),
+                rows: note.rows,
+                cols: note.cols,
+                scrollback,
+            },
+            tx,
+        )?;
+        pane.label = note.label.clone();
+        pane.agent_name = note.agent_name.clone();
+        // The modes before the screen: a screen drawn while the parser still
+        // thinks the cursor is hidden ends with it hidden, and the sequence
+        // that would have shown it went past before this was written down.
+        if let Ok(mut term) = pane.term.lock() {
+            term.process(&note.modes.sequences());
+            term.process(&crate::handoff::unbase64(&note.screen));
+        }
+        Ok(pane)
+    }
+
+    /// Everything a pane is once there is a pty and a process behind it.
+    fn assemble(
+        master: super::adopt::Master,
+        child: super::adopt::Kid,
+        made: Made,
+        tx: Sender<Ev>,
+    ) -> std::io::Result<Self> {
+        let Made {
+            id,
+            cwd,
+            argv,
+            rows,
+            cols,
+            scrollback,
+        } = made;
+        let mut reader = master.try_clone_reader()?;
+        let writer = master.take_writer()?;
 
         let term = Arc::new(Mutex::new(Term::new_with_callbacks(
             rows,
@@ -285,8 +373,8 @@ impl Pane {
         Ok(Self {
             id,
             term,
-            cwd: cwd.to_path_buf(),
-            argv: argv.to_vec(),
+            cwd,
+            argv,
             label: None,
             dead: false,
             exit: None,
@@ -353,6 +441,11 @@ impl Pane {
             .lock()
             .ok()
             .and_then(|t| t.callbacks().title.clone())
+    }
+
+    /// The process behind this pane, for writing down before a handoff.
+    pub fn pid(&self) -> Option<i32> {
+        self.child.pid()
     }
 
     /// Close this pane for good. The child's exit arrives as an event like any
