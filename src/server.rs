@@ -201,6 +201,16 @@ impl View {
         self.term.clear()
     }
 
+    /// Put bytes in with the frame that is about to go.
+    ///
+    /// Into the same sink the renderer writes to, so they arrive in one message
+    /// and in order: images placed in a separate write could reach the terminal
+    /// before the cells they are drawn over.
+    pub fn write(&mut self, bytes: &[u8]) {
+        use io::Write;
+        let _ = self.sink.clone().write_all(bytes);
+    }
+
     /// Post whatever the last draw produced.
     ///
     /// Taken rather than copied: the buffer is the message, and leaving it

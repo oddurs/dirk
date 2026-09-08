@@ -63,10 +63,37 @@ struct Harness {
     screen: Arc<Mutex<vt100::Parser>>,
     /// Every window title dirk has asked the outer terminal for, in order.
     titles: Arc<Mutex<Vec<String>>>,
+    /// Every graphics command dirk has written to the terminal it is in.
+    images: Arc<Mutex<Vec<String>>>,
     /// Kept so a test can narrow the terminal. Most of what the rail does is
     /// decide what to give up as it runs out of room, and that cannot be
     /// tested at one width.
     master: Box<dyn portable_pty::MasterPty + Send>,
+}
+
+/// Every graphics command dirk wrote to the terminal it is in, as text.
+///
+/// The screen parser is no use for this: vt100 discards a graphics APC without
+/// a word, which is the whole reason dirk takes them out of a pane's stream
+/// itself.
+fn take_graphics(buf: &mut Vec<u8>) -> Vec<String> {
+    const OPEN: &[u8] = b"\x1b_G";
+    let mut out = Vec::new();
+    loop {
+        let Some(start) = buf.windows(OPEN.len()).position(|w| w == OPEN) else {
+            if buf.len() > OPEN.len() {
+                buf.drain(..buf.len() - OPEN.len());
+            }
+            return out;
+        };
+        let body = start + OPEN.len();
+        let Some(end) = buf[body..].windows(2).position(|w| w == b"\x1b\\") else {
+            buf.drain(..start);
+            return out;
+        };
+        out.push(String::from_utf8_lossy(&buf[body..body + end]).into_owned());
+        buf.drain(..body + end + 2);
+    }
 }
 
 /// Take the complete window titles out of a byte stream.
@@ -105,7 +132,22 @@ fn take_titles(buf: &mut Vec<u8>) -> Vec<String> {
 /// Two of those write a window title after every command — which is an intent,
 /// which is a workspace label, and one of these tests is about what a *test*
 /// put in that title.
-const ISOLATED: &str = "[terminal]\nshell_mode = \"non_login\"\n";
+const ISOLATED: &str = "shell_mode = \"non_login\"\n";
+
+/// A test's configuration with the isolation folded into it.
+///
+/// Folded rather than appended: a second `[terminal]` header is a table defined
+/// twice, TOML refuses the whole file, and the test runs on the defaults in
+/// silence — which looks exactly like the setting not working.
+fn isolated(config: &str) -> String {
+    match config.find("[terminal]") {
+        Some(at) => {
+            let after = config[at..].find('\n').map_or(config.len(), |n| at + n + 1);
+            format!("{}{ISOLATED}{}", &config[..after], &config[after..])
+        }
+        None => format!("{config}\n[terminal]\n{ISOLATED}"),
+    }
+}
 
 impl Harness {
     fn start() -> Self {
@@ -123,14 +165,7 @@ impl Harness {
             next_config_id()
         ));
         std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
-        std::fs::write(
-            dir.join("dirk").join("config.toml"),
-            // Appended, not prepended: a section header before somebody's
-            // top-level keys would swallow them into it, the file would be
-            // refused, and the test would silently run on the defaults.
-            format!("{config}\n{ISOLATED}"),
-        )
-        .expect("config");
+        std::fs::write(dir.join("dirk").join("config.toml"), isolated(config)).expect("config");
         Self::start_with(Some(dir))
     }
 
@@ -173,9 +208,12 @@ impl Harness {
         // at all. Kept as raw bytes and read back below.
         let titles = Arc::new(Mutex::new(Vec::<String>::new()));
         let seen = Arc::clone(&titles);
+        let images = Arc::new(Mutex::new(Vec::<String>::new()));
+        let drawn = Arc::clone(&images);
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             let mut carry = Vec::new();
+            let mut pictures = Vec::new();
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
                     return;
@@ -185,6 +223,10 @@ impl Harness {
                 for title in take_titles(&mut carry) {
                     seen.lock().unwrap().push(title);
                 }
+                pictures.extend_from_slice(&buf[..n]);
+                for image in take_graphics(&mut pictures) {
+                    drawn.lock().unwrap().push(image);
+                }
             }
         });
 
@@ -193,8 +235,14 @@ impl Harness {
             child,
             screen,
             titles,
+            images,
             master: pair.master,
         }
+    }
+
+    /// Every graphics command dirk has written out.
+    fn images(&self) -> Vec<String> {
+        self.images.lock().unwrap().clone()
     }
 
     /// The last window title dirk asked for, if it asked for one.
@@ -2414,5 +2462,108 @@ fn a_binding_that_could_never_work_is_said_out_loud() {
     assert!(
         said.contains("no action of that name"),
         "a typo passed: {said}"
+    );
+}
+
+/// What a program draws when it draws an image: transmit-and-display, at the
+/// cursor, with a size in cells so the placement can be checked.
+const DRAW: &str = "printf '\\033_Ga=T,f=24,s=1,v=1,c=4,r=2,i=1;AAAA\\033\\\\\\\\'";
+
+#[test]
+fn an_image_a_pane_draws_reaches_the_terminal_dirk_is_in() {
+    // dirk emulates the terminal in each pane, so a program that draws an image
+    // draws it to dirk and it stops there — and vt100 discards it without a
+    // word, so it does not even reach the grid.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    h.send(format!("{DRAW}\r").as_bytes());
+
+    assert!(
+        h.wait_until(START, |h| h.images().iter().any(|c| c.starts_with("a=t,"))),
+        "the image was never given to the terminal: {:?}",
+        h.images()
+    );
+    let sent = h.images();
+    let transmit = sent
+        .iter()
+        .find(|c| c.starts_with("a=t,"))
+        .expect("a transmit");
+    // The bytes the program sent, and the keys dirk does not own, pass through.
+    assert!(
+        transmit.ends_with(";AAAA"),
+        "the payload changed: {transmit}"
+    );
+    assert!(transmit.contains("f=24"), "a key was dropped: {transmit}");
+    assert!(
+        transmit.contains("q=2"),
+        "the terminal could reply: {transmit}"
+    );
+
+    // And it is placed, at the size the program asked for.
+    let put = sent
+        .iter()
+        .find(|c| c.starts_with("a=p,"))
+        .expect("a placement");
+    assert!(put.contains("c=4,r=2"), "the size was lost: {put}");
+    assert!(put.contains("C=1"), "it would move the cursor: {put}");
+}
+
+#[test]
+fn a_still_image_is_not_redrawn_on_every_frame() {
+    // Taking the placements off and putting them back is what a repaint is, so
+    // a frame that has nothing new to say about images has to say nothing —
+    // otherwise a still image flickers for as long as it is on screen.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    h.send(format!("{DRAW}\r").as_bytes());
+    assert!(
+        h.wait_until(START, |h| !h.images().is_empty()),
+        "nothing was drawn"
+    );
+    // Long enough for several ticks, each of which redraws the frame.
+    std::thread::sleep(Duration::from_secs(3));
+    let settled = h.images().len();
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        h.images().len(),
+        settled,
+        "the image was re-placed with nothing to say: {:?}",
+        h.images()
+    );
+}
+
+#[test]
+fn images_can_be_turned_off_and_then_nothing_is_sent() {
+    // A terminal that cannot draw one ignores what dirk sends, so the cost of
+    // being wrong is nothing — but somebody whose terminal does something worse
+    // than ignore it needs the switch.
+    let mut h = Harness::start_with_config("[terminal]\ngraphics = false\n");
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    h.send(format!("{DRAW}\r").as_bytes());
+    // Long enough that it would have been sent by now.
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        h.images().is_empty(),
+        "images were sent after being turned off: {:?}",
+        h.images()
+    );
+    // The pane is otherwise unharmed, which is what taking the escape out of
+    // the stream is for: the shell is still there and still reading, rather
+    // than sitting inside an escape waiting for an end that never comes.
+    //
+    // Twice, not once: the pty echoes what is typed whether or not anything is
+    // reading it, so one is the keystrokes coming back and the second is the
+    // shell having run them. A prompt would be the other way to ask, but its
+    // text is the shell's own -- and `/bin/sh` is bash here and dash in CI.
+    h.send(b"echo still-here\r");
+    assert!(
+        h.wait_until(START, |h| h
+            .rows()
+            .iter()
+            .filter(|r| r.contains("still-here"))
+            .count()
+            >= 2),
+        "the pane stopped reading after an image it was told to ignore\n{}",
+        h.drawn()
     );
 }

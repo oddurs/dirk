@@ -53,6 +53,7 @@ mod copy;
 mod find;
 mod git;
 mod glyph;
+mod graphics;
 mod hit;
 mod hook;
 mod keys;
@@ -963,6 +964,15 @@ struct App {
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
     badging: bool,
+    /// What was last drawn on the screen, so a frame with nothing new to say
+    /// about images says nothing.
+    ///
+    /// Re-placing every frame would make a still image flicker, because taking
+    /// the placements off and putting them back is what a repaint is.
+    shown: Vec<graphics::Shown>,
+    /// dirk's own numbering for images given to the terminal below. Two panes
+    /// each using image 1 are two images.
+    next_image: u32,
     /// The last title posted, so an unchanged one is not sent again.
     ///
     /// A title rewritten every tick makes some terminals flash their tab, and a
@@ -1061,6 +1071,8 @@ impl App {
             },
             badges: std::collections::HashMap::new(),
             badging: false,
+            shown: Vec::new(),
+            next_image: 1,
             titled: None,
             watchers: Vec::new(),
             to_resume: Vec::new(),
@@ -1408,6 +1420,12 @@ impl App {
                 let _ = view.term.draw(|f| self.render(f));
                 view.nav = std::mem::take(&mut self.nav);
                 view.rows = std::mem::take(&mut self.nav_rows);
+                // After the frame, because a placement is drawn where the
+                // cells are and the cells have to be there first.
+                let images = self.redraw_images(view.size());
+                if !images.is_empty() {
+                    view.write(&images);
+                }
                 // A client that has stopped taking frames is gone; keeping it
                 // would block the loop the next time round.
                 view.flush().is_ok()
@@ -1446,6 +1464,13 @@ impl App {
                 return Ok(());
             }
             terminal.draw(|f| self.render(f))?;
+            let images = self.redraw_images(terminal.size().map(Rect::from).unwrap_or_default());
+            if !images.is_empty() {
+                use std::io::Write;
+                let mut out = io::stdout();
+                out.write_all(&images)?;
+                out.flush()?;
+            }
         }
         Ok(())
     }
@@ -1890,6 +1915,107 @@ impl App {
         self.settle();
         self.repost();
         self.retitle();
+    }
+
+    /// The images that belong on the screen now, and the bytes that put them
+    /// there.
+    ///
+    /// Empty when nothing has changed: a still image redrawn every frame is a
+    /// still image that flickers, because taking the placements off and putting
+    /// them back is what a repaint is.
+    fn redraw_images(&mut self, area: Rect) -> Vec<u8> {
+        if !self.cfg.terminal.graphics {
+            return Vec::new();
+        }
+        let mut wanted: Vec<graphics::Shown> = Vec::new();
+        let mut send = Vec::new();
+        let rects = self.visible_rects();
+        let ids: Vec<mux::PaneId> = match self.session.focused_workspace() {
+            Some(ws) => ws.rects(area).into_iter().map(|(id, _)| id).collect(),
+            None => Vec::new(),
+        };
+        for (i, pane_id) in ids.into_iter().enumerate() {
+            let Some(rect) = rects.get(i).copied() else {
+                continue;
+            };
+            let ruled = self
+                .session
+                .focused_workspace()
+                .and_then(|ws| ws.pane(pane_id))
+                .is_some_and(|p| self.cfg.ui.ruled(p.label.is_some()));
+            let inner = mux::session::content_of(ruled, rect);
+            let Some(pane) = self
+                .session
+                .focused_workspace()
+                .and_then(|ws| ws.pane(pane_id))
+            else {
+                continue;
+            };
+            let top = match pane.term.lock() {
+                Ok(mut t) => mux::pty::top_line(&mut t),
+                Err(_) => continue,
+            };
+            let Ok(mut store) = pane.graphics.lock() else {
+                continue;
+            };
+            // Anything older than the whole scrollback is a picture of nothing.
+            store.forget_before(top.saturating_sub(self.cfg.scrollback));
+            for place in store.places().to_vec() {
+                // The line it is anchored to, as a row on the screen now. A
+                // placement above or below the visible window is not drawn --
+                // and is not forgotten either, because scrolling back to it
+                // should bring it with the text.
+                let Some(row) = place.line.checked_sub(top) else {
+                    continue;
+                };
+                if row >= usize::from(inner.height) || place.col >= inner.width {
+                    continue;
+                }
+                let id = match store.image_mut(place.image).and_then(|i| i.sent) {
+                    Some(id) => id,
+                    None => {
+                        let id = self.next_image;
+                        self.next_image += 1;
+                        let Some(image) = store.image_mut(place.image) else {
+                            continue;
+                        };
+                        image.sent = Some(id);
+                        send.extend_from_slice(&graphics::transmit(image, id));
+                        id
+                    }
+                };
+                // Clipped to the pane, so an image in a narrow split does not
+                // spill over the boundary onto its neighbour.
+                let cells = place.cells.map(|(c, r)| {
+                    (
+                        c.min(inner.width - place.col),
+                        r.min(inner.height - row as u16),
+                    )
+                });
+                wanted.push(graphics::Shown {
+                    id,
+                    row: inner.y + row as u16,
+                    col: inner.x + place.col,
+                    cells,
+                });
+            }
+        }
+        if wanted == self.shown && send.is_empty() {
+            return Vec::new();
+        }
+        self.shown = wanted.clone();
+        let mut out = send;
+        out.extend_from_slice(&graphics::clear());
+        for shown in &wanted {
+            // The terminal draws where the cursor is, so the cursor is moved
+            // and put back: dirk has already decided where it belongs.
+            out.extend_from_slice(
+                format!("\x1b7\x1b[{};{}H", shown.row + 1, shown.col + 1).as_bytes(),
+            );
+            out.extend_from_slice(&graphics::put(shown));
+            out.extend_from_slice(b"\x1b8");
+        }
+        out
     }
 
     /// Say what the terminal dirk is running in should be called.
