@@ -325,7 +325,7 @@ pub struct Config {
     pub clipboard: Vec<String>,
     /// Keys, by the name of the thing they do. Anything not named here keeps
     /// the key it ships with.
-    pub keys: std::collections::BTreeMap<String, String>,
+    pub keys: std::collections::BTreeMap<String, Bind>,
     pub nav: Nav,
     /// Programs that run something else and are not it.
     ///
@@ -700,9 +700,9 @@ impl Config {
     /// Which key runs what, after the file has had its say.
     pub fn keys(&self) -> crate::action::Keys {
         let mut keys = crate::action::Keys::default();
-        for (name, key) in &self.keys {
+        for (name, bind) in &self.keys {
             if let Some(action) = crate::action::Action::named(name) {
-                keys.bind(action, key);
+                keys.bind_all(action, &bind.all());
             }
         }
         keys
@@ -768,6 +768,28 @@ impl Default for Notify {
         Self {
             enabled: true,
             min_interval_ms: 60_000,
+        }
+    }
+}
+
+/// One key, or several ways of reaching the same action.
+///
+/// A bare string is what every binding was before, and what most of them still
+/// want to be. A list is for an action you want both after the prefix and on a
+/// chord of its own: the prefix form is the one somebody reading the manual
+/// finds, and the direct chord is the one their hands learn.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Bind {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Bind {
+    pub fn all(&self) -> Vec<String> {
+        match self {
+            Bind::One(k) => vec![k.clone()],
+            Bind::Many(k) => k.clone(),
         }
     }
 }
@@ -1282,8 +1304,56 @@ pub fn home() -> PathBuf {
 ///
 /// Separate from reading it because the same complaints are owed to whoever
 /// asked, whether that is a terminal at startup or a client that said `reload`.
+/// Chords something else on the machine has already claimed.
+///
+/// `ctrl+alt` is the one modifier family terminals leave alone, which is why it
+/// is the family to suggest — but a handful of them belong to the desktop, and
+/// a binding the terminal never receives is one that appears not to have worked
+/// with nothing to say why. Named here rather than silently, because dirk
+/// cannot detect it and the person choosing can.
+const TAKEN: &[(&str, &str)] = &[
+    ("ctrl+alt+t", "the terminal launcher on Ubuntu and Fedora"),
+    ("ctrl+alt+l", "the lock screen on KDE"),
+    ("ctrl+alt+a", "the attention window on KDE"),
+    ("ctrl+alt+s", "Konsole"),
+    ("ctrl+alt+u", "Konsole"),
+    ("ctrl+alt+left", "workspace switching on GNOME, and Ghostty"),
+    (
+        "ctrl+alt+right",
+        "workspace switching on GNOME, and Ghostty",
+    ),
+    ("ctrl+alt+up", "workspace switching on GNOME, and Ghostty"),
+    ("ctrl+alt+down", "workspace switching on GNOME, and Ghostty"),
+];
+
 pub fn complaints(cfg: &Config) -> Vec<String> {
     let mut out = Vec::new();
+    for (name, bind) in &cfg.keys {
+        if crate::action::Action::named(name).is_none() {
+            out.push(format!("keys.{name:?}: no action of that name"));
+            continue;
+        }
+        for key in bind.all() {
+            let lower = key.to_lowercase();
+            if crate::action::Binding::parse(&key).is_none() {
+                out.push(format!("keys.{name}: {key:?} is not a key dirk can read"));
+                continue;
+            }
+            if let Some((_, who)) = TAKEN.iter().find(|(c, _)| *c == lower) {
+                out.push(format!(
+                    "keys.{name}: {key:?} is usually taken by {who}, so dirk may never see it"
+                ));
+            }
+            // Two families that reach dirk and mean something else to whatever
+            // is in the pane. `ctrl+j` is Enter to every shell and editor.
+            if matches!(lower.as_str(), "ctrl+j" | "ctrl+m" | "ctrl+i" | "ctrl+h") {
+                out.push(format!(
+                    "keys.{name}: {key:?} is what a terminal sends for a key programs \
+                     already use; a pane will never see that key again"
+                ));
+            }
+        }
+    }
     if !matches!(cfg.ui.pane_rules.as_str(), "auto" | "always" | "off") {
         out.push(format!(
             "ui.pane_rules: {:?} is not auto, always or off; using auto",

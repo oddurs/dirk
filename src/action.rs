@@ -150,38 +150,98 @@ impl Action {
 
 /// Which key runs what, after the configuration has had its say.
 #[derive(Debug, Clone)]
-pub struct Keys(Vec<(String, Action)>);
+pub struct Keys(Vec<(Binding, Action)>);
+
+/// One way to reach an action.
+///
+/// Two kinds, because they are answered at different moments: one after the
+/// prefix has been pressed, and one instead of it. An action can have both, and
+/// usually should — the prefix form is the one somebody reading the manual will
+/// find, and the direct chord is the one their hands learn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Binding {
+    /// A key pressed after the prefix. Written bare — `n` — or as `prefix+n`.
+    AfterPrefix(String),
+    /// A chord pressed on its own, which dirk takes before the pane sees it.
+    Direct(crossterm::event::KeyEvent),
+}
+
+impl Binding {
+    /// Read one from a configuration file.
+    ///
+    /// A bare word is a key after the prefix, which is what every binding was
+    /// before this and what most of them still want to be.
+    pub fn parse(text: &str) -> Option<Binding> {
+        if let Some(rest) = text.strip_prefix("prefix+") {
+            return (!rest.is_empty()).then(|| Binding::AfterPrefix(rest.to_string()));
+        }
+        if !text.contains('+') {
+            return (!text.is_empty()).then(|| Binding::AfterPrefix(text.to_string()));
+        }
+        crate::keys::named(text).map(Binding::Direct)
+    }
+
+    /// How it is written, for the palette and the manual.
+    pub fn shown(&self) -> String {
+        match self {
+            Binding::AfterPrefix(k) => k.clone(),
+            Binding::Direct(k) => crate::keys::spell(*k),
+        }
+    }
+}
 
 impl Default for Keys {
     fn default() -> Self {
         Keys(
             Action::ALL
                 .iter()
-                .map(|a| (a.default_key().to_string(), *a))
+                .map(|a| (Binding::AfterPrefix(a.default_key().to_string()), *a))
                 .collect(),
         )
     }
 }
 
 impl Keys {
-    /// Rebind one. The old key for that action goes: an action reachable from
-    /// two keys, one of which you did not ask for, is how a rebind appears not
-    /// to have worked.
-    pub fn bind(&mut self, action: Action, key: &str) {
-        self.0.retain(|(k, a)| *a != action && k != key);
-        self.0.push((key.to_string(), action));
+    /// Rebind one to every way of reaching it that was named.
+    ///
+    /// The action's old bindings go first: an action reachable from a key you
+    /// did not ask for is how a rebind appears not to have worked. Whatever
+    /// else held one of the new bindings loses it, for the same reason.
+    pub fn bind_all(&mut self, action: Action, keys: &[String]) {
+        let want: Vec<Binding> = keys.iter().filter_map(|k| Binding::parse(k)).collect();
+        self.0.retain(|(b, a)| *a != action && !want.contains(b));
+        self.0.extend(want.into_iter().map(|b| (b, action)));
     }
 
+    /// The action reached by this key after the prefix.
     pub fn action(&self, key: &str) -> Option<Action> {
-        self.0.iter().find(|(k, _)| k == key).map(|(_, a)| *a)
+        self.0
+            .iter()
+            .find(|(b, _)| *b == Binding::AfterPrefix(key.to_string()))
+            .map(|(_, a)| *a)
+    }
+
+    /// The action reached by this chord with no prefix at all.
+    ///
+    /// Compared on the code and the modifiers only: a release is not a press,
+    /// and crossterm reports a `state` that varies with the terminal's keyboard
+    /// protocol and would make a binding work on some of them.
+    pub fn direct(&self, k: crossterm::event::KeyEvent) -> Option<Action> {
+        self.0
+            .iter()
+            .find(|(b, _)| match b {
+                Binding::Direct(want) => want.code == k.code && want.modifiers == k.modifiers,
+                Binding::AfterPrefix(_) => false,
+            })
+            .map(|(_, a)| *a)
     }
 
     /// What to press for this, for the palette and the documentation.
-    pub fn key(&self, action: Action) -> Option<&str> {
+    pub fn key(&self, action: Action) -> Option<String> {
         self.0
             .iter()
             .find(|(_, a)| *a == action)
-            .map(|(k, _)| k.as_str())
+            .map(|(b, _)| b.shown())
     }
 }
 
@@ -205,6 +265,56 @@ mod tests {
     }
 
     #[test]
+    fn a_binding_is_after_the_prefix_unless_it_says_otherwise() {
+        // A bare word is what every binding was before this, and what most of
+        // them still want to be.
+        assert_eq!(Binding::parse("n"), Some(Binding::AfterPrefix("n".into())));
+        assert_eq!(
+            Binding::parse("prefix+n"),
+            Some(Binding::AfterPrefix("n".into()))
+        );
+        assert!(matches!(
+            Binding::parse("ctrl+alt+n"),
+            Some(Binding::Direct(_))
+        ));
+        assert_eq!(Binding::parse("ctrl+nonsense"), None);
+        assert_eq!(Binding::parse(""), None);
+    }
+
+    #[test]
+    fn an_action_can_be_reached_both_ways_at_once() {
+        // The prefix form is the one somebody reading the manual finds; the
+        // direct chord is the one their hands learn. Wanting both is the point.
+        let mut keys = Keys::default();
+        keys.bind_all(
+            Action::NewTab,
+            &["prefix+c".to_string(), "ctrl+alt+c".to_string()],
+        );
+        assert_eq!(keys.action("c"), Some(Action::NewTab));
+        let chord = crate::keys::named("ctrl+alt+c").unwrap();
+        assert_eq!(keys.direct(chord), Some(Action::NewTab));
+        // And a bare key is not a chord: the prefix form must not fire on its
+        // own, or every letter typed into a pane would be a command.
+        let bare = crate::keys::named("c").unwrap();
+        assert_eq!(keys.direct(bare), None);
+    }
+
+    #[test]
+    fn rebinding_takes_the_old_ways_of_reaching_it_away() {
+        // An action reachable from a key you did not ask for is how a rebind
+        // appears not to have worked.
+        let mut keys = Keys::default();
+        let was = keys.key(Action::NewTab).expect("a default");
+        keys.bind_all(Action::NewTab, &["ctrl+alt+c".to_string()]);
+        assert_eq!(keys.action(&was), None, "the old key still reaches it");
+        assert_eq!(
+            keys.key(Action::NewTab).as_deref(),
+            Some("ctrl+alt+c"),
+            "a chord is shown the way it would be typed back"
+        );
+    }
+
+    #[test]
     fn no_two_actions_ship_bound_to_the_same_key() {
         // The second one would be unreachable, and nothing would say so.
         let keys = Keys::default();
@@ -223,7 +333,7 @@ mod tests {
         // An action reachable from two keys, one of which you did not ask for,
         // is how a rebind looks like it did not work.
         let mut keys = Keys::default();
-        keys.bind(Action::Quit, "Q");
+        keys.bind_all(Action::Quit, &["Q".to_string()]);
         assert_eq!(keys.action("Q"), Some(Action::Quit));
         assert_eq!(keys.action("q"), None, "the old key still works");
     }
@@ -233,7 +343,7 @@ mod tests {
         // Two actions on one key means one of them is unreachable, and which
         // one is an accident of ordering.
         let mut keys = Keys::default();
-        keys.bind(Action::Quit, "n");
+        keys.bind_all(Action::Quit, &["n".to_string()]);
         assert_eq!(keys.action("n"), Some(Action::Quit));
         assert_eq!(
             keys.key(Action::NewWorkspace),

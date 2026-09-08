@@ -2345,3 +2345,74 @@ fn a_split_can_be_resized_from_the_keyboard() {
         h.drawn()
     );
 }
+
+#[test]
+fn a_chord_can_reach_an_action_with_no_prefix_at_all() {
+    // The prefix form is the one somebody reading the manual finds; the direct
+    // chord is the one their hands learn. Wanting both is the point.
+    let mut h = Harness::start_with_config(
+        "[keys]\n\"pane.split-cols\" = [\"prefix+v\", \"ctrl+alt+d\"]\n\
+         [ui]\npane_rules = \"always\"\n",
+    );
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    assert_eq!(rules(&h), 1, "one pane to start with\n{}", h.drawn());
+
+    // The chord, with nothing before it. `ctrl+alt+d` is ESC then ctrl-D.
+    h.send(b"\x1b\x04");
+    assert!(
+        h.wait_until(START, |h| rules(h) == 2),
+        "the chord did not reach the action\n{}",
+        h.drawn()
+    );
+
+    // And the prefix form still works, because an action can have both.
+    h.send(b"\x00v");
+    assert!(
+        h.wait_until(START, |h| rules(h) == 3),
+        "the prefix form stopped working\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn a_binding_that_could_never_work_is_said_out_loud() {
+    // dirk cannot detect a chord the desktop ate, and the person choosing can.
+    // Silence there is a binding that appears not to have worked with nothing
+    // to say why.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .arg("--keys")
+        .env("XDG_CONFIG_HOME", {
+            let dir = std::env::temp_dir().join("dirk-badchord").join(format!(
+                "{}-{}",
+                std::process::id(),
+                next_config_id()
+            ));
+            std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+            std::fs::write(
+                dir.join("dirk").join("config.toml"),
+                "[keys]\n\"pane.zoom\" = \"ctrl+alt+t\"\n\"pane.close\" = \"ctrl+j\"\n\
+                 \"nav.focus\" = \"ctrl+bogus\"\n\"no.such\" = \"x\"\n",
+            )
+            .expect("config");
+            dir
+        })
+        .output()
+        .expect("run dirk");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("terminal launcher"),
+        "a taken chord passed: {said}"
+    );
+    assert!(
+        said.contains("programs already use"),
+        "ctrl+j passed: {said}"
+    );
+    assert!(
+        said.contains("not a key dirk can read"),
+        "nonsense passed: {said}"
+    );
+    assert!(
+        said.contains("no action of that name"),
+        "a typo passed: {said}"
+    );
+}

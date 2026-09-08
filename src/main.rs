@@ -209,7 +209,7 @@ fn main() -> io::Result<()> {
                 for a in crate::action::Action::ALL {
                     out.push_str(&format!(
                         "  {:<4} {:<22} {}\n",
-                        keys.key(*a).unwrap_or("--"),
+                        keys.key(*a).unwrap_or_else(|| "--".into()),
                         a.name(),
                         a.title()
                     ));
@@ -3522,6 +3522,12 @@ impl App {
             self.prefix = true;
             self.note("prefix");
             return;
+        }
+        // A chord bound with no prefix, taken before the pane sees it. Last,
+        // so it cannot reach past a mode that is holding the keyboard — a
+        // direct chord typed into the palette's filter is a letter.
+        if let Some(action) = self.keys.direct(k) {
+            return self.perform(action);
         }
         self.send_key(k);
     }
