@@ -244,7 +244,7 @@ Local and several saved machines in one nav, one agent list across all of them,
 
 ## v1.0 — Production
 
-`#######···` 65% · 20 of 31 done · due 2027-11-01
+`#######···` 68% · 21 of 31 done · due 2027-11-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -258,7 +258,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
 - [ ] `0176` dirk does not build for aarch64 Linux <sup>bug · p0 · packaging</sup>
-- [ ] `0177` CI never builds what the release ships <sup>chore · p1 · packaging</sup>
 
 ### in progress
 
@@ -289,6 +288,7 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0151` The roadmap page is a wall of text <sup>feature · p1 · web</sup>
 - [x] `0152` The site shows one screen, at one width <sup>feature · p2 · web</sup>
 - [x] `0153` The changelog is one scroll with no way through it <sup>feature · p3 · web</sup>
+- [x] `0177` CI never builds what the release ships <sup>chore · p1 · packaging</sup>
 - [x] `0188` A finished milestone still says it is open <sup>bug · p1 · packaging</sup>
 
 ## Unscheduled

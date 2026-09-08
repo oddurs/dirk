@@ -43,6 +43,59 @@ jobs:
       - run: cargo test
       - run: cargo build --release
 
+  # Everything a release ships, compiled on a pull request rather than on a tag.
+  #
+  # The tag is what triggers a release build, so a target nobody checks is a
+  # target that fails partway through publishing. That is not hypothetical:
+  # dirk stopped compiling for aarch64 Linux the day the window title landed and
+  # nothing noticed, because CI built one target and the release builds five.
+  #
+  # `check` rather than `build`: the question is whether the code is valid for
+  # the target, which needs its standard library and no linker.
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.read.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+      # Read out of release.yml rather than written here. Two lists is one list
+      # and a copy of it, and the copy is what goes stale -- which is the whole
+      # failure this job exists to prevent.
+      - id: read
+        run: |
+          list=$(sed -n 's/^ *- { *os:[^,]*, *target: *\([a-z0-9_-]*\).*/\1/p' \
+            .github/workflows/release.yml | sort -u | jq -R . | jq -sc .)
+          count=$(printf '%s' "$list" | jq length)
+          # Loudly rather than quietly: a release.yml somebody reformatted would
+          # otherwise leave this job checking nothing at all and passing.
+          if [ "$count" -lt 2 ]; then
+            echo "::error::found $count targets in release.yml; the matrix moved"
+            exit 1
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "checking $count targets: $list"
+
+  cross:
+    needs: targets
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.target }}
+      # The binary, which is what is shipped. Not `--all-targets`: the test
+      # binaries are not in the tarball, and cross-compiling them would put
+      # the dev-dependencies in the way of a question about the program.
+      - run: cargo check --target ${{ matrix.target }}
+
   # The declared rust-version is a promise; this checks it.
   msrv:
     runs-on: ubuntu-latest
