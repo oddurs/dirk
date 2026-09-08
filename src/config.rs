@@ -317,6 +317,7 @@ pub struct Config {
     pub notify: Notify,
     pub server: Server,
     pub terminal: Terminal,
+    pub ui: Ui,
     pub session: SessionCfg,
     pub sound: Sound,
     /// What to pipe a selection into. Empty means whatever this platform is
@@ -771,6 +772,51 @@ impl Default for Notify {
     }
 }
 
+/// Chrome that is neither the nav nor the terminal inside a pane.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ui {
+    /// `auto`, `always` or `off`.
+    ///
+    /// A rule, not a border. Three sides of a box only repeat what the
+    /// neighbouring pane's own edge already says, and the fourth is a row of
+    /// terminal nobody gets to use — so dirk draws the top line and nothing
+    /// else, and that line carries the label and the focus mark.
+    ///
+    /// `auto` draws one where there is something to say: a pane with a label,
+    /// which is how a five-pane board says which panel is which. `always`
+    /// draws one on every pane, which is what tells two shells side by side
+    /// apart and which pane has the keyboard. `off` draws none.
+    pub pane_rules: String,
+    /// Whether dirk asks the terminal for mouse events at all.
+    ///
+    /// All or nothing. A half-captured mouse is a mode to remember, and the
+    /// reason dirk captures at all is that it can then decide per pane whether
+    /// the program inside wanted the click. Off gives the outer terminal its
+    /// own selection back, and everything a click reaches has a key.
+    pub mouse: bool,
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            pane_rules: "auto".into(),
+            mouse: true,
+        }
+    }
+}
+
+impl Ui {
+    /// Should this pane give its top row to a rule?
+    pub fn ruled(&self, labelled: bool) -> bool {
+        match self.pane_rules.as_str() {
+            "always" => true,
+            "off" => false,
+            _ => labelled,
+        }
+    }
+}
+
 /// How a pane's shell is started, and where.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1077,6 +1123,7 @@ impl Default for Config {
             notify: Notify::default(),
             server: Server::default(),
             terminal: Terminal::default(),
+            ui: Ui::default(),
             session: SessionCfg::default(),
             sound: Sound::default(),
             clipboard: Vec::new(),
@@ -1175,6 +1222,12 @@ pub fn home() -> PathBuf {
 /// asked, whether that is a terminal at startup or a client that said `reload`.
 pub fn complaints(cfg: &Config) -> Vec<String> {
     let mut out = Vec::new();
+    if !matches!(cfg.ui.pane_rules.as_str(), "auto" | "always" | "off") {
+        out.push(format!(
+            "ui.pane_rules: {:?} is not auto, always or off; using auto",
+            cfg.ui.pane_rules
+        ));
+    }
     if !matches!(
         cfg.terminal.shell_mode.as_str(),
         "auto" | "login" | "non_login"
@@ -1420,6 +1473,7 @@ impl Config {
         // Cached beside the shell and for the same reason: both take effect on
         // the next pane, which is what changing either of them means.
         session.terminal = next.terminal.clone();
+        session.ui = next.ui.clone();
         session.set_scrollback(next.scrollback);
         *current = next;
         Ok(said)

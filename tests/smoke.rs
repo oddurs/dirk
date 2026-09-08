@@ -2019,3 +2019,124 @@ fn a_note_never_costs_the_bar_its_way_out() {
         );
     }
 }
+
+/// How many pane rules are on the screen.
+///
+/// Counted as runs rather than characters: two panes side by side put both of
+/// their rules on one row, and splitting makes each of them shorter — so the
+/// total length goes *down* while the number of rules goes up.
+fn rules(h: &Harness) -> usize {
+    h.rows()
+        .iter()
+        .map(|row| {
+            row.split(|c| c != '─')
+                .filter(|run| run.chars().count() >= 5)
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn every_pane_can_carry_a_rule_that_says_which_one_has_the_keyboard() {
+    // Two shells side by side have no visible boundary: the grids abut, and
+    // nothing says where one ends or which has the keyboard. A rule rather than
+    // a border — three sides of a box only repeat what the neighbour's own edge
+    // already says.
+    let mut h = Harness::start_with_config("[ui]\npane_rules = \"always\"\n");
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+
+    assert_eq!(rules(&h), 1, "one pane drew no rule\n{}", h.drawn());
+    h.send(b"\x00|");
+    assert!(
+        h.wait_until(START, |h| rules(h) == 2),
+        "a split of two shells drew one rule between them\n{}",
+        h.drawn()
+    );
+    drop(h);
+
+    // And under the default nothing changes: a rule is for a pane with
+    // something to say, which is a board's panel.
+    let mut plain = Harness::start();
+    assert!(
+        plain.wait_for(READY, START),
+        "never started\n{}",
+        plain.drawn()
+    );
+    assert_eq!(
+        rules(&plain),
+        0,
+        "an unlabelled pane drew a rule\n{}",
+        plain.drawn()
+    );
+    plain.send(b"\x00|");
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert_eq!(
+        rules(&plain),
+        0,
+        "splitting drew a rule under the default\n{}",
+        plain.drawn()
+    );
+}
+
+/// Which column the pane focus mark is in, so a click can be seen to have moved
+/// it. Boards are not usable for this: one whose program is not installed is
+/// dropped at startup, so which rows exist depends on the machine.
+fn focus_mark(h: &Harness) -> Option<usize> {
+    h.rows().iter().find_map(|row| row.find('\u{258A}'))
+}
+
+#[test]
+fn the_mouse_can_be_left_to_the_terminal_that_owns_it() {
+    // All or nothing. dirk captures so it can decide per pane whether the
+    // program inside wanted the click; declining hands the outer terminal its
+    // own selection back, and everything a click reaches has a key.
+    let ruled = "[ui]\npane_rules = \"always\"\n";
+    let mut off = Harness::start_with_config(&format!("{ruled}mouse = false\n"));
+    assert!(off.wait_for(READY, START), "never started\n{}", off.drawn());
+    off.send(b"\x00|");
+    assert!(
+        off.wait_until(START, |h| rules(h) == 2),
+        "the split never drew\n{}",
+        off.drawn()
+    );
+    let was = focus_mark(&off).expect("a focused pane");
+
+    // A click into the other pane does nothing. Dropped rather than merely not
+    // asked for: the setting has to hold when something else turned reporting
+    // on.
+    off.click(40, 3);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        focus_mark(&off),
+        Some(was),
+        "a click reached dirk after the mouse was turned off\n{}",
+        off.drawn()
+    );
+
+    // And the nav is still reachable, which is the promise that makes turning
+    // it off reasonable.
+    off.send(b"\x00w");
+    assert!(
+        off.wait_until(START, |h| h.drawn().contains('\u{25B8}')),
+        "the nav could not be reached without a mouse\n{}",
+        off.drawn()
+    );
+    drop(off);
+
+    // The same click, with the mouse on, moves the focus.
+    let mut on = Harness::start_with_config(ruled);
+    assert!(on.wait_for(READY, START), "never started\n{}", on.drawn());
+    on.send(b"\x00|");
+    assert!(
+        on.wait_until(START, |h| rules(h) == 2),
+        "the split never drew\n{}",
+        on.drawn()
+    );
+    let was = focus_mark(&on).expect("a focused pane");
+    on.click(40, 3);
+    assert!(
+        on.wait_until(START, |h| focus_mark(h) != Some(was)),
+        "a click did nothing with the mouse on\n{}",
+        on.drawn()
+    );
+}
