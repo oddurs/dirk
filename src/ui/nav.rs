@@ -26,7 +26,7 @@
 //!  ▾ dirk
 //!    * 1 main ↑6 ↓1                2m
 //!        Building the mux core
-//!  └  · 2 feat/packaging-manifests ⑂  1d
+//!  └  · 2 feat/packaging-manifests ⑂  1d ▸
 //!          Reading the vt100 grid
 //!    + workspace
 //!    n new  ·  o project
@@ -39,6 +39,12 @@
 //! Three lists of different things, and the order they appear in is the
 //! argument: **layouts** are places you go, **spaces** are where work lives, and
 //! **agents** are what is asking for you. Attention flows down the column.
+//!
+//! A space carries a disclosure at its right edge when there is something under
+//! it, and nothing at all when there is not -- so a folded row says whether
+//! opening it would show you anything, rather than making that a thing you try.
+//! It is at the right because the left is where the state and the number are,
+//! which is where the eye starts.
 //!
 //! A worktree's spaces hang off the checkout the others hang off, one level in
 //! and off a connector. They are not peers of the spaces in the repository
@@ -748,6 +754,12 @@ pub fn render(
                     },
                 );
             }
+            // Before the row is drawn, not after: `HitMap::at` takes the last
+            // match, so this is the fallback and anything the row registers on
+            // top of it -- a disclosure, a button -- wins.
+            if let Some(t) = row.target() {
+                hits.push(full, t);
+            }
             draw(
                 buf,
                 hits,
@@ -762,9 +774,6 @@ pub fn render(
                     active: nav.active,
                 },
             );
-            if let Some(t) = row.target() {
-                hits.push(full, t);
-            }
         }
 
         // A section with more below it says so on its own last line, rather
@@ -1011,6 +1020,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             let repo = session.projects.get(p).and_then(|x| x.repo_of(wi));
             space_row(
                 buf,
+                hits,
                 cx,
                 Space {
                     ws,
@@ -1036,6 +1046,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             let repo = session.projects.get(p).and_then(|x| x.repo_of(wi));
             space_row(
                 buf,
+                hits,
                 cx,
                 Space {
                     ws,
@@ -1242,7 +1253,7 @@ struct Space<'a> {
     hang: Option<Hang>,
 }
 
-fn space_row(buf: &mut Buffer, cx: &Ctx, s: Space) {
+fn space_row(buf: &mut Buffer, hits: &mut HitMap, cx: &Ctx, s: Space) {
     let Space {
         ws,
         p,
@@ -1289,11 +1300,41 @@ fn space_row(buf: &mut Buffer, cx: &Ctx, s: Space) {
     let state = state_of(ws);
     let glyph = cx.g.text(G::state(state));
 
+    // What opening it would show you, at the right edge rather than the left.
+    // The left is where the state and the number are -- where the eye starts --
+    // and a disclosure there competes with the two things that matter more.
+    //
+    // Nothing at all when there is nothing under it. A dimmed mark is still a
+    // mark, and the whole point is that a folded row says whether opening it
+    // would show you anything.
+    let holds = ws.tabs.len() > 1 || ws.panes().len() > 1;
+    let fold_w = match holds {
+        false => 0,
+        true => {
+            let mark = cx.g.text(match ws.expanded {
+                true => G::Expanded,
+                false => G::Collapsed,
+            });
+            let at = inner.right().saturating_sub(cells(mark));
+            write_str(buf, at, y, mark, THEME.rule_strong(), cells(mark));
+            hits.push(
+                Rect {
+                    x: at,
+                    y,
+                    width: cells(mark),
+                    height: 1,
+                },
+                Target::SpaceFold { p, w: wi },
+            );
+            cells(mark) + 1
+        }
+    };
+
     let age = since(ws.touched.elapsed());
     let age_w = cells(&age);
     write_str(
         buf,
-        inner.right().saturating_sub(age_w),
+        inner.right().saturating_sub(age_w + fold_w),
         y,
         &age,
         THEME.faint(),
@@ -1318,11 +1359,11 @@ fn space_row(buf: &mut Buffer, cx: &Ctx, s: Space) {
         );
         x += nest(cx.g, true);
     }
-    x += match (ws.panes().len() > 1, ws.expanded) {
-        (false, _) => cx.g.cells(G::Collapsed),
-        (true, false) => write_str(buf, x, y, cx.g.text(G::Collapsed), THEME.rule_strong(), w),
-        (true, true) => write_str(buf, x, y, cx.g.text(G::Expanded), THEME.rule_strong(), w),
-    };
+    // The disclosure used to be drawn here and is now at the right edge. The
+    // column it took stays empty rather than closing up: it is what sets a
+    // space in from its project, and it is the project's own mark that decides
+    // how wide that is.
+    x += cx.g.cells(G::Collapsed);
     x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
     x += write_str(buf, x, y, glyph, THEME.state_style(state), w);
     x += write_str(buf, x, y, " ", THEME.text(), w);
@@ -1352,7 +1393,7 @@ fn space_row(buf: &mut Buffer, cx: &Ctx, s: Space) {
     };
     let left = w
         .saturating_sub(x - inner.x)
-        .saturating_sub(age_w + 1 + mark + track_w) as usize;
+        .saturating_sub(age_w + 1 + mark + track_w + fold_w) as usize;
     x += write_str(
         buf,
         x,

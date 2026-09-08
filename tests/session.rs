@@ -2124,3 +2124,79 @@ fn a_worktrees_space_hangs_off_the_checkout_the_others_hang_off() {
     let _ = std::fs::remove_dir_all(&at);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn a_folded_row_says_whether_opening_it_would_show_you_anything() {
+    // A row with children said so only by having them, and only once opened,
+    // so the disclosure was a thing you tried rather than a thing you read.
+    let session = unique("disclose");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    // One space with one pane: nothing to open, so nothing to say about it.
+    // A dimmed mark would still be a mark.
+    let row_of = |c: &Client, n: &str| {
+        let rows = c.rows();
+        let from = rows
+            .iter()
+            .position(|line| line.trim_start().starts_with("spaces"))?;
+        rows.iter()
+            .enumerate()
+            .skip(from)
+            .find(|(_, line)| {
+                line.find(n)
+                    .is_some_and(|at| line[..at].trim().is_empty() && line[at..].starts_with(n))
+            })
+            .map(|(r, line)| (r, line.clone()))
+    };
+    let (_, alone) = row_of(&client, "1 ").expect("the space's row");
+    assert!(
+        !alone.contains('▸') && !alone.contains('▾'),
+        "a space with nothing under it carried a disclosure: |{alone}|"
+    );
+
+    // Give it a second pane, and the mark appears at the right edge.
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let (ok, out) = ask(&session, &["pane", "split", &pane, "cols"]);
+    assert!(ok, "split failed: {out}");
+    assert!(
+        client.wait_until(START, |c| row_of(c, "1 ")
+            .is_some_and(|(_, line)| line.contains('▸') || line.contains('▾'))),
+        "a space with two panes said nothing about them\n{}",
+        client.drawn()
+    );
+    let (row, line) = row_of(&client, "1 ").expect("the space's row");
+    let mark = line
+        .char_indices()
+        .filter(|(_, c)| *c == '▸' || *c == '▾')
+        .map(|(at, _)| line[..at].chars().count())
+        .next_back()
+        .expect("the disclosure");
+    assert!(
+        mark > line.chars().count() / 2,
+        "the disclosure is not at the right edge: column {mark} of {}",
+        line.chars().count()
+    );
+
+    // And clicking it opens the row, rather than being a click you have to
+    // guess at.
+    let mut client = client;
+    client.click(mark as u16, row as u16);
+    assert!(
+        client.wait_until(START, |c| row_of(c, "1 ")
+            .is_some_and(|(_, line)| line.contains('▾'))),
+        "clicking the mark did not open the row\n{}",
+        client.drawn()
+    );
+    client.click(mark as u16, row as u16);
+    assert!(
+        client.wait_until(START, |c| row_of(c, "1 ")
+            .is_some_and(|(_, line)| line.contains('▸'))),
+        "clicking it again did not close the row\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+}
