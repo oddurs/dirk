@@ -244,7 +244,7 @@ Local and several saved machines in one nav, one agent list across all of them,
 
 ## v1.0 — Production
 
-`#######···` 68% · 21 of 31 done · due 2027-11-01
+`########··` 71% · 22 of 31 done · due 2027-11-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -257,7 +257,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0047` Theme configuration <sup>feature · p2 · config</sup>
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
-- [ ] `0176` dirk does not build for aarch64 Linux <sup>bug · p0 · packaging</sup>
 
 ### in progress
 
@@ -288,16 +287,16 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0151` The roadmap page is a wall of text <sup>feature · p1 · web</sup>
 - [x] `0152` The site shows one screen, at one width <sup>feature · p2 · web</sup>
 - [x] `0153` The changelog is one scroll with no way through it <sup>feature · p3 · web</sup>
+- [x] `0176` dirk does not build for aarch64 Linux <sup>bug · p0 · packaging</sup>
 - [x] `0177` CI never builds what the release ships <sup>chore · p1 · packaging</sup>
 - [x] `0188` A finished milestone still says it is open <sup>bug · p1 · packaging</sup>
 
 ## Unscheduled
 
-`###·······` 30% · 3 of 10 done
+`####······` 40% · 4 of 10 done
 
 ### backlog
 
-- [ ] `0180` Two hand-rolled gethostname wrappers <sup>chore · p3 · config</sup>
 - [ ] `0181` The hot path runs the diagnostic path <sup>chore · p3 · perf</sup>
 - [ ] `0182` main.rs is five thousand lines and one unit test <sup>chore · p2 · mux</sup>
 - [ ] `0183` Every enum setting is a string, checked twice <sup>chore · p3 · config</sup>
@@ -309,5 +308,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 - [x] `0178` An abandoned wait leaks a thread and a socket <sup>bug · p2 · api</sup>
 - [x] `0179` The manual page has fallen behind the commands <sup>docs · p2 · docs</sup>
+- [x] `0180` Two hand-rolled gethostname wrappers <sup>chore · p3 · config</sup>
 - [x] `0184` The smoke suite's git fixture trusts the environment <sup>bug · p2 · mux</sup>
 

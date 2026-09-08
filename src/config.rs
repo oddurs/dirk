@@ -268,7 +268,15 @@ impl Identity {
 
 /// The machine's name, short. `gethostname` rather than `$HOSTNAME`, which is
 /// a shell variable that is often not exported.
-fn hostname() -> Option<String> {
+///
+/// Trimmed to the first label: a session on `build.example.com` is on `build`,
+/// and the rest is a domain nobody is choosing a window by.
+///
+/// `[u8; 256]` and `.cast()` rather than `[i8; 256]`: `c_char` is signed on
+/// x86-64 and on Darwin and unsigned on aarch64 Linux, so a buffer typed for
+/// one of them does not compile for the other. This is public because there
+/// was a second copy of it that got that wrong.
+pub fn hostname() -> Option<String> {
     let mut buf = [0u8; 256];
     // SAFETY: the buffer outlives the call and its length is what is passed.
     let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
@@ -1859,6 +1867,42 @@ mod tests {
         let claude = kinds.iter().find(|k| k.name == "claude").unwrap();
         assert_eq!(claude.blocked, ["Ready:"]);
         assert!(!claude.choices);
+    }
+
+    #[test]
+    fn there_is_one_gethostname_in_the_tree() {
+        // There were two, and they were the same twenty lines twice. One typed
+        // its buffer `[i8; 256]`, which is `c_char` on x86-64 and on Darwin and
+        // not on aarch64 Linux -- so dirk stopped compiling for a target it
+        // ships, and nothing said so until somebody asked that target.
+        //
+        // Scanned out of the source because the duplicate was not a call to
+        // this function; it was a second one of it.
+        let sources = [
+            include_str!("config.rs"),
+            include_str!("main.rs"),
+            include_str!("server.rs"),
+            include_str!("client.rs"),
+        ];
+        // Assembled rather than written: this file is one of the ones being
+        // scanned, and a needle spelled out here would find itself.
+        let needle = ["libc", "::", "gethostname"].concat();
+        let calls: usize = sources
+            .iter()
+            .map(|text| text.matches(needle.as_str()).count())
+            .sum();
+        assert_eq!(calls, 1, "gethostname is wrapped more than once again");
+    }
+
+    #[test]
+    fn the_host_name_is_short_and_has_no_domain_on_it() {
+        // Whatever this machine is called, what comes back is one label: a bar
+        // is four columns of information and eleven of domain otherwise.
+        let Some(host) = hostname() else {
+            return; // A machine with no name is not this test's business.
+        };
+        assert!(!host.is_empty());
+        assert!(!host.contains('.'), "{host:?} still has its domain");
     }
 
     #[test]
