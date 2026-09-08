@@ -2,10 +2,10 @@
 id: 143
 title: Something on the screen after a restart
 type: feature
-status: backlog
+status: done
 milestone: v0.9
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p1
 area: server
 effort: m
