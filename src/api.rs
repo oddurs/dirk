@@ -33,6 +33,13 @@
 use crate::mux::{Focus, PaneId, Session};
 use serde_json::{Value, json};
 
+/// How far back a read goes when the caller does not say.
+///
+/// A screenful and a bit. Named because `pane.read` and `pane.wait-output` have
+/// to agree: a caller that waits for a line and then reads to get its context
+/// should not find that the wait was looking further back than the read.
+pub const READ_LINES: u16 = 50;
+
 /// `w7`, or `w7:p12`.
 pub fn workspace_id(ws: u64) -> String {
     format!("w{ws}")
@@ -200,7 +207,10 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
             let Some(target) = args.first().and_then(|a| parse_pane(a)) else {
                 return Some(Reply::err("pane.read needs a pane id"));
             };
-            let lines: u16 = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(50);
+            let lines: u16 = args
+                .get(1)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(READ_LINES);
             match session.pane_text(target, lines) {
                 Some(text) => Reply::ok(json!({ "text": text })),
                 None => Reply::err("no such pane"),
@@ -321,6 +331,16 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("session.reload", ""),
     ("session.quit", ""),
 ];
+
+/// A pane's full handle, from the pane alone.
+///
+/// A caller that passed the short form gets the long one back, because the
+/// answer is what goes into its next command and the long form says which
+/// workspace it is now in.
+pub fn pane_id_of(session: &Session, pane: PaneId) -> Option<String> {
+    let (p, w) = locate(session, pane)?;
+    Some(pane_id(session.workspace(p, w)?.id, pane))
+}
 
 /// Look a pane up wherever it is, with the workspace that holds it.
 pub fn locate(session: &Session, pane: PaneId) -> Option<(usize, usize)> {
