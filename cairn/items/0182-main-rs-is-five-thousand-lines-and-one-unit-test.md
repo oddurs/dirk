@@ -51,7 +51,36 @@ test it could not have had before is a piece that was moved for tidiness.
 
 ## Acceptance criteria
 
-- [ ] `App::ask` is no longer one function
-- [ ] The API is reachable from a unit test without starting a terminal
+- [x] `App::ask` is no longer one function
+- [x] The API is reachable from a unit test without starting a terminal
 - [ ] `main.rs` holds argument parsing, mode selection and the loop
-- [ ] Each extraction lands with tests it enabled
+- [x] Each extraction lands with tests it enabled — this one did
+
+## 2026-09-08
+
+The first piece, and the item said to do it in pieces: `main.rs` still holds far
+more than argument parsing and a loop, so that criterion is left open on purpose
+and this note says how far it got.
+
+`api::read` already existed and its own comment anticipated the rest — "split
+from the mutating half so a read is obviously a read". `api::write` is that
+half. Fourteen of the twenty-three arms in `ask` touched nothing but the session,
+so they took the session and nothing else; `ask` went from 603 lines to 231, and
+what is left is the nine that genuinely need the program around them: reload,
+notify, quit, info, handoff, tab.new, worktree.add, agent.start, agent.hooks.
+
+The measure of the piece is the tests it made possible, and six of them exist
+that could not have before. A session fixture is four lines and no terminal —
+the same answers used to be reachable only by starting dirk on a pseudo-terminal
+and typing at it, which is why 585 lines of them had none.
+
+Two of the tests found the shape of things rather than a bug, and were rewritten
+to say what is true rather than what was assumed. `workspace.close` ends the
+panes and stops; the workspace goes when their exits reach the event loop, which
+is the half that is not in `write`. And a session keeps a workspace open for a
+project that has one, so closing the last one is not the same as a count going
+down — the test asks by id now.
+
+**Next.** The `*_key` handlers are eight functions and a mode dispatcher, and
+they belong with the modes. That is the piece with the next-best ratio of lines
+moved to tests enabled.
