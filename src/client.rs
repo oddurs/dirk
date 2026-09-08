@@ -519,7 +519,11 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
 pub fn watch(path: &Path, target: &str, takeover: bool) -> io::Result<()> {
     let mut sock = UnixStream::connect(path)?;
     let mut reader = sock.try_clone()?;
-    let (cols, rows) = crossterm::terminal::size()?;
+    // Not fatal when there is no terminal to ask. The size is a hint the
+    // session uses to fit the pane, and failing here would mean a refusal the
+    // caller needs to read -- "no such pane" -- being replaced by an errno from
+    // an ioctl on a pipe.
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     wire::send_json(
         &mut sock,
         Kind::Watch,

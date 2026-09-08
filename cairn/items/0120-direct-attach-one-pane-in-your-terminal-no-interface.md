@@ -2,7 +2,7 @@
 id: 120
 title: 'Direct attach: one pane in your terminal, no interface'
 type: feature
-status: backlog
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
@@ -59,3 +59,10 @@ same way.
 Plain PageUp and PageDown page; with any modifier they go to the program.
 Taking them outright would take them off `less` and off every agent's
 transcript, which is a worse trade than not having them here.
+
+CI caught one this suite could not: `crossterm::terminal::size()` fails when
+there is no terminal, and `cargo test` gives a command pipes rather than a tty.
+So `pane attach p9999` answered with an errno from an ioctl instead of "no such
+pane" — the refusal a caller most needs to read, replaced by the least readable
+thing available. The size is a hint; a missing one is not a reason to fail
+before the question has even been asked.
