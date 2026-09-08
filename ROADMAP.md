@@ -197,13 +197,9 @@ dirk guesses at agent state where it could be told. Installing the hook rather
 
 ## v0.8 — The rest of the multiplexer
 
-`#########·` 90% · 9 of 10 done · due 2027-06-15
+`##########` 100% · 10 of 10 done · due 2027-06-15
 
 What v0.5 did not finish, and the terminal features a pane needs before it is
-
-### backlog
-
-- [ ] `0142` A third row layout for the nav <sup>feature · p3 · nav</sup>
 
 ### done
 
@@ -216,6 +212,7 @@ What v0.5 did not finish, and the terminal features a pane needs before it is
 - [x] `0139` Login shells, and where a new pane starts <sup>feature · p2 · config</sup>
 - [x] `0140` Pane borders, and turning the mouse off <sup>feature · p3 · chrome</sup>
 - [x] `0141` Bindings without a prefix <sup>feature · p2 · config</sup>
+- [x] `0142` A third row layout for the nav <sup>feature · p3 · nav</sup>
 
 ## v0.9 — Coming back to it
 

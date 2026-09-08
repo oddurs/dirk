@@ -747,9 +747,19 @@ impl Nav {
         self.attention == "never"
     }
 
-    /// Whether a workspace gets a second line for its branch.
+    /// Whether a workspace gets a second line for what is happening in it.
     pub fn tall(&self) -> bool {
-        self.rows != "short"
+        self.rows == "tall"
+    }
+
+    /// Whether the one line a workspace gets carries what it is *doing* rather
+    /// than what it *is*.
+    ///
+    /// For somebody whose projects are one checkout each: the branch is `main`
+    /// on every row and says nothing, while the intent is the whole of what
+    /// distinguishes them.
+    pub fn leads_with_intent(&self) -> bool {
+        self.rows == "intent"
     }
 }
 
@@ -1499,7 +1509,7 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
             &cfg.nav.attention,
             &["when-needed", "always", "never"][..],
         ),
-        ("rows", &cfg.nav.rows, &["tall", "short"][..]),
+        ("rows", &cfg.nav.rows, &["tall", "short", "intent"][..]),
     ] {
         if !allowed.contains(&value.as_str()) {
             out.push(format!(
