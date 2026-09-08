@@ -574,8 +574,8 @@ fn a_session_answers_for_itself() {
     assert!(ok, "split failed: {split}");
     assert!(split.contains(":p"), "the new pane was not named: {split}");
 
-    let (ok, _) = ask(&session, &["pane", "send-keys", &id, "printf zzASKED\n"]);
-    assert!(ok, "send-keys failed");
+    let (ok, _) = ask(&session, &["pane", "run", &id, "printf zzASKED"]);
+    assert!(ok, "pane run failed");
 
     // Read it back from the pane rather than from the screen: that is the path
     // an agent looking at a neighbour would take.
@@ -1111,11 +1111,8 @@ fn output_contradicts_a_claim_that_nothing_is_happening() {
     let (ok, _) = ask(&session, &["agent", "state", "done"]);
     assert!(ok, "the report was refused");
 
-    let (ok, _) = ask(
-        &session,
-        &["pane", "send-keys", &pane, "printf", "'zzWORKING'"],
-    );
-    assert!(ok, "send-keys failed");
+    let (ok, _) = ask(&session, &["pane", "run", &pane, "printf", "'zzWORKING'"]);
+    assert!(ok, "pane run failed");
 
     let (ok, after) = ask(&session, &["agent", "list"]);
     assert!(ok, "agent list failed: {after}");
@@ -1151,8 +1148,8 @@ fn a_reported_block_does_not_outlive_the_answer_you_gave_it() {
         client.drawn()
     );
 
-    let (ok, _) = ask(&session, &["pane", "send-keys", &pane, "printf 'zzON'\r"]);
-    assert!(ok, "send-keys failed");
+    let (ok, _) = ask(&session, &["pane", "run", &pane, "printf 'zzON'"]);
+    assert!(ok, "pane run failed");
     assert!(
         client.wait_until(START, |c| !c.drawn().contains("needs you")),
         "it was still waiting on somebody after the pane went back to work\n{}",
@@ -1186,8 +1183,8 @@ fn starting_an_agent_refuses_a_pane_that_is_busy() {
 
     // Something that holds the pane and is not a shell.
     // With the return, or the shell is still at a prompt and the pane is free.
-    let (ok, _) = ask(&session, &["pane", "send-keys", &pane, "sleep 30\r"]);
-    assert!(ok, "send-keys failed");
+    let (ok, _) = ask(&session, &["pane", "run", &pane, "sleep 30"]);
+    assert!(ok, "pane run failed");
     std::thread::sleep(Duration::from_secs(3));
 
     let (ok, why) = ask(&session, &["agent", "start", "claude", &pane]);
@@ -2518,4 +2515,76 @@ fn an_agent_that_goes_away_ends_the_wait_saying_so() {
     );
 
     drop(client);
+}
+
+#[test]
+fn a_command_text_and_a_keystroke_are_three_different_things() {
+    // One verb meant every caller wrote the submitting return itself, and got
+    // the ordering wrong against anything slow to read. It also meant there was
+    // no way to say Escape at all: a key is not characters, which is the whole
+    // difference between a key and text.
+    let session = unique("input");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let id = first_id(&panes);
+
+    // Text alone does not submit. If it did, this would run before the rest of
+    // the line arrived, which is the failure the split exists to prevent.
+    let (ok, out) = ask(&session, &["pane", "send-text", &id, "printf zzHALF"]);
+    assert!(ok, "send-text failed: {out}");
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !ask(&session, &["pane", "read", &id, "20"])
+            .1
+            .contains("zzHALFzz"),
+        "send-text submitted the line it was given"
+    );
+
+    // Enter, as a key rather than as a character, finishes it.
+    let (ok, out) = ask(&session, &["pane", "send-keys", &id, "enter"]);
+    assert!(ok, "send-keys failed: {out}");
+    assert!(
+        appears_in_pane(&session, &id, "zzHALF", START),
+        "the line never ran"
+    );
+
+    // And a command is both, in one write.
+    let (ok, out) = ask(&session, &["pane", "run", &id, "printf zzWHOLE"]);
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        appears_in_pane(&session, &id, "zzWHOLE", START),
+        "pane run did not submit its command"
+    );
+
+    // A name dirk does not know is refused rather than typed. The bad outcome
+    // is not an error; it is those six letters arriving in the agent.
+    let (ok, out) = ask(&session, &["pane", "send-keys", &id, "escpae"]);
+    assert!(!ok, "a key that does not exist was accepted: {out}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !ask(&session, &["pane", "read", &id, "20"])
+            .1
+            .contains("escpae"),
+        "a rejected key name was typed into the pane anyway"
+    );
+
+    drop(client);
+}
+
+/// Wait for text to come back out of a pane, the way a caller would.
+fn appears_in_pane(session: &str, pane: &str, needle: &str, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if ask(session, &["pane", "read", pane, "40"])
+            .1
+            .contains(needle)
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
 }

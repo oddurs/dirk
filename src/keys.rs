@@ -90,3 +90,119 @@ fn function(n: u8) -> Option<Vec<u8>> {
         _ => return None,
     })
 }
+
+/// Read a key by the name a person would write: `esc`, `up`, `ctrl+c`.
+///
+/// The inverse of what a keymap does, for callers who have no keyboard. A
+/// program driving an agent's interface has to be able to say *escape* and
+/// *ctrl-c* — and it cannot say them as text, because the whole difference
+/// between text and a key is that one of them is not characters.
+///
+/// Names are lowercase and modifiers are `+`-joined, in any order. `escape` is
+/// accepted for `esc` because half the world writes it that way and being right
+/// about which half is not worth an error message.
+pub fn named(text: &str) -> Option<KeyEvent> {
+    let mut mods = KeyModifiers::NONE;
+    let lower = text.to_ascii_lowercase();
+    // Split at the *last* separator, and read a trailing one as the key
+    // itself: `+` is a plus sign and `ctrl++` is control and a plus sign.
+    // Splitting left to right makes both of those an empty key name.
+    let (head, key) = match lower.rsplit_once('+') {
+        Some((head, "")) => (head, "+"),
+        Some((head, tail)) => (head, tail),
+        None => ("", lower.as_str()),
+    };
+    for m in head.split('+').filter(|m| !m.is_empty()) {
+        mods |= match m {
+            "ctrl" | "control" => KeyModifiers::CONTROL,
+            "alt" | "meta" | "option" => KeyModifiers::ALT,
+            "shift" => KeyModifiers::SHIFT,
+            _ => return None,
+        };
+    }
+
+    let code = match key {
+        "enter" | "return" => KeyCode::Enter,
+        "esc" | "escape" => KeyCode::Esc,
+        "tab" => KeyCode::Tab,
+        "backtab" => KeyCode::BackTab,
+        "backspace" | "bs" => KeyCode::Backspace,
+        "delete" | "del" => KeyCode::Delete,
+        "insert" | "ins" => KeyCode::Insert,
+        "space" => KeyCode::Char(' '),
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" | "pgup" => KeyCode::PageUp,
+        "pagedown" | "pgdn" => KeyCode::PageDown,
+        f if f.len() >= 2 && f.starts_with('f') && f[1..].chars().all(|c| c.is_ascii_digit()) => {
+            KeyCode::F(f[1..].parse().ok()?)
+        }
+        // One character is that character. Anything longer is a name dirk does
+        // not know, and guessing that it was meant literally is how a caller
+        // that typed `escpae` ends up with those six letters in its agent.
+        other => {
+            let mut chars = other.chars();
+            let c = chars.next()?;
+            chars.next().is_none().then_some(KeyCode::Char(c))?
+        }
+    };
+    Some(KeyEvent::new(code, mods))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_is_read_by_the_name_a_person_would_write() {
+        assert_eq!(named("esc"), Some(KeyEvent::from(KeyCode::Esc)));
+        assert_eq!(named("escape"), Some(KeyEvent::from(KeyCode::Esc)));
+        assert_eq!(named("ENTER"), Some(KeyEvent::from(KeyCode::Enter)));
+        assert_eq!(named("f5"), Some(KeyEvent::from(KeyCode::F(5))));
+        assert_eq!(named("space"), Some(KeyEvent::from(KeyCode::Char(' '))));
+        assert_eq!(
+            named("ctrl+c"),
+            Some(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        );
+        // Order is not significant: nobody remembers which one goes first.
+        assert_eq!(named("shift+alt+up"), named("alt+shift+up"));
+    }
+
+    #[test]
+    fn a_name_dirk_does_not_know_is_refused_rather_than_typed() {
+        // The failure this exists to prevent: a caller that meant Escape and
+        // wrote it wrong should get an error, not those six letters typed into
+        // whatever the pane is running.
+        assert_eq!(named("escpae"), None);
+        assert_eq!(named("hyper+x"), None);
+        assert_eq!(named(""), None);
+        // One character is that character, which is how `ctrl+c` has a key at
+        // all -- but two are a name, and there is no such name.
+        assert_eq!(named("x"), Some(KeyEvent::from(KeyCode::Char('x'))));
+        assert_eq!(named("xy"), None);
+    }
+
+    #[test]
+    fn the_plus_that_joins_modifiers_can_also_be_the_key() {
+        assert_eq!(named("+"), Some(KeyEvent::from(KeyCode::Char('+'))));
+        assert_eq!(
+            named("ctrl++"),
+            Some(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::CONTROL))
+        );
+    }
+
+    #[test]
+    fn an_arrow_comes_out_as_whatever_the_program_asked_for() {
+        // DECCKM. In application cursor mode the arrows are ESC O A rather than
+        // ESC [ A, and a caller sending the wrong one moves a menu selection in
+        // some programs and not in others -- which is exactly the kind of bug
+        // that gets blamed on the agent.
+        let up = named("up").expect("up");
+        assert_eq!(encode(up, false), Some(b"\x1b[A".to_vec()));
+        assert_eq!(encode(up, true), Some(b"\x1bOA".to_vec()));
+    }
+}

@@ -2,7 +2,7 @@
 id: 119
 title: 'pane run: a command, submitted'
 type: feature
-status: backlog
+status: review
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
@@ -26,7 +26,21 @@ The split matters because the failure modes differ: text can be pasted, keys
 cannot, and a command needs both in a guaranteed order.
 
 ## Acceptance criteria
-- [ ] `pane run` writes the command and a submitting newline as one ordered write
-- [ ] `pane send-text` never submits
-- [ ] `pane send-keys` accepts named keys and modifier chords, `escape` aliasing `esc`
-- [ ] A pane whose program has exited is refused rather than written to
+- [x] `pane run` writes the command and a submitting newline as one ordered write
+- [x] `pane send-text` never submits
+- [x] `pane send-keys` accepts named keys and modifier chords, `escape` aliasing `esc`
+- [x] A pane whose program has exited is refused rather than written to
+
+## 2026-09-07
+
+`pane send-keys` used to send literal text, so this changes what it means. The
+callers that existed were all typing commands and now say `pane run`; the
+README, the man page and the agent skill say so too. Pre-1.0, and the
+alternative — a verb that sends key names when a word happens to be one and
+letters when it does not — is a surface where `dirk pane send-keys p1 up` types
+two letters into somebody's editor.
+
+Encoding lives in `Session::keys_to` rather than in the caller, because it
+depends on DECCKM: in application cursor mode the arrows are `ESC O A` and not
+`ESC [ A`. Only the pane knows which mode its program asked for, and a caller
+sending the wrong one moves a menu in some programs and not in others.

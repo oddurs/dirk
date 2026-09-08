@@ -1752,6 +1752,47 @@ impl Session {
         };
     }
 
+    /// Does this pane exist, and is anything still running in it?
+    ///
+    /// `None` is "no such pane" and `Some(false)` is "its program has exited",
+    /// which are different answers to a caller: one is a wrong id and the other
+    /// is a right id and a dead process.
+    pub fn pane_alive(&mut self, id: PaneId) -> Option<bool> {
+        self.pane_anywhere_mut(id).map(|pane| !pane.dead)
+    }
+
+    /// Send keys to a pane, encoded the way the program in it expects them.
+    ///
+    /// Encoded here rather than by the caller because the encoding depends on a
+    /// mode only the pane knows: in application cursor mode the arrows are
+    /// `ESC O A` and not `ESC [ A`, and a caller that sent the wrong one would
+    /// move a menu selection in some programs and not in others.
+    pub fn keys_to(&mut self, id: PaneId, keys: &[crossterm::event::KeyEvent]) -> bool {
+        let Some(pane) = self.pane_anywhere_mut(id) else {
+            return false;
+        };
+        if pane.dead {
+            return false;
+        }
+        let app_cursor = pane
+            .term
+            .lock()
+            .map(|t| t.screen().application_cursor())
+            .unwrap_or(false);
+        let mut bytes = Vec::new();
+        for k in keys {
+            match crate::keys::encode(*k, app_cursor) {
+                Some(more) => bytes.extend_from_slice(&more),
+                // A key this terminal has no sequence for is not sent as
+                // nothing: the caller asked for a keystroke and would read a
+                // success meaning one arrived.
+                None => return false,
+            }
+        }
+        pane.write(&bytes);
+        true
+    }
+
     /// Type into a pane, wherever it is.
     pub fn write_to(&mut self, id: PaneId, bytes: &[u8]) -> bool {
         match self.pane_anywhere_mut(id) {

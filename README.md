@@ -752,11 +752,19 @@ agents happen to run in and one they can work in.
 ```console
 $ dirk pane list
 $ dirk pane split w7:p12 rows
-$ dirk pane send-keys --current "cargo test"
+$ dirk pane run --current "cargo test"
 $ dirk agent list
 $ dirk agent wait --current --until done --timeout 600000
 $ dirk session commands          # the whole surface
 ```
+
+**Three ways in, because they fail differently.** `pane run` writes a command
+and the return that submits it, in one write — two writes is two chances for a
+program reading slowly to see a bare newline and run half of what you typed.
+`pane send-text` writes text and submits nothing. `pane send-keys` sends keys by
+name — `esc`, `up`, `ctrl+c`, `f5` — which is what an interactive program needs
+and what a shell does not; the arrows come out as whichever sequence that pane's
+program has asked for, which is a thing only the pane knows.
 
 **Waiting is a question like any other.** `dirk agent wait <target>` returns when
 the agent reaches one of the states named by `--until`, which repeats and
