@@ -66,6 +66,7 @@ mod state;
 mod theme;
 mod tokens;
 mod ui;
+mod wait;
 mod wire;
 
 use api::NOUNS;
@@ -112,7 +113,7 @@ JSON; `--current` means the pane you are in.
   workspace list|focus|create|rename|close
   pane      list|focus|split|read|send-keys|close
   layout    list|open
-  agent     list|start|state|hooks
+  agent     list|start|state|wait|hooks
   worktree  list|add|remove
   tab       list|new|focus|rename|close
   session   info|list|reload|commands|quit|prune
@@ -716,6 +717,12 @@ struct App {
     badges: std::collections::HashMap<String, Badge>,
     /// One round of status commands at a time, for the same reason as `ps`.
     badging: bool,
+    /// Questions whose answer does not exist yet.
+    ///
+    /// Settled at the end of every turn, which is after the states have been
+    /// worked out — so a wait ends on the turn the thing it was waiting for
+    /// happened, rather than on the next tick after it.
+    waits: Vec<wait::Held>,
     /// Selecting, when that is what is happening.
     copy: Option<copy::Mode>,
     /// Searching, when that is.
@@ -792,6 +799,7 @@ impl App {
             },
             badges: std::collections::HashMap::new(),
             badging: false,
+            waits: Vec::new(),
             copy: None,
             find: None,
             asking: None,
@@ -975,8 +983,24 @@ impl App {
     ///
     /// Returns false when there is nothing left to run for.
     fn turn(&mut self, rx: &Receiver<Ev>) -> bool {
-        let Ok(ev) = rx.recv() else { return false };
-        self.handle(ev);
+        // Woken by the nearest deadline as well as by events, when anything is
+        // waiting on one. Otherwise a `--timeout 250` would be answered on the
+        // next tick, which is a second away — and a timeout that is four times
+        // what was asked for is not a timeout.
+        let ev = match self.waits.iter().filter_map(|h| h.deadline).min() {
+            Some(at) => match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                Ok(ev) => Some(ev),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            },
+            None => match rx.recv() {
+                Ok(ev) => Some(ev),
+                Err(_) => return false,
+            },
+        };
+        if let Some(ev) = ev {
+            self.handle(ev);
+        }
         // Coalesce whatever else has already queued. A pane writing fast
         // produces one redraw, not one per write.
         while let Ok(next) = rx.try_recv() {
@@ -1009,6 +1033,9 @@ impl App {
         };
         let changes = self.session.update_states(Instant::now(), &watched);
         self.announce(changes);
+        // After the states, not before: a wait for `blocked` should end on the
+        // turn the agent became blocked rather than on the next tick after it.
+        self.settle();
         !(self.quit || self.session.is_empty())
     }
 
@@ -1164,6 +1191,37 @@ impl App {
                 self.resize_panes();
             }
             Ev::Command(req, reply) => {
+                // Questions whose answer does not exist yet are put aside
+                // rather than answered. The caller's socket thread is already
+                // blocked on the other end of `reply`, so holding it is the
+                // whole of what "wait" means here.
+                match self.hold(&req) {
+                    Ok(Some(what)) => {
+                        let (_, opts) = wait::options(&req.args);
+                        match wait::deadline(&opts) {
+                            Ok(deadline) => {
+                                self.waits.push(wait::Held {
+                                    back: reply,
+                                    what,
+                                    deadline,
+                                });
+                                // Asked and already true is answered now. A
+                                // caller that waits for `idle` on an agent
+                                // sitting idle should not wait at all.
+                                self.settle();
+                            }
+                            Err(why) => {
+                                let _ = reply.send(wire::Reply::err(why));
+                            }
+                        }
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(why) => {
+                        let _ = reply.send(wire::Reply::err(why));
+                        return;
+                    }
+                }
                 let before = self.session.focus;
                 let answer = self.ask(&req);
                 // A caller outside the session has no screen of its own, so
@@ -1349,6 +1407,95 @@ impl App {
     /// Reads are answered by `api::read` and never touch the seen rule: asking
     /// about a workspace is not looking at one, and without that a status line
     /// polling the session would clear every notification it exists to show.
+    /// Is this a question that has to be answered later?
+    ///
+    /// `Ok(None)` is an ordinary command. `Err` is one that can never be
+    /// answered — a target that does not exist, a state that does not — and
+    /// those are refused at the door rather than waited out, because a caller
+    /// that misspelled a state should not learn about it when its timeout
+    /// expires.
+    fn hold(&mut self, req: &wire::Request) -> Result<Option<wait::What>, String> {
+        if req.cmd != "agent.wait" {
+            return Ok(None);
+        }
+        let (words, opts) = wait::options(&req.args);
+        let Some(target) = words.first() else {
+            return Err("agent.wait needs a workspace or a pane".into());
+        };
+        let Some((p, w)) = api::target_workspace(&self.session, target) else {
+            return Err(format!("no such workspace or pane: {target}"));
+        };
+        if api::agent_json(&self.session, p, w).is_none() {
+            return Err(format!("no agent in {target}"));
+        }
+        let Some(pane) = self
+            .session
+            .workspace(p, w)
+            .and_then(|ws| ws.active_pane())
+            .map(|pane| pane.id)
+        else {
+            return Err(format!("no agent in {target}"));
+        };
+        let until = wait::until(&opts)?;
+        Ok(Some(wait::What::Agent { pane, until }))
+    }
+
+    /// Answer every held question that can now be answered.
+    ///
+    /// Taken and put back rather than iterated in place: deciding one needs the
+    /// session, and holding a borrow of `self.waits` across that would make the
+    /// check and the answer two different moments.
+    fn settle(&mut self) {
+        if self.waits.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut waiting = Vec::new();
+        for held in std::mem::take(&mut self.waits) {
+            match self.verdict(&held.what, held.deadline, now) {
+                Some(settled) => {
+                    let _ = held.back.send(settled.reply());
+                }
+                None => waiting.push(held),
+            }
+        }
+        self.waits = waiting;
+    }
+
+    /// Has this happened, become impossible, or run out of time?
+    fn verdict(
+        &self,
+        what: &wait::What,
+        deadline: Option<Instant>,
+        now: Instant,
+    ) -> Option<wait::Settled> {
+        let reached = match what {
+            wait::What::Agent { pane, until } => {
+                // By pane, so the wait survives the workspace being renamed,
+                // refocused or reordered under it -- all of which happen to a
+                // workspace an agent is working in, continuously.
+                let Some((p, w)) = api::locate(&self.session, *pane) else {
+                    return Some(wait::Settled::Gone("that pane is gone"));
+                };
+                let Some(agent) = api::agent_json(&self.session, p, w) else {
+                    return Some(wait::Settled::Gone("that agent is no longer running"));
+                };
+                let state = self.session.workspace(p, w).map(|ws| ws.state);
+                state
+                    .is_some_and(|s| until.contains(&s))
+                    .then_some(serde_json::json!({ "agent": agent }))
+            }
+        };
+        match reached {
+            Some(value) => Some(wait::Settled::Reached(value)),
+            // Checked after, so a wait whose condition and whose deadline land
+            // on the same turn is answered rather than timed out.
+            None => deadline
+                .is_some_and(|at| now >= at)
+                .then_some(wait::Settled::Late),
+        }
+    }
+
     fn ask(&mut self, req: &wire::Request) -> wire::Reply {
         use wire::Reply;
         if let Some(answer) = api::read(&self.session, &req.cmd, &req.args) {

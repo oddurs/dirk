@@ -124,6 +124,35 @@ fn pane_json(ws_id: u64, pane: &crate::mux::Pane, focused: bool) -> Value {
     })
 }
 
+/// One agent, as a caller sees it, or `None` if this workspace holds none.
+///
+/// Written once so that what `agent.list` says and what a wait answers with
+/// cannot describe the same agent differently.
+pub fn agent_json(session: &Session, p: usize, w: usize) -> Option<Value> {
+    let ws = session.workspace(p, w)?;
+    let pane = ws.active_pane()?;
+    // A harness dirk does not recognise but which reports its own state is
+    // still an agent -- being told is the best signal there is, and a list that
+    // ignored it would make rank one worth less than the guessing it replaced.
+    let kind = pane.occupant.agent();
+    if kind.is_none() && ws.reported.is_none() {
+        return None;
+    }
+    Some(json!({
+        "name": pane.agent_name,
+        "kind": kind.map(|k| k.name.clone()),
+        "pane": pane_id(ws.id, pane.id),
+        "workspace": workspace_id(ws.id),
+        "state": ws.state.glyph_name(),
+        // Which signal decided it. A badge you cannot explain is a badge you
+        // stop believing, and when one is wrong this is what says which source
+        // was wrong.
+        "why": ws.source.name(),
+        "available": pane.occupant.available(),
+        "intent": ws.intent,
+    }))
+}
+
 /// What a caller may ask, and what it gets back.
 ///
 /// Split from the mutating half so a read is obviously a read — including to
@@ -219,36 +248,11 @@ pub fn read(session: &Session, cmd: &str, args: &[String]) -> Option<crate::wire
         }
 
         "agent.list" => {
-            let mut list = Vec::new();
-            for (p, w) in session.flat() {
-                let Some(ws) = session.workspace(p, w) else {
-                    continue;
-                };
-                let Some(pane) = ws.active_pane() else {
-                    continue;
-                };
-                // A harness dirk does not recognise but which reports its own
-                // state is still an agent -- being told is the best signal
-                // there is, and a list that ignored it would make rank one
-                // worth less than the guessing it replaced.
-                let kind = pane.occupant.agent();
-                if kind.is_none() && ws.reported.is_none() {
-                    continue;
-                }
-                list.push(json!({
-                    "name": pane.agent_name,
-                    "kind": kind.map(|k| k.name.clone()),
-                    "pane": pane_id(ws.id, pane.id),
-                    "workspace": workspace_id(ws.id),
-                    "state": ws.state.glyph_name(),
-                    // Which signal decided it. A badge you cannot explain is a
-                    // badge you stop believing, and when one is wrong this is
-                    // what says which source was wrong.
-                    "why": ws.source.name(),
-                    "available": pane.occupant.available(),
-                    "intent": ws.intent,
-                }));
-            }
+            let list: Vec<Value> = session
+                .flat()
+                .into_iter()
+                .filter_map(|(p, w)| agent_json(session, p, w))
+                .collect();
             Reply::ok(json!({ "agents": list }))
         }
 
@@ -305,6 +309,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "<blocked|working|done|idle|starting> [workspace|pane]",
     ),
     ("agent.start", "<kind> [pane]"),
+    (
+        "agent.wait",
+        "<workspace|pane> [--until STATE]... [--timeout MS]",
+    ),
     ("agent.hooks", "<kind>"),
     ("session.info", ""),
     ("session.commands", ""),

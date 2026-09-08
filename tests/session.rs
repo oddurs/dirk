@@ -2330,3 +2330,179 @@ fn a_pane_made_with_nobody_watching_gets_the_size_that_was_configured() {
 
     end(&session);
 }
+
+/// Ask something without waiting for the answer here.
+///
+/// A wait does not return until the session says so, and the whole point is to
+/// be doing something else meanwhile — which is also what the caller in the
+/// field is doing.
+fn ask_later(session: &str, args: &[&str]) -> std::thread::JoinHandle<(bool, String)> {
+    let session = session.to_string();
+    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    std::thread::spawn(move || {
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        ask(&session, &borrowed)
+    })
+}
+
+#[test]
+fn waiting_for_an_agent_ends_when_the_agent_does_the_thing() {
+    // The alternative is the loop everybody writes: ask every few hundred
+    // milliseconds, pick a different interval from everybody else, and miss a
+    // state that was entered and left between two of them.
+    let session = unique("wait");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    // Somewhere that is not the workspace on screen, and an agent in it.
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let all = ids(&list);
+    let ws = all.last().expect("a second workspace").clone();
+    let (ok, out) = ask(&session, &["agent", "state", "working", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    // Held, not polled: nothing has happened yet, so nothing comes back.
+    let waiting = ask_later(
+        &session,
+        &[
+            "agent",
+            "wait",
+            &ws,
+            "--until",
+            "blocked",
+            "--timeout",
+            "30000",
+        ],
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        !waiting.is_finished(),
+        "the wait returned before anything happened"
+    );
+
+    // A wait is about a pane, not about where the nav happens to be pointing.
+    // Renaming and refocusing both happen to a workspace an agent is working
+    // in, continuously, and neither is the thing being waited for.
+    let (ok, _) = ask(
+        &session,
+        &["workspace", "rename", &ws, "renamed", "midwait"],
+    );
+    assert!(ok, "workspace rename failed");
+    let (ok, _) = ask(&session, &["workspace", "focus", &ws]);
+    assert!(ok, "workspace focus failed");
+    assert!(
+        !waiting.is_finished(),
+        "renaming ended a wait that was about an agent"
+    );
+
+    let (ok, out) = ask(&session, &["agent", "state", "blocked", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    let (ok, said) = waiting.join().expect("the wait thread");
+    assert!(ok, "the wait failed: {said}");
+    assert!(
+        said.contains("\"state\": \"blocked\""),
+        "the wait did not answer with the agent it was about: {said}"
+    );
+
+    // Asked and already true is answered now. A caller waiting for `blocked` on
+    // an agent that is already blocked should not wait at all.
+    let at = Instant::now();
+    let (ok, said) = ask(&session, &["agent", "wait", &ws, "--until", "blocked"]);
+    assert!(ok, "a wait for a state already reached failed: {said}");
+    assert!(
+        at.elapsed() < Duration::from_secs(5),
+        "a wait for a state already reached did not return promptly"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_wait_that_cannot_be_answered_says_so_rather_than_waiting() {
+    let session = unique("waitbad");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = first_id(&list);
+    let (ok, out) = ask(&session, &["agent", "state", "working", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    // A state that does not exist is refused at the door. Waiting out a
+    // timeout for something that can never happen is the worst way to learn
+    // that a word was misspelled.
+    let at = Instant::now();
+    let (ok, said) = ask(&session, &["agent", "wait", &ws, "--until", "finished"]);
+    assert!(!ok, "a state that does not exist was accepted: {said}");
+    assert!(
+        at.elapsed() < Duration::from_secs(5),
+        "a misspelled state was waited out rather than refused"
+    );
+
+    // A target that does not exist, likewise.
+    let (ok, _) = ask(&session, &["agent", "wait", "w9999"]);
+    assert!(
+        !ok,
+        "a wait on a workspace that does not exist was accepted"
+    );
+
+    // And patience that runs out says timeout, in the milliseconds it was given
+    // rather than on whatever tick comes next.
+    let at = Instant::now();
+    let (ok, said) = ask(
+        &session,
+        &["agent", "wait", &ws, "--until", "done", "--timeout", "700"],
+    );
+    assert!(!ok, "a wait that should have timed out succeeded: {said}");
+    assert!(
+        said.contains("timeout"),
+        "the failure did not say timeout: {said}"
+    );
+    assert!(
+        at.elapsed() < Duration::from_secs(5),
+        "the timeout took far longer than it was given"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn an_agent_that_goes_away_ends_the_wait_saying_so() {
+    // Distinct from a timeout, and it has to be: a caller that timed out might
+    // reasonably wait again, and one whose agent has gone should not.
+    let session = unique("waitgone");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = ids(&list).last().expect("a second workspace").clone();
+    let (ok, out) = ask(&session, &["agent", "state", "working", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    let waiting = ask_later(&session, &["agent", "wait", &ws, "--until", "done"]);
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !waiting.is_finished(),
+        "the wait returned before anything happened"
+    );
+
+    let (ok, _) = ask(&session, &["workspace", "close", &ws]);
+    assert!(ok, "workspace close failed");
+
+    let (ok, said) = waiting.join().expect("the wait thread");
+    assert!(!ok, "a wait on an agent that went away succeeded: {said}");
+    assert!(
+        !said.contains("timeout"),
+        "an agent going away was reported as a timeout: {said}"
+    );
+
+    drop(client);
+}
