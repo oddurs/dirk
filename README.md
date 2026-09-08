@@ -758,6 +758,7 @@ $ dirk agent prompt reviewer "Review the current diff" --wait --timeout 600000
 $ dirk agent wait --current --until done --timeout 600000
 $ dirk pane wait-output w7:p3 "passed|failed" --regex --timeout 120000
 $ dirk session commands          # the whole surface
+$ dirk api schema                # the same, as data, with no session running
 ```
 
 **Three ways in, because they fail differently.** `pane run` writes a command
@@ -814,6 +815,14 @@ number the nav shows beside a workspace is positional and changes when spaces
 are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
 `--current` resolves from them — so a command from inside a pane reaches the
 session holding it without the caller looking anything up first.
+
+`dirk api schema` prints the whole surface as JSON — every command, what it
+takes and which keys its answer carries — generated from the same table the
+skill and the completions are. It needs no running session, because a caller
+generating a client wants it before there is one to ask. The output is checked
+in as `doc/api.json` and a test fails when the two disagree, so a change to the
+surface is a diff in a pull request rather than a surprise for whoever was
+speaking the old one.
 
 `dirk --skill` prints what an agent needs to know to drive a session — generated
 from the command table, so it cannot describe a surface that no longer exists.
