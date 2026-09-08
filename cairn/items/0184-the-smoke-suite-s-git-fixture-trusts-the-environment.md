@@ -2,7 +2,7 @@
 id: 184
 title: The smoke suite's git fixture trusts the environment
 type: bug
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
