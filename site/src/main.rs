@@ -279,7 +279,7 @@ fn page_from(
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let name = path.display().to_string();
     let (front, body) = content::split_front(&source, &name);
-    let (html, toc) = content::to_html(&body, shots);
+    let (html, toc) = content::to_html(&body, shots, &section_of);
 
     content::Page {
         front,
@@ -315,6 +315,34 @@ fn rebase(html: &str, base: &str) -> String {
         .replace("src=\"/", &format!("src=\"{base}"))
 }
 
+/// One `## Heading` out of a document in the repository, without its heading.
+///
+/// The page supplies its own title and its own prose around it; what it is
+/// borrowing is the part that exists once and must not exist twice.
+fn section_of(file: &str, heading: &str) -> Option<String> {
+    let path = root().join(file);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let wanted = format!("## {heading}");
+
+    let mut body = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim_end() == wanted {
+            inside = true;
+            continue;
+        }
+        // Any heading at the same level ends it; deeper ones belong to it.
+        if inside && line.starts_with("## ") {
+            break;
+        }
+        if inside {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    (!body.trim().is_empty()).then(|| body.trim().to_string())
+}
+
 /// The pages that are not written, but read out of the repository.
 fn generated_pages(
     root: &Path,
@@ -324,7 +352,7 @@ fn generated_pages(
     let mut pages = Vec::new();
 
     if let Ok(news) = std::fs::read_to_string(root.join("NEWS")) {
-        let (html, toc) = content::to_html(&news_to_markdown(&news), shots);
+        let (html, toc) = content::to_html(&news_to_markdown(&news), shots, &section_of);
         pages.push(content::Page {
             front: content::Front {
                 title: "Changelog".into(),

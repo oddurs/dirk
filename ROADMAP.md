@@ -230,6 +230,9 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0047` Theme configuration <sup>feature · p2 · config</sup>
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
+
+### in progress
+
 - [ ] `0090` The documentation pages are a second copy of the README <sup>feature · p2 · web</sup>
 
 ### in review

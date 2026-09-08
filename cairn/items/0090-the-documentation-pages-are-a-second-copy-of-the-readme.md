@@ -2,8 +2,9 @@
 id: 90
 title: The documentation pages are a second copy of the README
 type: feature
-status: backlog
+status: doing
 milestone: v1.0
+assignee: oddurs
 depends_on:
 - 86
 created: 2026-09-07
@@ -45,7 +46,35 @@ the command table for exactly this reason and is the precedent to follow.
 
 - [ ] No key, default or command appears in `site/content` that also exists in
       the repository
-- [ ] Changing a keybinding in the source changes it on the site with no edit
+- [x] Changing a keybinding in the source changes it on the site with no edit
       to `site/`
-- [ ] The README stays the document a person reads first; the site does not
+- [x] The README stays the document a person reads first; the site does not
       become the source it is taken from
+
+## 2026-09-07
+
+A fence, not front matter: ```from README.md Keys``` lifts one `## ` section
+out of a document already in the repository and drops it where the page puts
+it. A fence because it can appear more than once and be placed exactly, and
+because it is still legible as plain Markdown, which is how a page is read in a
+pull request.
+
+The keys page and the configuration page are now taken rather than typed, and
+lifting them proved the point immediately: the copy did not have the command
+palette in it, which landed on main while the copy sat there.
+
+A heading that has been renamed fails the build by name — `README.md has no
+section called "Keystrokes"` — rather than rendering a page with a hole in it.
+
+The first criterion stays open, and honestly. The install page is still
+authored: what it duplicates is `INSTALL`, whose headings are underlined plain
+text rather than `## `, so lifting it needs a second parser for a second format
+and would produce text where the page wants Markdown. The duplication that
+mattered is the reference — keys and configuration change with the code, and an
+install guide changes when the way to install changes, which is rarer and
+louder.
+
+The second half of the item — taking the configuration reference from
+`src/config.rs` the way `--skill` is taken from the command table — is not done
+either. The README is the source now, which is one source instead of two; the
+program would be zero.
