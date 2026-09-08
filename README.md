@@ -407,6 +407,25 @@ or until the pane produces output — because a pane producing text is not
 finished, whatever it said a minute ago. Without that rule a harness whose hook
 fires on stop but not on start sticks on `done` while it grinds.
 
+### Reading an agent that keeps its history to itself
+
+`pane read` sees the grid vt100 keeps. A full-screen agent draws its transcript
+in the alternate screen, so what dirk can read is one screenful and the rest is
+inside the program — none of it ever scrolled, so none of it is in the
+scrollback. `pane read --lines 200` quietly returned twenty, with nothing to say
+that the rest existed.
+
+When the pane holds a recognised agent, sitting idle, at the bottom of its own
+transcript, and the read asks for more lines than the screen holds, dirk sends
+it the mouse-wheel input it already understands, collects overlapping pages,
+stitches them where they overlap, and puts the viewport back before answering.
+
+Narrowly, and only there. Not while it is working — a screen redrawing under you
+is stitched out of two different moments and nothing says which. Not for a pane
+you have scrolled back in. Not for a program dirk does not recognise. Each of
+those is refused with a reason rather than driven, because every one of them
+would mean moving somebody's viewport as a side effect of a read.
+
 ### Showing something that is not a state
 
 `dirk agent state` is how a program tells dirk what an agent is *doing*, and it
