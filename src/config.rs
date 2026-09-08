@@ -165,12 +165,32 @@ impl LayoutDef {
     }
 }
 
+/// Who the rail says you are, and where.
+///
+/// The first cells of the bar are the strongest position it has, and they used
+/// to hold the product's name — constant, unclickable, and an answer to "what
+/// program is this", which you knew before you started it. The job of that
+/// slot is *where am I*, and a product name cannot answer it.
+///
+/// What it answers now is whose account, which session, and which machine. The
+/// last of those is not decoration: a local dirk and one reached over `ssh`
+/// were identical on screen, which is how someone runs the right command in
+/// the wrong place.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Brand {
+pub struct Identity {
     #[serde(default = "default_mark")]
     pub mark: String,
-    #[serde(default = "default_name")]
+    /// Empty means `$USER`. Naming one makes it yours, and a notification
+    /// then uses it too — someone who has renamed the program has renamed all
+    /// of it.
+    #[serde(default)]
     pub name: String,
+    /// `never`, `named` — anything but the default session — or `always`.
+    #[serde(default = "default_session")]
+    pub session: String,
+    /// `never`, `remote` or `always`.
+    #[serde(default = "default_host")]
+    pub host: String,
 }
 
 /// Empty means the glyph set's mark, so a terminal that cannot draw `▾` is not
@@ -178,15 +198,98 @@ pub struct Brand {
 fn default_mark() -> String {
     String::new()
 }
-fn default_name() -> String {
-    "dirk".into()
+fn default_session() -> String {
+    "named".into()
+}
+fn default_host() -> String {
+    "remote".into()
 }
 
-impl Default for Brand {
+/// What this program is called when something outside it has to name it.
+const PRODUCT: &str = "dirk";
+
+impl Identity {
+    /// Who the rail says you are.
+    pub fn who(&self) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+        std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .ok()
+            .filter(|u| !u.is_empty())
+            // A container with neither is rare and is not worth an empty slot.
+            .unwrap_or_else(|| PRODUCT.into())
+    }
+
+    /// What a desktop notification calls this program.
+    ///
+    /// Not `who`: a notification saying "oddurs" would be naming the wrong
+    /// thing. Someone who set a name has renamed the program and means it
+    /// everywhere; someone who has not gets the product.
+    pub fn app(&self) -> String {
+        match self.name.is_empty() {
+            true => PRODUCT.into(),
+            false => self.name.clone(),
+        }
+    }
+
+    /// The session's name, when the rail should say it.
+    pub fn session_shown<'a>(&self, name: Option<&'a str>) -> Option<&'a str> {
+        let name = name.filter(|n| !n.is_empty())?;
+        match self.session.as_str() {
+            "always" => Some(name),
+            "never" => None,
+            // A session nobody named is the only session there is.
+            _ => (name != "default").then_some(name),
+        }
+    }
+
+    /// The machine's name, when the rail should say it.
+    ///
+    /// `remote` asks the environment whether this dirk is on the far side of
+    /// an `ssh` connection, which is the same question every shell prompt
+    /// asks and answers the same way. It is a heuristic and it is the only one
+    /// available from inside a single process; `always` is the escape hatch
+    /// for a machine that should always name itself.
+    pub fn host_shown(&self) -> Option<String> {
+        let show = match self.host.as_str() {
+            "always" => true,
+            "never" => false,
+            _ => ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"]
+                .iter()
+                // Set-but-empty is not a connection. It is what a parent that
+                // wanted to unset it left behind.
+                .any(|v| std::env::var(v).is_ok_and(|s| !s.is_empty())),
+        };
+        show.then(hostname).flatten()
+    }
+}
+
+/// The machine's name, short. `gethostname` rather than `$HOSTNAME`, which is
+/// a shell variable that is often not exported.
+fn hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer outlives the call and its length is what is passed.
+    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+    if !ok {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..end]).into_owned();
+    // `prod.example.com` in a bar is four columns of information and eleven of
+    // domain.
+    let short = name.split('.').next().unwrap_or(&name).to_string();
+    (!short.is_empty()).then_some(short)
+}
+
+impl Default for Identity {
     fn default() -> Self {
         Self {
             mark: default_mark(),
-            name: default_name(),
+            name: String::new(),
+            session: default_session(),
+            host: default_host(),
         }
     }
 }
@@ -194,7 +297,10 @@ impl Default for Brand {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub brand: Brand,
+    /// `[brand]` is still read: it named the same slot before the slot's job
+    /// was settled, and a configuration file that works should keep working.
+    #[serde(alias = "brand")]
+    pub identity: Identity,
     /// Where `o` looks for projects to open.
     pub projects_root: PathBuf,
     /// Named arrangements you jump to. `board` is the word the interface uses;
@@ -704,7 +810,7 @@ impl Default for Naming {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            brand: Brand::default(),
+            identity: Identity::default(),
             projects_root: home().join("Code"),
             layouts: default_layouts(),
             shell: String::new(),
@@ -922,6 +1028,27 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
         if !allowed.contains(&value.as_str()) {
             out.push(format!(
                 "nav: {field} = {value:?} is not one of {}",
+                allowed.join(", ")
+            ));
+        }
+    }
+    // The same reason: both fall through to a default, so `host = "alway"`
+    // behaves as `remote` and looks exactly like a setting that did not take.
+    for (field, value, allowed) in [
+        (
+            "session",
+            &cfg.identity.session,
+            &["never", "named", "always"][..],
+        ),
+        (
+            "host",
+            &cfg.identity.host,
+            &["never", "remote", "always"][..],
+        ),
+    ] {
+        if !allowed.contains(&value.as_str()) {
+            out.push(format!(
+                "identity: {field} = {value:?} is not one of {}",
                 allowed.join(", ")
             ));
         }

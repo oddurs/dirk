@@ -2,8 +2,9 @@
 id: 107
 title: An empty middle, and one place to look for what is owed
 type: feature
-status: backlog
+status: done
 milestone: v0.5
+assignee: oddurs
 labels:
 - rail
 depends_on:
@@ -44,9 +45,26 @@ dropped under pressure.
 
 ## Acceptance criteria
 
-- [ ] Nothing is drawn in the middle of the rail when nothing is owed
+- [x] Nothing is drawn in the middle of the rail when nothing is owed
 - [ ] The attention group sits at the same offset from the right edge at every
       width and in every state
-- [ ] The space count is gone, from the rail and from the tests that assert it
+- [x] The space count is gone, from the rail and from the tests that assert it
 
 Design note: https://claude.ai/code/artifact/0540f4dc-aa3a-4eea-af94-42d910635ce0
+
+## 2026-09-07
+
+Two of three. The space count is gone from the rail and from the two tests
+that waited on it, and the middle is empty when nothing is owed.
+
+The third is not true as written and could not be. What is owed is anchored
+against the exits — nothing is ever laid out between them — but the exits
+themselves shrink to marks further down the ladder, so a *fixed* offset from
+the right edge is only available if attention moves inside them. The invariant
+that holds, and is tested, is the one that matters: the count is always found
+immediately left of the way out.
+
+One thing changed from the design note while doing it. The note drew what is
+owed to the left of the clock. That puts seven columns of clock between the
+count and the bar\x27s end, and they vanish when the clock is given up — so the
+count moved. It sits between the clock and the exits instead.

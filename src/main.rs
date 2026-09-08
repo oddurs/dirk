@@ -1396,7 +1396,7 @@ impl App {
             }
             return;
         }
-        notify::send(title, self.cfg.brand.name.clone());
+        notify::send(title, self.cfg.identity.app());
         if !quiet {
             sound::play(&self.cfg.sound, which);
         }
@@ -2280,7 +2280,6 @@ impl App {
         );
 
         let clock = chrono::Local::now().format("%H:%M").to_string();
-        let status = if self.prefix { "prefix" } else { &self.status };
         ui::rail::render(
             buf,
             rail,
@@ -2289,11 +2288,19 @@ impl App {
             &self.session,
             &ui::rail::Now {
                 clock: &clock,
-                note: status,
+                note: &self.status,
+                // Not folded into the note it used to be. A chord waiting for
+                // its second key is the most time-critical thing the interface
+                // says, and the rail draws it as such.
+                prefix: self.prefix,
                 // Being read from the past is a state you can forget you are
                 // in, and it is the one surface on every screen.
                 scrolled: self.session.scrolled(),
                 quit_armed: self.quit_armed.is_some(),
+                session: self.session_name.as_deref(),
+                // The rail's middle shows what the nav is not showing, and a
+                // sidebar of no width is a sidebar that is not showing it.
+                nav_visible: side.width > 0,
             },
             &mut self.hits,
         );

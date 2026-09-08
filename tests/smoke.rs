@@ -61,6 +61,10 @@ struct Harness {
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     screen: Arc<Mutex<vt100::Parser>>,
+    /// Kept so a test can narrow the terminal. Most of what the rail does is
+    /// decide what to give up as it runs out of room, and that cannot be
+    /// tested at one width.
+    master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl Harness {
@@ -131,7 +135,45 @@ impl Harness {
             writer: pair.master.take_writer().expect("writer"),
             child,
             screen,
+            master: pair.master,
         }
+    }
+
+    /// Narrow the terminal, and the parser with it.
+    ///
+    /// Both, or the screen keeps reporting the old width and every row reads
+    /// as padded with whatever was there before the resize.
+    fn resize(&mut self, cols: u16) {
+        self.master
+            .resize(PtySize {
+                rows: ROWS,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("resize");
+        self.screen
+            .lock()
+            .unwrap()
+            .screen_mut()
+            .set_size(ROWS, cols);
+        std::thread::sleep(Duration::from_millis(600));
+    }
+
+    /// One row, at whatever width the terminal currently is.
+    fn row(&self, y: u16, cols: u16) -> String {
+        let screen = self.screen.lock().unwrap();
+        (0..cols)
+            .map(|x| {
+                screen
+                    .screen()
+                    .cell(y, x)
+                    .map_or(" ", |c| c.contents())
+                    .to_string()
+            })
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
 
     fn wait_for(&mut self, needle: &str, timeout: Duration) -> bool {
@@ -229,10 +271,18 @@ fn it_comes_up_and_draws_its_chrome() {
         "the nav never drew; dirk drew:\n{}",
         h.drawn()
     );
-    // The brand, in the rail. This is the only place it appears.
+    // The mark, in the rail's first cells. The brand is one glyph now: it does
+    // the branding job completely and in one column, and the slot beside it
+    // answers where you are, which a product name cannot. Searching the screen
+    // for the word would find the project in the nav and pass for the wrong
+    // reason.
     assert!(
-        h.wait_for("dirk", Duration::from_secs(5)),
-        "no brand in the rail"
+        h.wait_until(Duration::from_secs(5), |h| h
+            .row(ROWS - 1, COLS)
+            .trim_start()
+            .starts_with('◆')),
+        "no mark in the rail\n{}",
+        h.drawn()
     );
 }
 
@@ -867,6 +917,260 @@ fn work_that_finishes_while_you_are_elsewhere_reads_as_done() {
 }
 
 #[test]
+fn the_rail_gives_up_the_clock_before_it_gives_up_what_is_owed() {
+    // The bar used to lay out the clock first and fit the counts in beside it
+    // afterwards, so a narrow terminal kept the time and hid the fact that an
+    // agent was waiting for a human. That is backwards: `blocked` is the only
+    // state waiting on a person, and it is the last thing on the screen.
+    let claude = fake_agent("claude");
+    let mut h = Harness::start_with_config(&format!(
+        "shell = {:?}\n[notify]\nenabled = false\n",
+        claude.display().to_string()
+    ));
+    assert!(h.wait_for(READY, START), "never started");
+    assert!(
+        h.wait_until(Duration::from_secs(15), agent_at_rest),
+        "not detected as an agent\n{}",
+        h.drawn()
+    );
+
+    h.send(b"printf 'Do you want to proceed?\\n> 1. Yes\\n  2. No\\n'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .row(ROWS - 1, COLS)
+            .contains("! 1")),
+        "the rail did not count a blocked agent\n{}",
+        h.drawn()
+    );
+
+    // Down the ladder. At every width the count is still there, it is always
+    // the same distance from the right edge, and by the bottom the clock is
+    // not there at all.
+    // "One place to look" is not a fixed column -- the exits themselves shrink
+    // to marks further down the ladder, and everything left of them moves when
+    // they do. It is that nothing is ever laid out between what is owed and
+    // the way out, so the count is always found in the same place relative to
+    // the thing at the end of the bar.
+    let anchored = |rail: &str| {
+        rail.split("! 1")
+            .nth(1)
+            .and_then(|after| after.split('✕').next())
+            .is_some_and(|between| between.trim().is_empty())
+    };
+    assert!(
+        anchored(&h.row(ROWS - 1, COLS)),
+        "not anchored to begin with"
+    );
+    let mut clock_dropped = false;
+    for cols in [64u16, 52, 44, 36, 30, 24] {
+        h.resize(cols);
+        let rail = h.row(ROWS - 1, cols);
+        assert!(
+            rail.contains("! 1"),
+            "at {cols} columns the rail stopped saying an agent was blocked\n{rail}"
+        );
+        assert!(
+            anchored(&rail),
+            "at {cols} columns something came between what is owed and the way out\n{rail}"
+        );
+        clock_dropped |= !rail.contains(':');
+    }
+    assert!(
+        clock_dropped,
+        "the clock survived every width, so nothing was actually given up"
+    );
+}
+
+#[test]
+fn a_chord_that_is_open_says_so_where_you_are_looking() {
+    // The prefix indicator used to be smuggled through the status note and
+    // drawn in the same dim as the clock. It is the most time-critical thing
+    // the interface says — it is over in half a second — and it now displaces
+    // where you are, because mid-chord nothing else on the bar matters.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;Reading the vt100 grid\\007'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| h
+            .row(ROWS - 1, COLS)
+            .contains("vt100 grid")),
+        "the rail never named where it was\n{}",
+        h.drawn()
+    );
+
+    // The prefix alone, with no second key: the bar has to say it is waiting.
+    h.send(&[0]);
+    assert!(
+        h.wait_until(Duration::from_secs(5), |h| {
+            !h.row(ROWS - 1, COLS).contains("vt100 grid")
+        }),
+        "an open chord did not displace where you are\n{}",
+        h.drawn()
+    );
+
+    // Escape closes it and puts the crumb back.
+    h.send(b"\x1b");
+    assert!(
+        h.wait_until(Duration::from_secs(5), |h| h
+            .row(ROWS - 1, COLS)
+            .contains("vt100 grid")),
+        "the bar did not come back after the chord\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_rail_fits_every_width_it_is_given() {
+    // The bar is the one surface that spans the whole terminal, so anything it
+    // gets wrong about width it gets wrong across the screen: a run that
+    // overshoots wraps onto the row above and corrupts a pane.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    let above = h.row(ROWS - 2, COLS);
+    for cols in (16u16..=80).step_by(6) {
+        h.resize(cols);
+        let rail = h.row(ROWS - 1, cols);
+        assert!(
+            rail.chars().count() <= cols as usize,
+            "at {cols} columns the rail was {} wide\n{rail}",
+            rail.chars().count()
+        );
+        assert!(
+            rail.contains('◆'),
+            "at {cols} columns the rail said nothing at all\n{rail}"
+        );
+        assert!(
+            rail.contains('✕'),
+            "at {cols} columns there was no way out of the session\n{rail}"
+        );
+        // Wrapping would land here, on top of whatever the pane drew.
+        assert!(
+            !h.row(ROWS - 2, cols).contains('◆'),
+            "at {cols} columns the rail wrapped onto the row above\n{}",
+            h.drawn()
+        );
+    }
+    h.resize(COLS);
+    assert!(
+        !above.contains('◆'),
+        "the row above the rail held the rail before any of this"
+    );
+}
+
+#[test]
+fn a_chip_in_the_rail_is_still_a_way_to_get_there() {
+    // The chips are only there when the nav is hidden, which is the one time
+    // they are the only navigation. They have to work.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;First thing\\007'\r");
+    std::thread::sleep(Duration::from_secs(3));
+    h.prefix(b"n");
+    std::thread::sleep(Duration::from_millis(500));
+    h.send(b"printf '\\033]2;Second thing\\007'\r");
+    std::thread::sleep(Duration::from_secs(3));
+
+    h.prefix(b"b");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            let r = h.row(ROWS - 1, COLS);
+            r.contains("1 First") && r.contains("2 Second")
+        }),
+        "the rail did not become the list\n{}",
+        h.drawn()
+    );
+
+    // Click the one that is not focused, and the bar says you are in it.
+    let rail = h.row(ROWS - 1, COLS);
+    let at = rail.find("1 First").expect("the first chip") as u16;
+    h.click(at, ROWS - 1);
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            let r = h.row(ROWS - 1, COLS);
+            // The filled bar marks the chip you are in; it has to have moved.
+            r.split('▊')
+                .nth(1)
+                .is_some_and(|after| after.starts_with("1 "))
+        }),
+        "clicking a chip did not go there\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
+fn the_corner_is_the_safe_way_out() {
+    // The bottom-right is the cheapest target a pointer has: you can throw the
+    // mouse at it and it cannot overshoot. Giving that to the thing that ends
+    // every shell and every agent was backwards, and the two-click arming on
+    // quit was compensating for it.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    let rail = h.row(ROWS - 1, COLS);
+    let detach = rail.find("detach").expect("no detach in the rail");
+    let quit = rail.find("quit").expect("no quit in the rail");
+    assert!(
+        detach > quit,
+        "quit is outboard of detach, so overshooting the safe one hits the dangerous one\n{rail}"
+    );
+    assert!(
+        rail.trim_end().ends_with("detach"),
+        "something other than detach holds the corner\n{rail}"
+    );
+    // And they are not neighbours. A stray click between them should land on
+    // ground, not on the other one.
+    assert!(
+        quit + "quit".len() + 2 <= detach,
+        "quit and detach are adjacent\n{rail}"
+    );
+}
+
+#[test]
+fn the_rail_shows_what_the_nav_is_not_showing() {
+    // One rule, not two modes. With the nav up the list is right there, so the
+    // bar names where you are; with it hidden nothing else is showing the
+    // session, so the bar becomes the list.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;Reading the vt100 grid\\007'\r");
+    assert!(
+        h.wait_until(Duration::from_secs(20), |h| h
+            .row(ROWS - 1, COLS)
+            .contains("vt100 grid")),
+        "the rail never named where it was\n{}",
+        h.drawn()
+    );
+    let with_nav = h.row(ROWS - 1, COLS);
+    assert!(
+        with_nav.contains('▸'),
+        "the rail did not say where you are as a path\n{with_nav}"
+    );
+
+    h.prefix(b"b");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .row(ROWS - 1, COLS)
+            .contains('▊')),
+        "hiding the nav did not put the list in the rail\n{}",
+        h.drawn()
+    );
+    // And back again: the rule reads the same in both directions.
+    h.prefix(b"b");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            let r = h.row(ROWS - 1, COLS);
+            r.contains('▸') && !r.contains('▊')
+        }),
+        "showing the nav again left the list in the rail\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
 fn the_rail_counts_what_is_owed_and_nothing_else() {
     let claude = fake_agent("claude");
     let mut h = Harness::start_with_config(&format!(
@@ -1333,9 +1637,16 @@ fn output_that_left_the_screen_can_be_read_again() {
     );
 
     // And the bar says you are not looking at the live screen, which a pane
-    // that has simply stopped changing looks exactly like.
+    // that has simply stopped changing looks exactly like. It says it with a
+    // mark and a depth, beside what is owed rather than beside the clock:
+    // being read from the past is a mode, and a mode drawn as ambient text is
+    // a mode nobody notices.
     assert!(
-        h.rows().last().is_some_and(|r| r.contains("back")),
+        h.rows().last().is_some_and(|r| {
+            r.split('↑')
+                .nth(1)
+                .is_some_and(|d| d.starts_with(|c: char| c.is_ascii_digit()) && !d.starts_with('0'))
+        }),
         "nothing said the pane was being read from the past\n{}",
         h.drawn()
     );
@@ -1656,4 +1967,38 @@ fn a_binding_for_something_that_does_not_exist_is_reported() {
         said.contains("nav.togle"),
         "a binding for nothing was accepted in silence: {said}"
     );
+}
+
+#[test]
+fn a_note_never_costs_the_bar_its_way_out() {
+    // The status note used to be drawn at whatever length it happened to be,
+    // whatever room there was. On a narrow terminal nothing else could then
+    // fit, every step of the ladder failed, and the bar fell back to drawing
+    // the mark alone -- so copy mode on a small screen lost the way out, the
+    // clock, and anything that was owed, at the moment it was hardest to
+    // guess at.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.prefix(b"[");
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| h
+            .row(ROWS - 1, COLS)
+            .contains("copy")),
+        "copy mode said nothing in the rail\n{}",
+        h.drawn()
+    );
+
+    for cols in [72u16, 64, 56, 48, 40, 32, 24] {
+        h.resize(cols);
+        let rail = h.row(ROWS - 1, cols);
+        assert!(
+            rail.contains('✕'),
+            "at {cols} columns a note took the way out off the bar\n{rail}"
+        );
+        assert!(
+            rail.chars().count() <= cols as usize,
+            "at {cols} columns the note overran the terminal\n{rail}"
+        );
+    }
 }

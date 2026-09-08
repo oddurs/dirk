@@ -2,8 +2,9 @@
 id: 108
 title: The corner belongs to the safe way out
 type: feature
-status: backlog
+status: done
 milestone: v0.5
+assignee: oddurs
 labels:
 - rail
 created: 2026-09-07
@@ -45,9 +46,17 @@ that should have been true before it was needed.
 
 ## Acceptance criteria
 
-- [ ] detach occupies the last cells of the rail, including the final column
-- [ ] quit is separated from detach by at least two cells of ground
-- [ ] quit still arms on the first click and ends the session on the second
-- [ ] The smoke test for two-click quit finds the button in its new place
+- [x] detach occupies the last cells of the rail, including the final column
+- [x] quit is separated from detach by at least two cells of ground
+- [x] quit still arms on the first click and ends the session on the second
+- [x] The smoke test for two-click quit finds the button in its new place
 
 Design note: https://claude.ai/code/artifact/0540f4dc-aa3a-4eea-af94-42d910635ce0
+
+## 2026-09-07
+
+Detach holds the corner, quit is inboard behind two cells of ground, and quit
+still takes two clicks.
+
+`the_corner_is_the_safe_way_out` asserts the order, the last column and the
+gap, so a later change that puts them back cannot pass quietly.

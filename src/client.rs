@@ -473,7 +473,7 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
                     crate::sound::Alert::Done => "has finished",
                 };
                 let cfg = config();
-                crate::notify::send(format!("{} {what}", alert.label), cfg.brand.name.clone());
+                crate::notify::send(format!("{} {what}", alert.label), cfg.identity.app());
                 if !quiet {
                     crate::sound::play(&cfg.sound, which);
                 }
