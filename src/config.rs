@@ -788,6 +788,18 @@ pub struct Ui {
     /// draws one on every pane, which is what tells two shells side by side
     /// apart and which pane has the keyboard. `off` draws none.
     pub pane_rules: String,
+    /// What dirk writes as the title of the terminal it is running in.
+    ///
+    /// dirk emulates the terminals in its panes, so a title written inside one
+    /// stops at dirk — and dirk wrote none of its own, which left the window
+    /// holding fourteen panes labelled whatever it was called before dirk
+    /// started. Window managers, tab bars and application switchers all read
+    /// that.
+    ///
+    /// `{host}`, `{workspace}`, `{tab}` and `{pane}` are the tokens; `{{` and
+    /// `}}` are literal braces. A token with no value renders empty rather than
+    /// as its own name. Empty leaves the outer title alone.
+    pub window_title: String,
     /// Whether dirk asks the terminal for mouse events at all.
     ///
     /// All or nothing. A half-captured mouse is a mode to remember, and the
@@ -801,12 +813,62 @@ impl Default for Ui {
     fn default() -> Self {
         Self {
             pane_rules: "auto".into(),
+            // The workspace, which is what somebody alt-tabbing is looking for.
+            // Not the host: on the machine you are sitting at it is noise, and
+            // `--remote` is the case that wants it and can say so.
+            window_title: "{workspace}".into(),
             mouse: true,
         }
     }
 }
 
 impl Ui {
+    /// The title to write now, or `None` when dirk should leave it alone.
+    ///
+    /// Rendered here rather than by the client, because these are the session's
+    /// facts: `{host}` names the machine the panes are running on, which under
+    /// `--remote` is not the machine the window is on.
+    pub fn title(&self, host: &str, workspace: &str, tab: &str, pane: &str) -> Option<String> {
+        if self.window_title.trim().is_empty() {
+            return None;
+        }
+        let mut out = String::with_capacity(self.window_title.len());
+        let mut rest = self.window_title.as_str();
+        while let Some(open) = rest.find(['{', '}']) {
+            out.push_str(&rest[..open]);
+            let c = rest.as_bytes()[open] as char;
+            let after = &rest[open + 1..];
+            // `{{` and `}}` are one literal brace, so a title can contain one.
+            if after.starts_with(c) {
+                out.push(c);
+                rest = &after[1..];
+                continue;
+            }
+            if c == '}' {
+                out.push('}');
+                rest = after;
+                continue;
+            }
+            let Some(close) = after.find('}') else {
+                out.push('{');
+                rest = after;
+                continue;
+            };
+            out.push_str(match &after[..close] {
+                "host" => host,
+                "workspace" => workspace,
+                "tab" => tab,
+                "pane" => pane,
+                // Rendered as nothing rather than as its own name: a title with
+                // `{wokspace}` in it should be short, not wrong.
+                _ => "",
+            });
+            rest = &after[close + 1..];
+        }
+        out.push_str(rest);
+        Some(out.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
     /// Should this pane give its top row to a rule?
     pub fn ruled(&self, labelled: bool) -> bool {
         match self.pane_rules.as_str() {
@@ -1558,6 +1620,39 @@ mod tests {
             complaints(&cfg).iter().any(|c| c.contains("floor")),
             "an interval under the floor was accepted in silence"
         );
+    }
+
+    #[test]
+    fn a_window_title_is_arranged_by_its_template() {
+        let ui = |t: &str| Ui {
+            window_title: t.into(),
+            ..Ui::default()
+        };
+        assert_eq!(
+            ui("{host}: {workspace}").title("build", "the parser", "", ""),
+            Some("build: the parser".to_string())
+        );
+        // A token with no value renders empty rather than as its own name, and
+        // what is left is collapsed — so a template written for a session with
+        // tabs does not leave a hole in one without them.
+        assert_eq!(
+            ui("{workspace} · {tab}").title("build", "the parser", "", ""),
+            Some("the parser ·".to_string())
+        );
+        // A name dirk does not publish is nothing, not itself: a title with
+        // `{wokspace}` in it should be short, not wrong.
+        assert_eq!(
+            ui("[{wokspace}]").title("h", "w", "", ""),
+            Some("[]".into())
+        );
+        // Braces can be written.
+        assert_eq!(
+            ui("{{{workspace}}}").title("h", "w", "", ""),
+            Some("{w}".into())
+        );
+        // And empty leaves the terminal's own title alone.
+        assert_eq!(ui("").title("h", "w", "t", "p"), None);
+        assert_eq!(ui("   ").title("h", "w", "t", "p"), None);
     }
 
     #[test]

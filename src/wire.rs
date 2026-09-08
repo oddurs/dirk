@@ -76,6 +76,12 @@ pub enum Kind {
     /// A separate kind rather than a command because the answer is a stream:
     /// what comes back is that pane's screen, again, until you leave.
     Watch = 9,
+    /// What to call the terminal the client is running in.
+    ///
+    /// Composed by the session, written by the client. The facts are the
+    /// session's — `{host}` is the machine the panes are on — and the terminal
+    /// is the client's, which under `--remote` are two different machines.
+    Title = 10,
 }
 
 impl Kind {
@@ -90,6 +96,7 @@ impl Kind {
             7 => Kind::Alert,
             8 => Kind::Clip,
             9 => Kind::Watch,
+            10 => Kind::Title,
             _ => return None,
         })
     }

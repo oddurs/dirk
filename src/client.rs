@@ -285,6 +285,7 @@ fn setup() -> io::Result<()> {
 }
 
 pub fn restore() {
+    let _ = io::stdout().write_all(b"\x1b[23;2t");
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
 }
@@ -491,6 +492,12 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
             // Both ways, because neither reaches every terminal. The command
             // is the machine this client is running on; the escape sequence
             // asks the terminal, which is the one that crosses ssh.
+            Kind::Title => {
+                let Ok(title) = String::from_utf8(body) else {
+                    continue;
+                };
+                let _ = execute!(io::stdout(), crossterm::terminal::SetTitle(&title));
+            }
             Kind::Clip => {
                 let Ok(text) = serde_json::from_slice::<String>(&body) else {
                     continue;
