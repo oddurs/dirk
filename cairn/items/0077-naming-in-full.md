@@ -3,10 +3,11 @@ id: 77
 key: v0.3.1
 title: Naming, in full
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 76
 created: 2026-09-07
+updated: 2026-09-08
 due: 2026-12-01
 ---
 

@@ -3,10 +3,11 @@ id: 75
 key: v0.2
 title: The nav
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 74
 created: 2026-09-07
+updated: 2026-09-08
 due: 2026-10-15
 ---
 

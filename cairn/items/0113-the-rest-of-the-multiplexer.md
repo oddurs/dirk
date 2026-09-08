@@ -3,11 +3,11 @@ id: 113
 key: v0.8
 title: The rest of the multiplexer
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 112
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 due: 2027-06-15
 ---
 

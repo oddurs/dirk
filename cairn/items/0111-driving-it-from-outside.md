@@ -3,11 +3,11 @@ id: 111
 key: v0.6
 title: Driving it from outside
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 79
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 due: 2027-03-15
 ---
 
