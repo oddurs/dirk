@@ -139,6 +139,16 @@ pub struct Alert {
     pub state: String,
     /// The workspace it happened in, as it is named on screen.
     pub label: String,
+    /// What to say, when the caller wrote it themselves.
+    ///
+    /// Empty for an agent changing state, and then the client composes the
+    /// sentence from the label and the state — the wording belongs on the
+    /// machine that shows it, which is the one whose language and whose
+    /// notification service are involved. A script's own words are not
+    /// something to compose around: appending "has finished" to "deploy
+    /// failed" would be worse than saying nothing.
+    #[serde(default)]
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

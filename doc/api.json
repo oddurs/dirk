@@ -248,6 +248,15 @@
     },
     {
       "answer": [
+        "notified",
+        "workspace",
+        "why"
+      ],
+      "args": "<workspace|pane> <text...> [--blocked]",
+      "name": "session.notify"
+    },
+    {
+      "answer": [
         "reloaded"
       ],
       "args": "",

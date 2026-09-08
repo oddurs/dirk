@@ -117,7 +117,7 @@ JSON; `--current` means the pane you are in.
   agent     list|start|state|prompt|wait|hooks
   worktree  list|add|remove
   tab       list|new|focus|rename|close
-  session   info|list|reload|commands|quit|prune
+  session   info|list|reload|commands|notify|quit|prune
   api       schema
 
 Options:
@@ -1395,6 +1395,7 @@ impl App {
                 change.to,
                 format!("{} {what}", change.label),
                 change.label.clone(),
+                None,
                 quiet,
             );
         }
@@ -1418,7 +1419,14 @@ impl App {
     /// where nobody is sitting is one nobody gets. Performed here when there is
     /// no client, because a session you detached from is exactly the one you
     /// wanted to be told about.
-    fn alert(&mut self, state: agent::State, title: String, label: String, quiet: bool) {
+    fn alert(
+        &mut self,
+        state: agent::State,
+        title: String,
+        label: String,
+        said: Option<String>,
+        quiet: bool,
+    ) {
         let which = match state {
             agent::State::Blocked => sound::Alert::Blocked,
             agent::State::Done => sound::Alert::Done,
@@ -1436,6 +1444,7 @@ impl App {
                     false => which.name().to_string(),
                 },
                 label,
+                text: said.unwrap_or_default(),
             };
             for view in &mut self.views {
                 let _ = wire::send_json(&mut view.out, wire::Kind::Alert, &msg);
@@ -1448,11 +1457,6 @@ impl App {
         }
     }
 
-    /// Do what was asked, or say why not.
-    ///
-    /// Reads are answered by `api::read` and never touch the seen rule: asking
-    /// about a workspace is not looking at one, and without that a status line
-    /// polling the session would clear every notification it exists to show.
     /// What happens to a command that the ordinary answer path does not handle.
     ///
     /// `Ordinary` falls through to `ask`. `Err` is a command that can never be
@@ -1668,6 +1672,11 @@ impl App {
         }
     }
 
+    /// Do what was asked, or say why not.
+    ///
+    /// Reads are answered by `api::read` and never touch the seen rule: asking
+    /// about a workspace is not looking at one, and without that a status line
+    /// polling the session would clear every notification it exists to show.
     fn ask(&mut self, req: &wire::Request) -> wire::Reply {
         use wire::Reply;
         if let Some(answer) = api::read(&self.session, &req.cmd, &req.args) {
@@ -1694,6 +1703,72 @@ impl App {
 
             // The counterpart to attaching and pressing `q`. A session you
             // want gone should not require a terminal to go and stand in.
+            // The same path an agent's blocking takes, and therefore the same
+            // rules: nothing about the workspace somebody is looking at, not
+            // more often than the floor, and no noise for a project that asked
+            // to be quiet. A build, a deploy or a cron job is owed exactly what
+            // an agent is owed and no more.
+            "session.notify" => {
+                let (words, opts) = wait::options(&req.args);
+                if let Some(bad) = wait::unknown(&opts, &["blocked"]) {
+                    return Reply::err(format!("session.notify takes no --{bad}"));
+                }
+                let Some(target) = words.first() else {
+                    return Reply::err("session.notify needs a workspace or a pane");
+                };
+                let Some(at) = api::target_workspace(&self.session, target) else {
+                    return Reply::err(format!("no such workspace or pane: {target}"));
+                };
+                let said = words[1..].join(" ");
+                if said.is_empty() {
+                    return Reply::err("session.notify needs something to say");
+                }
+                // Two events are worth hearing and they have to be told apart
+                // with your back to the screen. A script that finished is the
+                // ordinary one; a script that needs you is the interruption.
+                let state = match opts.iter().any(|(k, _)| k == "blocked") {
+                    true => agent::State::Blocked,
+                    false => agent::State::Done,
+                };
+                let (p, w) = at;
+                let focus = Focus::Ws { p, w };
+                let watched = match self.views.is_empty() {
+                    true => self.session.focus == focus,
+                    false => self.views.iter().any(|v| v.focus == focus),
+                };
+                let label = self
+                    .session
+                    .workspace(p, w)
+                    .map(|ws| ws.label.clone())
+                    .unwrap_or_default();
+                let why = if !self.cfg.notify.enabled {
+                    Some("notifications are off")
+                } else if watched {
+                    Some("you are looking at it")
+                } else if !self.session.may_notify(
+                    focus,
+                    state,
+                    Instant::now(),
+                    Duration::from_millis(self.cfg.notify.min_interval_ms),
+                ) {
+                    Some("too soon after the last one")
+                } else {
+                    None
+                };
+                match why {
+                    Some(why) => Reply::ok(serde_json::json!({
+                        "notified": false, "why": why, "workspace": target,
+                    })),
+                    None => {
+                        let quiet = self.project_of(focus).is_some_and(|d| !d.sound);
+                        self.alert(state, said.clone(), label, Some(said), quiet);
+                        Reply::ok(serde_json::json!({
+                            "notified": true, "workspace": target,
+                        }))
+                    }
+                }
+            }
+
             "session.quit" => {
                 self.quit = true;
                 Reply::ok(serde_json::json!({ "quit": true }))

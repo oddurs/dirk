@@ -2958,3 +2958,85 @@ fn ids_complete_from_the_session_that_has_them() {
 
     drop(client);
 }
+
+#[test]
+fn a_script_can_cause_an_interruption_and_gets_the_same_rules() {
+    // dirk knows how to make a noise on the machine somebody is sitting at, and
+    // only its own state machine could ask for one. A build, a deploy or a cron
+    // job is owed exactly what an agent is owed — including the rules that
+    // decide whether this is a feature or something muted within a week.
+    let session = unique("notify");
+    let (dir, rang) = noisy("script");
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    // Somewhere that is not on screen.
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let all = ids(&list);
+    let ws = all.last().expect("a second workspace").clone();
+    let (ok, _) = ask(&session, &["workspace", "focus", &all[0]]);
+    assert!(ok, "workspace focus failed");
+
+    let (ok, said) = ask(
+        &session,
+        &["session", "notify", &ws, "the deploy failed", "--blocked"],
+    );
+    assert!(ok, "the notification was refused: {said}");
+    assert!(
+        said.contains("\"notified\": true"),
+        "it declined to notify: {said}"
+    );
+    assert!(
+        appears(&rang, START),
+        "nothing rang on the machine with the speakers\n{}",
+        client.drawn()
+    );
+
+    // The floor applies. An agent that blocks, unblocks and blocks again inside
+    // a minute is one interruption, and so is a script in a loop.
+    let (ok, said) = ask(
+        &session,
+        &[
+            "session",
+            "notify",
+            &ws,
+            "the deploy failed again",
+            "--blocked",
+        ],
+    );
+    assert!(
+        ok,
+        "the second notification errored rather than declining: {said}"
+    );
+    assert!(
+        said.contains("\"notified\": false"),
+        "the floor did not apply to a script: {said}"
+    );
+
+    // And nothing about the workspace you are looking at, which is the rule
+    // that decides whether this gets muted.
+    let (ok, said) = ask(
+        &session,
+        &["session", "notify", &all[0], "you can see this"],
+    );
+    assert!(ok, "the notification errored rather than declining: {said}");
+    assert!(
+        said.contains("looking at it"),
+        "it interrupted about the workspace on screen: {said}"
+    );
+
+    // A target that does not exist is refused rather than silently dropped.
+    let (ok, _) = ask(&session, &["session", "notify", "w9999", "nowhere"]);
+    assert!(
+        !ok,
+        "a notification about a workspace that does not exist was accepted"
+    );
+    // As is one with nothing to say.
+    let (ok, _) = ask(&session, &["session", "notify", &ws]);
+    assert!(!ok, "an empty notification was accepted");
+
+    drop(client);
+}
