@@ -2548,16 +2548,22 @@ fn images_can_be_turned_off_and_then_nothing_is_sent() {
         h.images()
     );
     // The pane is otherwise unharmed, which is what taking the escape out of
-    // the stream is for: what is on the screen is the shell's own echo of the
-    // command and a prompt after it, not a burst of escape bytes.
+    // the stream is for: the shell is still there and still reading, rather
+    // than sitting inside an escape waiting for an end that never comes.
+    //
+    // Twice, not once: the pty echoes what is typed whether or not anything is
+    // reading it, so one is the keystrokes coming back and the second is the
+    // shell having run them. A prompt would be the other way to ask, but its
+    // text is the shell's own -- and `/bin/sh` is bash here and dash in CI.
+    h.send(b"echo still-here\r");
     assert!(
         h.wait_until(START, |h| h
             .rows()
             .iter()
-            .filter(|r| r.contains("sh-3.2$"))
+            .filter(|r| r.contains("still-here"))
             .count()
             >= 2),
-        "the pane did not come back to a prompt\n{}",
+        "the pane stopped reading after an image it was told to ignore\n{}",
         h.drawn()
     );
 }
