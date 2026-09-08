@@ -20,8 +20,8 @@ A terminal multiplexer that knows what its sessions are for.
 │ ▾ dirk                         │ ── timeline ─────────   0042 Comman│
 │   * 1 main ↑6 ↓1            now│  25 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0043 Pane z│
 │       Building the mux core    │ CPU ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   0044 Create│
-│ ▸ · 2 feat/packaging ⑂     1d  │                                    │
-│       Reading the grid         │                                    │
+│ └ ▸ · 2 feat/packaging ⑂   1d  │                                    │
+│         Reading the grid       │                                    │
 │   + workspace                  │                                    │
 │   n new  ·  o project          │                                    │
 │                                │                                    │

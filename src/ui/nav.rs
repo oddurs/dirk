@@ -26,8 +26,8 @@
 //!  ▾ dirk
 //!    * 1 main ↑6 ↓1                2m
 //!        Building the mux core
-//!    · 2 feat/packaging-manifests ⑂  1d
-//!        Reading the vt100 grid
+//!  └  · 2 feat/packaging-manifests ⑂  1d
+//!          Reading the vt100 grid
 //!    + workspace
 //!    n new  ·  o project
 //!
@@ -39,6 +39,12 @@
 //! Three lists of different things, and the order they appear in is the
 //! argument: **layouts** are places you go, **spaces** are where work lives, and
 //! **agents** are what is asking for you. Attention flows down the column.
+//!
+//! A worktree's spaces hang off the checkout the others hang off, one level in
+//! and off a connector. They are not peers of the spaces in the repository
+//! proper -- they are the same work on another branch, which is the whole
+//! reason somebody made one. There is no third level: a worktree of a worktree
+//! is another worktree of the same repository.
 //!
 //! The same workspace appears under spaces and under agents. That is not
 //! duplication — spaces answers "what is open, and where" and agents answers
@@ -63,6 +69,7 @@ use crate::theme::THEME;
 use crate::ui::{cells, elide, fill, heading, write_str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -148,6 +155,21 @@ impl Action {
 /// crowds out the name it belongs to has stopped being one.
 pub const BADGE: usize = 8;
 
+/// How a space hangs off its project.
+///
+/// There is no depth here, on purpose. A worktree of a worktree is another
+/// worktree of the same repository, so a space is either in the checkout the
+/// others hang off or one level under it. Two variants behind an `Option` is
+/// how the code refuses to express a third level, rather than a comment asking
+/// nobody to add one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hang {
+    /// Another hangs below it.
+    More,
+    /// The last one, which closes the group.
+    Last,
+}
+
 /// One line of the nav.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
@@ -159,6 +181,9 @@ pub enum Row {
         p: usize,
         w: usize,
         n: usize,
+        /// `None` in the checkout the others hang off; a connector in any
+        /// other checkout of the same repository.
+        hang: Option<Hang>,
     },
     /// Its second line: what the program inside says it is doing. Scenery —
     /// the selection lands on the identity line, and clicking either goes to
@@ -243,9 +268,10 @@ pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
             n += proj.workspaces.len();
             continue;
         }
-        for w in 0..proj.workspaces.len() {
+        let spaces: Vec<&Path> = proj.workspaces.iter().map(|ws| ws.at.as_path()).collect();
+        for (w, hang) in grouped(&where_open(proj), &spaces) {
             n += 1;
-            out.push(Row::Workspace { p, w, n });
+            out.push(Row::Workspace { p, w, n, hang });
             // Only when there is something to say. A row with nothing for its
             // second line draws one line rather than a blank one.
             if cfg.nav.tall() && captioned(proj, w) {
@@ -304,6 +330,71 @@ pub fn rows(cfg: &Config, session: &Session) -> Vec<Row> {
     }
 
     out
+}
+
+/// Every space of a project, in the order the nav draws them.
+///
+/// Grouped by checkout rather than left in the order the spaces were made: the
+/// first checkout is the one the others hang off -- the repository proper when
+/// it is open, and otherwise whichever worktree came first -- and every other
+/// checkout's spaces are drawn under it. The numbers follow the rows, so what
+/// you press is what you counted down the column.
+///
+/// A space whose checkout is no longer in the list comes last and hangs off
+/// nothing. Drawing a row in the wrong place is a smaller failure than losing
+/// it, and a space that vanishes from the nav is a pane nobody can reach.
+fn grouped(checkouts: &[&Path], spaces: &[&Path]) -> Vec<(usize, Option<Hang>)> {
+    let mut out: Vec<(usize, Option<Hang>)> = Vec::with_capacity(spaces.len());
+    for (i, c) in checkouts.iter().enumerate() {
+        let under = (i > 0).then_some(Hang::More);
+        out.extend(
+            spaces
+                .iter()
+                .enumerate()
+                .filter(|(_, at)| *at == c)
+                .map(|(w, _)| (w, under)),
+        );
+    }
+    let orphans: Vec<_> = (0..spaces.len())
+        .filter(|w| !out.iter().any(|(seen, _)| seen == w))
+        .map(|w| (w, None))
+        .collect();
+    out.extend(orphans);
+    // The last one that hangs closes the group, whatever came after it.
+    if let Some(last) = out.iter().rposition(|(_, h)| h.is_some()) {
+        out[last].1 = Some(Hang::Last);
+    }
+    out
+}
+
+/// How far in everything about a space is drawn.
+///
+/// Not "is this a git worktree" but "is this the checkout the others hang off"
+/// -- a project open only in worktrees has one of them at the top, and nothing
+/// should hang off nothing. Read the same way `grouped` reads it, so a caption
+/// cannot end up indented differently from the row it captions.
+fn hangs(checkouts: &[&Path], at: &Path) -> bool {
+    checkouts
+        .iter()
+        .position(|c| *c == at)
+        .is_some_and(|i| i > 0)
+}
+
+/// The checkouts of a project, as the two functions above want them.
+fn where_open(proj: &crate::mux::session::Project) -> Vec<&Path> {
+    proj.checkouts.iter().map(|c| c.path.as_path()).collect()
+}
+
+/// The width of that indent, which is the connector plus the space after it.
+///
+/// Taken from the marks rather than fixed at two, because a replaced glyph
+/// declares its own width and the rows under a space have to start where the
+/// connector left off.
+fn nest(g: &Glyphs, hanging: bool) -> u16 {
+    match hanging {
+        false => 0,
+        true => g.cells(G::TreeMid).max(g.cells(G::TreeLast)) + 1,
+    }
 }
 
 /// Whether a space's intent belongs on a line of its own.
@@ -910,7 +1001,7 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             );
         }
 
-        Row::Workspace { p, w: wi, n } => {
+        Row::Workspace { p, w: wi, n, hang } => {
             let Some(ws) = session.workspace(p, wi) else {
                 return;
             };
@@ -918,7 +1009,18 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             // one repository are on two branches, which is why there are two
             // of them.
             let repo = session.projects.get(p).and_then(|x| x.repo_of(wi));
-            space_row(buf, cx, ws, p, wi, Some(n), repo);
+            space_row(
+                buf,
+                cx,
+                Space {
+                    ws,
+                    p,
+                    w: wi,
+                    number: Some(n),
+                    repo,
+                    hang,
+                },
+            );
         }
 
         Row::Agent { p, w: wi } => {
@@ -928,8 +1030,22 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
             // Worktrees are marked here too. This is the list where telling
             // them apart matters most: several agents in parallel means several
             // checkouts of one repository, all wearing its name.
+            // Flush, whichever checkout it is in. This list is what is owed
+            // rather than the shape of a project -- there is no project row
+            // above it for anything to hang off.
             let repo = session.projects.get(p).and_then(|x| x.repo_of(wi));
-            space_row(buf, cx, ws, p, wi, None, repo);
+            space_row(
+                buf,
+                cx,
+                Space {
+                    ws,
+                    p,
+                    w: wi,
+                    number: None,
+                    repo,
+                    hang: None,
+                },
+            );
         }
 
         Row::Intent { p, w: wi } => {
@@ -942,11 +1058,18 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 THEME.intent()
             };
             // Indented under the name it is a caption of, rather than starting
-            // where that name does: two lines flush left read as two rows.
-            let left = w.saturating_sub(6) as usize;
+            // where that name does: two lines flush left read as two rows. And
+            // in under the connector as well, when there is one, so the pair
+            // moves as one row.
+            let over = 6 + session
+                .projects
+                .get(p)
+                .and_then(|x| x.workspaces.get(wi).map(|ws| (x, ws)))
+                .map_or(0, |(x, ws)| nest(cx.g, hangs(&where_open(x), &ws.at)));
+            let left = w.saturating_sub(over) as usize;
             write_str(
                 buf,
-                inner.x + 6,
+                inner.x + over,
                 y,
                 &crate::name::shorten(&ws.label, left, cx.g.text(G::Ellipsis)),
                 style,
@@ -967,7 +1090,13 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
                 (false, true) => THEME.text(),
                 (false, false) => THEME.dim(),
             };
-            let mut x = inner.x + 4;
+            let mut x = inner.x
+                + 4
+                + session
+                    .projects
+                    .get(p)
+                    .and_then(|x| x.workspaces.get(wi).map(|ws| (x, ws)))
+                    .map_or(0, |(x, ws)| nest(cx.g, hangs(&where_open(x), &ws.at)));
             x += write_str(
                 buf,
                 x,
@@ -1024,7 +1153,13 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
 
             // One further in when there is a tab level above, so the tree reads
             // as a tree rather than as two lists at the same indent.
-            let mut x = inner.x + if ws.tabs.len() > 1 { 6 } else { 4 };
+            let mut x = inner.x
+                + if ws.tabs.len() > 1 { 6 } else { 4 }
+                + session
+                    .projects
+                    .get(p)
+                    .and_then(|x| x.workspaces.get(wi).map(|ws| (x, ws)))
+                    .map_or(0, |(x, ws)| nest(cx.g, hangs(&where_open(x), &ws.at)));
             let branch = if last { G::TreeLast } else { G::TreeMid };
             x += write_str(buf, x, y, cx.g.text(branch), THEME.rule_strong(), w);
             x += write_str(buf, x, y, " ", THEME.rule_strong(), w);
@@ -1090,15 +1225,32 @@ fn draw(buf: &mut Buffer, hits: &mut HitMap, row: Row, cx: &Ctx) {
 ///
 /// The age is right-aligned and reserved before the name is written, so a long
 /// intent elides rather than colliding with it.
-fn space_row(
-    buf: &mut Buffer,
-    cx: &Ctx,
-    ws: &Workspace,
+/// One space, as the two lists that draw it see it.
+///
+/// A struct rather than eight arguments: the last four are all "which of the
+/// two lists is this, and where in it", and passing them positionally is how
+/// the attention zone ends up with a number it should not have.
+struct Space<'a> {
+    ws: &'a Workspace,
     p: usize,
-    wi: usize,
+    w: usize,
+    /// Its jump key. The attention zone has none: it is not the list the
+    /// numbers count down.
     number: Option<usize>,
-    repo: Option<&crate::git::Repo>,
-) {
+    repo: Option<&'a crate::git::Repo>,
+    /// How it hangs off its project, in the list that draws projects.
+    hang: Option<Hang>,
+}
+
+fn space_row(buf: &mut Buffer, cx: &Ctx, s: Space) {
+    let Space {
+        ws,
+        p,
+        w: wi,
+        number,
+        repo,
+        hang,
+    } = s;
     let Ctx {
         inner,
         y,
@@ -1149,6 +1301,23 @@ fn space_row(
     );
 
     let mut x = inner.x;
+    // The connector is the indent. It says what these rows hang off, and
+    // drawing it is what moves them in -- so the two can never disagree about
+    // how far that is.
+    if let Some(hang) = hang {
+        write_str(
+            buf,
+            x,
+            y,
+            cx.g.text(match hang {
+                Hang::More => G::TreeMid,
+                Hang::Last => G::TreeLast,
+            }),
+            THEME.rule_strong(),
+            w,
+        );
+        x += nest(cx.g, true);
+    }
     x += match (ws.panes().len() > 1, ws.expanded) {
         (false, _) => cx.g.cells(G::Collapsed),
         (true, false) => write_str(buf, x, y, cx.g.text(G::Collapsed), THEME.rule_strong(), w),
@@ -1279,12 +1448,115 @@ mod tests {
             Row::Blank,
             Row::Heading(Section::Spaces, 2),
             Row::Project(0),
-            Row::Workspace { p: 0, w: 0, n: 1 },
+            Row::Workspace {
+                p: 0,
+                w: 0,
+                n: 1,
+                hang: None,
+            },
             Row::Intent { p: 0, w: 0 },
-            Row::Workspace { p: 0, w: 1, n: 2 },
+            Row::Workspace {
+                p: 0,
+                w: 1,
+                n: 2,
+                hang: None,
+            },
             Row::NewWorkspace(0),
             Row::Footer(Section::Spaces),
         ]
+    }
+
+    /// Paths, as `grouped` and `hangs` want them.
+    fn at(names: &[&str]) -> Vec<std::path::PathBuf> {
+        names.iter().map(std::path::PathBuf::from).collect()
+    }
+
+    fn refs(paths: &[std::path::PathBuf]) -> Vec<&Path> {
+        paths.iter().map(|p| p.as_path()).collect()
+    }
+
+    #[test]
+    fn a_worktrees_spaces_are_drawn_under_the_checkout_the_others_hang_off() {
+        // Not in the order they were made. Two spaces in the repository and
+        // one in a worktree, interleaved, come out grouped -- otherwise the
+        // connector would point at whatever happened to be above it.
+        let checkouts = at(&["/r", "/r-side"]);
+        let spaces = at(&["/r", "/r-side", "/r"]);
+        assert_eq!(
+            grouped(&refs(&checkouts), &refs(&spaces)),
+            vec![(0, None), (2, None), (1, Some(Hang::Last))]
+        );
+    }
+
+    #[test]
+    fn the_last_one_that_hangs_closes_the_group() {
+        // A column of `└` reads as several broken trees rather than as one.
+        let checkouts = at(&["/r", "/r-a", "/r-b"]);
+        let spaces = at(&["/r-a", "/r-b", "/r"]);
+        assert_eq!(
+            grouped(&refs(&checkouts), &refs(&spaces)),
+            vec![(2, None), (0, Some(Hang::More)), (1, Some(Hang::Last))]
+        );
+    }
+
+    #[test]
+    fn a_project_open_only_in_worktrees_still_has_a_top() {
+        // `principal` degrades to whichever checkout came first, and nothing
+        // should hang off nothing: the first one is the top, worktree or not.
+        let checkouts = at(&["/r-a", "/r-b"]);
+        let spaces = at(&["/r-a", "/r-b"]);
+        assert_eq!(
+            grouped(&refs(&checkouts), &refs(&spaces)),
+            vec![(0, None), (1, Some(Hang::Last))]
+        );
+    }
+
+    #[test]
+    fn a_space_whose_checkout_is_gone_is_still_drawn() {
+        // Losing a row is worse than drawing it in the wrong place: a space
+        // that vanishes from the nav is a pane nobody can reach.
+        let checkouts = at(&["/r"]);
+        let spaces = at(&["/r", "/nowhere"]);
+        let rows = grouped(&refs(&checkouts), &refs(&spaces));
+        assert_eq!(rows.len(), 2, "a space went missing: {rows:?}");
+        assert_eq!(
+            rows[1],
+            (1, None),
+            "it hung off a checkout that is not open"
+        );
+    }
+
+    #[test]
+    fn what_hangs_and_what_is_indented_are_the_same_question() {
+        // Two callers, one rule. If they disagree, a caption is indented
+        // differently from the line it is a caption of.
+        let checkouts = at(&["/r", "/r-a", "/r-b"]);
+        let spaces = at(&["/r-b", "/r", "/r-a", "/nowhere"]);
+        let c = refs(&checkouts);
+        for (w, hang) in grouped(&c, &refs(&spaces)) {
+            assert_eq!(
+                hang.is_some(),
+                hangs(&c, &spaces[w]),
+                "space {w} is grouped and indented differently"
+            );
+        }
+    }
+
+    #[test]
+    fn there_is_no_third_level_to_indent_to() {
+        // A worktree of a worktree is another worktree of the same repository.
+        // Every checkout past the first is one level in, never two.
+        let checkouts = at(&["/r", "/r-a", "/r-b", "/r-c"]);
+        let c = refs(&checkouts);
+        let g = Glyphs::default();
+        for path in &checkouts[1..] {
+            assert_eq!(
+                nest(&g, hangs(&c, path)),
+                nest(&g, true),
+                "{} was indented to its own depth",
+                path.display()
+            );
+        }
     }
 
     #[test]
@@ -1306,7 +1578,12 @@ mod tests {
         nav.step(&rows, 1);
         assert_eq!(
             nav.selection(&rows),
-            Some(Row::Workspace { p: 0, w: 0, n: 1 })
+            Some(Row::Workspace {
+                p: 0,
+                w: 0,
+                n: 1,
+                hang: None
+            })
         );
     }
 
@@ -1343,7 +1620,12 @@ mod tests {
         nav.sync(&rows, Focus::Ws { p: 0, w: 1 });
         assert_eq!(
             nav.selection(&rows),
-            Some(Row::Workspace { p: 0, w: 1, n: 2 })
+            Some(Row::Workspace {
+                p: 0,
+                w: 1,
+                n: 2,
+                hang: None
+            })
         );
         nav.sync(&rows, Focus::Layout(0));
         assert_eq!(nav.selection(&rows), Some(Row::Layout(0)));
@@ -1379,7 +1661,13 @@ mod tests {
         assert!(!intent.selectable());
         assert_eq!(
             intent.target(),
-            Row::Workspace { p: 0, w: 0, n: 1 }.target()
+            Row::Workspace {
+                p: 0,
+                w: 0,
+                n: 1,
+                hang: None
+            }
+            .target()
         );
     }
 
@@ -1391,7 +1679,12 @@ mod tests {
         nav.step(&rows, 1);
         assert_eq!(
             nav.selection(&rows),
-            Some(Row::Workspace { p: 0, w: 1, n: 2 }),
+            Some(Row::Workspace {
+                p: 0,
+                w: 1,
+                n: 2,
+                hang: None
+            }),
             "`j` should reach the next workspace, not its intent line"
         );
     }
@@ -1446,7 +1739,16 @@ mod tests {
             })
         );
         // And it is a different destination from the workspace row above it.
-        assert_ne!(pane.target(), Row::Workspace { p: 1, w: 2, n: 1 }.target());
+        assert_ne!(
+            pane.target(),
+            Row::Workspace {
+                p: 1,
+                w: 2,
+                n: 1,
+                hang: None
+            }
+            .target()
+        );
     }
 
     #[test]
