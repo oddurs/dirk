@@ -2,10 +2,10 @@
 id: 134
 title: 'Copy mode: word and paragraph motions'
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: mux
 effort: s
