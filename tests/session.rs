@@ -4365,10 +4365,13 @@ fn a_shell_mode_nobody_understands_is_complained_about() {
     // than costing you the session it was in.
     let (ok, out) = ask(&session, &["session", "reload"]);
     assert!(ok, "reload failed: {out}");
-    assert!(
-        out.contains("not auto, login or non_login"),
-        "the reload did not say what it did not understand: {out}"
-    );
+    // What it says, not how it says it. Every setting that is one of a few
+    // words shares this sentence now, so the test asks for the parts that
+    // matter: the setting, the value it could not read, and what it did
+    // instead.
+    for part in ["terminal.shell_mode", "loginish", "using auto"] {
+        assert!(out.contains(part), "the reload did not say {part:?}: {out}");
+    }
 
     drop(client);
 }

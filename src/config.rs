@@ -24,6 +24,95 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
+/// A setting whose value is one of a few words.
+///
+/// The words are written down once. The accessor matches on what this parses
+/// to, and `complaints` asks the same type whether the text was understood — so
+/// a new value cannot be added to one and forgotten in the other, which is what
+/// used to happen: each of these was a `match` on a string in the accessor and
+/// a second copy of the same list, in another file's worth of distance, inside
+/// the validator.
+///
+/// The field stays a `String`. An unrecognised value warns and falls back
+/// rather than refusing the file, because a dirk that will not start over a typo
+/// in a colour name is worse than one that starts with the wrong colour — and a
+/// typed field would make serde reject the whole document.
+macro_rules! choice {
+    (
+        $(#[$about:meta])*
+        $name:ident { $($variant:ident = $text:literal),+ $(,)? } else $fallback:ident
+    ) => {
+        $(#[$about])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            /// Every word this setting understands, in the order they are
+            /// offered. Used by the accessor's type and by the complaint, which
+            /// is the point.
+            pub const WORDS: &'static [&'static str] = &[$($text),+];
+
+            /// What the text means, or nothing when it means nothing.
+            pub fn read(text: &str) -> Option<Self> {
+                match text {
+                    $($text => Some($name::$variant),)+
+                    _ => None,
+                }
+            }
+
+            /// What the text means, falling back to the default.
+            pub fn of(text: &str) -> Self {
+                Self::read(text).unwrap_or($name::$fallback)
+            }
+
+            /// The word for what an unrecognised value gets. Derived from the
+            /// same list rather than assumed to be the first of them, because
+            /// for one of these it is not.
+            pub const fn fallback() -> &'static str {
+                match $name::$fallback {
+                    $($name::$variant => $text,)+
+                }
+            }
+        }
+    };
+}
+
+choice! {
+    /// How a workspace's row is arranged.
+    Rows { Tall = "tall", Short = "short", Intent = "intent" } else Tall
+}
+
+choice! {
+    /// Whether the attention zone holds its place.
+    Attention {
+        WhenNeeded = "when-needed",
+        Always = "always",
+        Never = "never",
+    } else WhenNeeded
+}
+
+choice! {
+    /// Whether a pane gives its top row to a rule.
+    PaneRules { Auto = "auto", Always = "always", Off = "off" } else Auto
+}
+
+choice! {
+    /// Whether a new pane's shell is a login shell.
+    ShellMode { Auto = "auto", Login = "login", NonLogin = "non_login" } else Auto
+}
+
+choice! {
+    /// When the rail says which session this is.
+    SessionShown { Named = "named", Always = "always", Never = "never" } else Named
+}
+
+choice! {
+    /// When the rail says which machine this is.
+    HostShown { Remote = "remote", Always = "always", Never = "never" } else Remote
+}
+
 /// One pane of a layout: either a program to run, or a split holding more
 /// panes. A node with children ignores its own `command`.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -237,11 +326,11 @@ impl Identity {
     /// The session's name, when the rail should say it.
     pub fn session_shown<'a>(&self, name: Option<&'a str>) -> Option<&'a str> {
         let name = name.filter(|n| !n.is_empty())?;
-        match self.session.as_str() {
-            "always" => Some(name),
-            "never" => None,
+        match SessionShown::of(&self.session) {
+            SessionShown::Always => Some(name),
+            SessionShown::Never => None,
             // A session nobody named is the only session there is.
-            _ => (name != "default").then_some(name),
+            SessionShown::Named => (name != "default").then_some(name),
         }
     }
 
@@ -253,10 +342,10 @@ impl Identity {
     /// available from inside a single process; `always` is the escape hatch
     /// for a machine that should always name itself.
     pub fn host_shown(&self) -> Option<String> {
-        let show = match self.host.as_str() {
-            "always" => true,
-            "never" => false,
-            _ => ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"]
+        let show = match HostShown::of(&self.host) {
+            HostShown::Always => true,
+            HostShown::Never => false,
+            HostShown::Remote => ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"]
                 .iter()
                 // Set-but-empty is not a connection. It is what a parent that
                 // wanted to unset it left behind.
@@ -392,13 +481,13 @@ pub struct Sound {
     pub per_agent: std::collections::BTreeMap<String, String>,
 }
 
-/// What a per-harness or per-project answer says about making a noise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Says {
-    Yes,
-    No,
-    /// Nothing: whatever the next answer down says.
-    Nothing,
+choice! {
+    /// What a per-harness or per-project answer says about making a noise.
+    ///
+    /// `Nothing` is the fallback in both senses: it is what an entry dirk does
+    /// not understand means, and it is what "default" means — whatever the next
+    /// answer down says.
+    Says { Yes = "on", No = "off", Nothing = "default" } else Nothing
 }
 
 impl Sound {
@@ -408,14 +497,9 @@ impl Sound {
     /// and is complained about at load — a typo that silently meant `off` is a
     /// notification you never hear and never find out about.
     pub fn about(&self, agent: Option<&str>) -> Says {
-        match agent
+        agent
             .and_then(|a| self.per_agent.get(a))
-            .map(String::as_str)
-        {
-            Some("on") => Says::Yes,
-            Some("off") => Says::No,
-            _ => Says::Nothing,
-        }
+            .map_or(Says::Nothing, |says| Says::of(says))
     }
 }
 
@@ -748,16 +832,16 @@ impl Nav {
 
     /// Whether the attention zone is drawn when it is empty, or at all.
     pub fn attention_always(&self) -> bool {
-        self.attention == "always"
+        Attention::of(&self.attention) == Attention::Always
     }
 
     pub fn attention_never(&self) -> bool {
-        self.attention == "never"
+        Attention::of(&self.attention) == Attention::Never
     }
 
     /// Whether a workspace gets a second line for what is happening in it.
     pub fn tall(&self) -> bool {
-        self.rows == "tall"
+        Rows::of(&self.rows) == Rows::Tall
     }
 
     /// Whether the one line a workspace gets carries what it is *doing* rather
@@ -767,7 +851,7 @@ impl Nav {
     /// on every row and says nothing, while the intent is the whole of what
     /// distinguishes them.
     pub fn leads_with_intent(&self) -> bool {
-        self.rows == "intent"
+        Rows::of(&self.rows) == Rows::Intent
     }
 }
 
@@ -911,10 +995,10 @@ impl Ui {
 
     /// Should this pane give its top row to a rule?
     pub fn ruled(&self, labelled: bool) -> bool {
-        match self.pane_rules.as_str() {
-            "always" => true,
-            "off" => false,
-            _ => labelled,
+        match PaneRules::of(&self.pane_rules) {
+            PaneRules::Always => true,
+            PaneRules::Off => false,
+            PaneRules::Auto => labelled,
         }
     }
 }
@@ -965,12 +1049,12 @@ impl Default for Terminal {
 impl Terminal {
     /// Should a shell started now be a login shell?
     pub fn login(&self) -> bool {
-        match self.shell_mode.as_str() {
-            "login" => true,
-            "non_login" => false,
+        match ShellMode::of(&self.shell_mode) {
+            ShellMode::Login => true,
+            ShellMode::NonLogin => false,
             // Only where the problem is. Linux distributions put the same
             // entries in files every interactive shell reads.
-            _ => cfg!(target_os = "macos"),
+            ShellMode::Auto => cfg!(target_os = "macos"),
         }
     }
 
@@ -1383,6 +1467,19 @@ const TAKEN: &[(&str, &str)] = &[
     ("ctrl+alt+down", "workspace switching on GNOME, and Ghostty"),
 ];
 
+/// What to say about a value none of the words match.
+///
+/// One sentence for all of them, because they are all the same mistake and it
+/// deserves the same answer: what was written, what was expected, and what dirk
+/// is going to do instead — which is the part somebody actually needs, since a
+/// setting that silently fell back looks exactly like one that did not take.
+fn unknown(field: &str, value: &str, words: &[&str], fallback: &str) -> String {
+    format!(
+        "{field}: {value:?} is not one of {}; using {fallback}",
+        words.join(", ")
+    )
+}
+
 pub fn complaints(cfg: &Config) -> Vec<String> {
     let mut out = Vec::new();
     for (name, bind) in &cfg.keys {
@@ -1411,26 +1508,32 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
             }
         }
     }
-    if !matches!(cfg.ui.pane_rules.as_str(), "auto" | "always" | "off") {
-        out.push(format!(
-            "ui.pane_rules: {:?} is not auto, always or off; using auto",
-            cfg.ui.pane_rules
-        ));
-    }
-    if !matches!(
-        cfg.terminal.shell_mode.as_str(),
-        "auto" | "login" | "non_login"
-    ) {
-        out.push(format!(
-            "terminal.shell_mode: {:?} is not auto, login or non_login; using auto",
-            cfg.terminal.shell_mode
-        ));
+    for (field, value, words, fallback) in [
+        (
+            "ui.pane_rules",
+            &cfg.ui.pane_rules,
+            PaneRules::WORDS,
+            PaneRules::fallback(),
+        ),
+        (
+            "terminal.shell_mode",
+            &cfg.terminal.shell_mode,
+            ShellMode::WORDS,
+            ShellMode::fallback(),
+        ),
+    ] {
+        if !words.contains(&value.as_str()) {
+            out.push(unknown(field, value, words, fallback));
+        }
     }
     let known: Vec<String> = cfg.kinds().into_iter().map(|k| k.name).collect();
     for (name, says) in &cfg.sound.per_agent {
-        if !matches!(says.as_str(), "on" | "off" | "default") {
-            out.push(format!(
-                "sound.agents.{name}: {says:?} is not on, off or default; ignored"
+        if Says::read(says).is_none() {
+            out.push(unknown(
+                &format!("sound.agents.{name}"),
+                says,
+                Says::WORDS,
+                Says::fallback(),
             ));
         }
         // A name nobody recognises is a rule that can never apply, and silence
@@ -1542,40 +1645,31 @@ pub fn complaints(cfg: &Config) -> Vec<String> {
             out.push(format!("nav: no glyph called {:?}", def.name));
         }
     }
-    for (field, value, allowed) in [
+    // Every one of these falls through to a default, so `host = "alway"` behaves
+    // as `remote` and looks exactly like a setting that did not take.
+    for (field, value, words, fallback) in [
         (
-            "attention",
+            "nav.attention",
             &cfg.nav.attention,
-            &["when-needed", "always", "never"][..],
+            Attention::WORDS,
+            Attention::fallback(),
         ),
-        ("rows", &cfg.nav.rows, &["tall", "short", "intent"][..]),
-    ] {
-        if !allowed.contains(&value.as_str()) {
-            out.push(format!(
-                "nav: {field} = {value:?} is not one of {}",
-                allowed.join(", ")
-            ));
-        }
-    }
-    // The same reason: both fall through to a default, so `host = "alway"`
-    // behaves as `remote` and looks exactly like a setting that did not take.
-    for (field, value, allowed) in [
+        ("nav.rows", &cfg.nav.rows, Rows::WORDS, Rows::fallback()),
         (
-            "session",
+            "identity.session",
             &cfg.identity.session,
-            &["never", "named", "always"][..],
+            SessionShown::WORDS,
+            SessionShown::fallback(),
         ),
         (
-            "host",
+            "identity.host",
             &cfg.identity.host,
-            &["never", "remote", "always"][..],
+            HostShown::WORDS,
+            HostShown::fallback(),
         ),
     ] {
-        if !allowed.contains(&value.as_str()) {
-            out.push(format!(
-                "identity: {field} = {value:?} is not one of {}",
-                allowed.join(", ")
-            ));
+        if !words.contains(&value.as_str()) {
+            out.push(unknown(field, value, words, fallback));
         }
     }
     // A mistyped token renders as silence otherwise: a label simply shorter
@@ -1821,8 +1915,11 @@ mod tests {
             said.iter().any(|c| c.contains("no harness of that name")),
             "a rule for a harness that does not exist passed in silence: {said:?}"
         );
+        // What it says, not how it says it: the wording is shared with every
+        // other setting that is one of a few words.
         assert!(
-            said.iter().any(|c| c.contains("not on, off or default")),
+            said.iter()
+                .any(|c| c.starts_with("sound.agents.claude:") && c.contains("quiet")),
             "a value nobody understands passed in silence: {said:?}"
         );
         // And the one it does not understand says nothing rather than guessing.
@@ -1919,6 +2016,113 @@ mod tests {
         };
         assert!(!host.is_empty());
         assert!(!host.contains('.'), "{host:?} still has its domain");
+    }
+
+    /// Every setting that is one of a few words, and where it lives.
+    ///
+    /// Written once here so the tests below cover all of them: a setting added
+    /// to `choice!` and not to this list is a setting nothing checks, which is
+    /// the failure this whole change is about.
+    fn every_choice() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
+        vec![
+            ("nav.rows", Rows::WORDS, Rows::fallback()),
+            ("nav.attention", Attention::WORDS, Attention::fallback()),
+            ("ui.pane_rules", PaneRules::WORDS, PaneRules::fallback()),
+            (
+                "terminal.shell_mode",
+                ShellMode::WORDS,
+                ShellMode::fallback(),
+            ),
+            (
+                "identity.session",
+                SessionShown::WORDS,
+                SessionShown::fallback(),
+            ),
+            ("identity.host", HostShown::WORDS, HostShown::fallback()),
+            ("sound.agents.<name>", Says::WORDS, Says::fallback()),
+        ]
+    }
+
+    #[test]
+    fn what_a_setting_falls_back_to_is_something_it_understands() {
+        // Otherwise the complaint names a value that means nothing, which is a
+        // worse answer than the question.
+        for (field, words, fallback) in every_choice() {
+            assert!(
+                words.contains(&fallback),
+                "{field} falls back to {fallback:?}, which is not one of {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_word_a_setting_offers_is_accepted() {
+        // The list in the accessor and the list in the validator used to be two
+        // lists. They are one now, and this is what says so: every word dirk
+        // offers is a word dirk takes without complaint.
+        for (field, words, _) in every_choice() {
+            for word in words {
+                let mut cfg = Config::default();
+                match field {
+                    "nav.rows" => cfg.nav.rows = (*word).into(),
+                    "nav.attention" => cfg.nav.attention = (*word).into(),
+                    "ui.pane_rules" => cfg.ui.pane_rules = (*word).into(),
+                    "terminal.shell_mode" => cfg.terminal.shell_mode = (*word).into(),
+                    "identity.session" => cfg.identity.session = (*word).into(),
+                    "identity.host" => cfg.identity.host = (*word).into(),
+                    "sound.agents.<name>" => {
+                        cfg.sound.per_agent.insert("claude".into(), (*word).into());
+                    }
+                    other => panic!("{other} is in the list and not in this test"),
+                }
+                // About this setting, not about everything. The default
+                // config ships layouts whose programs may not be installed,
+                // and a complaint about `ptop` is a true thing to say on a
+                // machine without `ptop` -- which CI is, and this author's is
+                // not, which is how a test like this passes here and fails
+                // there.
+                let prefix = field.trim_end_matches("<name>");
+                let about: Vec<String> = complaints(&cfg)
+                    .into_iter()
+                    .filter(|c| c.starts_with(prefix))
+                    .collect();
+                assert!(
+                    about.is_empty(),
+                    "{field} = {word:?} is offered and complained about: {about:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_word_no_setting_offers_is_complained_about() {
+        // Every one of these falls through to a default, so a typo behaves as
+        // the default and looks exactly like a setting that did not take.
+        for (field, _, fallback) in every_choice() {
+            let mut cfg = Config::default();
+            let typo = "zarquon";
+            match field {
+                "nav.rows" => cfg.nav.rows = typo.into(),
+                "nav.attention" => cfg.nav.attention = typo.into(),
+                "ui.pane_rules" => cfg.ui.pane_rules = typo.into(),
+                "terminal.shell_mode" => cfg.terminal.shell_mode = typo.into(),
+                "identity.session" => cfg.identity.session = typo.into(),
+                "identity.host" => cfg.identity.host = typo.into(),
+                "sound.agents.<name>" => {
+                    cfg.sound.per_agent.insert("claude".into(), typo.into());
+                }
+                other => panic!("{other} is in the list and not in this test"),
+            }
+            let said = complaints(&cfg);
+            assert!(
+                said.iter().any(|c| c.contains(typo)),
+                "{field} took a value nothing understands in silence: {said:?}"
+            );
+            assert!(
+                said.iter().any(|c| c.contains(fallback)),
+                "{field} complained without saying what it would do instead: {said:?}"
+            );
+        }
     }
 
     #[test]
