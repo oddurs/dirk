@@ -2,7 +2,7 @@
 id: 150
 title: A landed item's close never reaches the trunk
 type: bug
-status: doing
+status: done
 milestone: v1.0
 created: 2026-09-07
 updated: 2026-09-07

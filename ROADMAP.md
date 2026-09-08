@@ -214,7 +214,7 @@ Local and several saved machines in one nav, one agent list across all of them,
 
 ## v1.0 — Production
 
-`######····` 60% · 15 of 25 done · due 2027-11-01
+`#######···` 64% · 16 of 25 done · due 2027-11-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -228,10 +228,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [ ] `0048` Panic and orphan safety <sup>chore · p1 · server</sup>
 - [ ] `0053` Clicking a notification should focus the workspace it is about <sup>feature · p3 · packaging</sup>
 - [ ] `0090` The documentation pages are a second copy of the README <sup>feature · p2 · web</sup>
-
-### in progress
-
-- [ ] `0150` A landed item's close never reaches the trunk <sup>bug · p1 · packaging</sup>
 
 ### in review
 
@@ -254,4 +250,5 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0095` Rows say what they hold without being opened <sup>feature · p2 · nav</sup>
 - [x] `0096` The state glyphs are a set, and this is not the only one <sup>chore · p3 · chrome</sup>
 - [x] `0099` A shot at a size you choose <sup>chore · p3 · web</sup>
+- [x] `0150` A landed item's close never reaches the trunk <sup>bug · p1 · packaging</sup>
 
