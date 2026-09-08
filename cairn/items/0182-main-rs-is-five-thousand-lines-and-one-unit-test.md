@@ -2,7 +2,7 @@
 id: 182
 title: main.rs is five thousand lines and one unit test
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
