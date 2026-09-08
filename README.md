@@ -478,6 +478,37 @@ or until the pane produces output — because a pane producing text is not
 finished, whatever it said a minute ago. Without that rule a harness whose hook
 fires on stop but not on start sticks on `done` while it grinds.
 
+### Images
+
+dirk emulates the terminal in each pane, so a program that draws an image draws
+it to dirk and it stops there — and vt100 discards the escape without a word, so
+it does not even reach the grid. A plot, a diagram, a screenshot an agent has
+just taken: all of them work in your terminal and stop working the moment they
+are inside dirk.
+
+So the bytes come out of the pane's stream before the parser sees them, and dirk
+gives the image to your terminal itself. Two rules make that cheap and correct.
+
+**An image is sent once and placed many times.** A payload can be a megabyte and
+a placement is twenty bytes, so a redraw re-places rather than re-sending, and
+two panes showing one picture each send two — dirk renumbers, because their
+image 1 and yours are different images.
+
+**A placement is anchored to a line of the pane's history, not to a row of the
+screen.** That is what makes it move with its text: scroll and the image goes
+with the output it belongs to, scroll past it and it leaves, scroll back and it
+returns. A frame with nothing new to say about images says nothing at all, so a
+still picture does not flicker.
+
+An image is clipped to its pane, so one in a narrow split does not spill onto
+its neighbour. An oversized or malformed one is dropped and the others are not.
+Nothing dirk sends asks your terminal to reply — a reply nobody read would
+arrive as escape bytes typed into whatever pane has the keyboard.
+
+A terminal that cannot draw an image ignores what dirk sends, so the cost of
+being wrong is nothing and this is on. `[terminal] graphics = false` is for a
+terminal that does something worse than ignore it.
+
 ### Reading an agent that keeps its history to itself
 
 `pane read` sees the grid vt100 keeps. A full-screen agent draws its transcript
@@ -715,6 +746,7 @@ resume_agents = true         # start a restored agent on the conversation it had
 # and unchanged elsewhere, where the same entries are in files every interactive
 # shell reads. A shell with no `-l` wants "non_login".
 [terminal]
+graphics   = true            # carry images through to your terminal
 shell_mode = "auto"          # auto | login | non_login
 new_cwd    = "follow"        # follow | home | current | a path
 

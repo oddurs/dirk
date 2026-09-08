@@ -919,6 +919,13 @@ pub struct Terminal {
     /// files every interactive shell reads. A shell with no `-l` wants
     /// `non_login`.
     pub shell_mode: String,
+    /// Whether dirk carries images through to the terminal it is running in.
+    ///
+    /// On, because a pane that cannot draw an image is the largest single thing
+    /// that makes it not a real terminal — and a terminal that cannot draw one
+    /// ignores what dirk sends, so the cost of being wrong is nothing. Off is
+    /// for somebody whose terminal does something worse than ignore it.
+    pub graphics: bool,
     /// `follow`, `home`, `current`, or a path.
     ///
     /// Where a pane made beside another one starts. `follow` inherits from the
@@ -930,6 +937,7 @@ pub struct Terminal {
 impl Default for Terminal {
     fn default() -> Self {
         Self {
+            graphics: true,
             shell_mode: "auto".into(),
             new_cwd: "follow".into(),
         }

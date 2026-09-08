@@ -72,6 +72,13 @@ pub struct Pane {
     pub closing: bool,
     /// What is running here, as of the last sample.
     pub occupant: crate::agent::Occupant,
+    /// The images this pane's program has drawn, and where.
+    ///
+    /// Beside the grid rather than in it: vt100 discards a graphics APC without
+    /// a word — no callback, nothing left in the cells — so the bytes are taken
+    /// out of the stream before it sees them and kept here. Shared with the
+    /// reader thread, which is the only place the bytes exist.
+    pub graphics: Arc<Mutex<crate::graphics::Store>>,
     /// What programs outside dirk have said about this pane, for display.
     ///
     /// Deliberately not state. `agent state` is a small closed set that dirk
@@ -131,6 +138,33 @@ pub struct Setup {
     /// that build a login `PATH`. Only meaningful when the argv is a shell: a
     /// board's command is a command and is run as one.
     pub login: bool,
+}
+
+/// Which line of the pane's whole history the cursor is on, and its column.
+///
+/// vt100 does not say how much has scrolled off, but it clamps `set_scrollback`
+/// to what exists — so asking for more than there could be and reading back
+/// gives the total. The view is put straight back, under the same lock, so
+/// nothing draws in between.
+pub fn whole_history(term: &mut Term) -> (usize, u16) {
+    let was = term.screen().scrollback();
+    term.screen_mut().set_scrollback(usize::MAX / 2);
+    let scrolled = term.screen().scrollback();
+    term.screen_mut().set_scrollback(was);
+    let (row, col) = term.screen().cursor_position();
+    (scrolled + usize::from(row), col)
+}
+
+/// The line of the pane's whole history the top of the visible screen is on.
+///
+/// The inverse of [`whole_history`]: what a placement's line has to be measured
+/// against to find the row it is drawn on now.
+pub fn top_line(term: &mut Term) -> usize {
+    let was = term.screen().scrollback();
+    term.screen_mut().set_scrollback(usize::MAX / 2);
+    let scrolled = term.screen().scrollback();
+    term.screen_mut().set_scrollback(was);
+    scrolled.saturating_sub(was)
 }
 
 fn oops(e: impl std::fmt::Display) -> std::io::Error {
@@ -209,8 +243,11 @@ impl Pane {
         )));
 
         let sink = Arc::clone(&term);
+        let images = Arc::new(Mutex::new(crate::graphics::Store::default()));
+        let drawing = Arc::clone(&images);
         std::thread::spawn(move || {
             let mut buf = [0u8; 16 * 1024];
+            let mut apc = crate::graphics::Reader::default();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => {
@@ -218,8 +255,22 @@ impl Pane {
                         return;
                     }
                     Ok(n) => {
+                        // The graphics come out first: vt100 would swallow them
+                        // and there is no way to ask it what it swallowed.
+                        let (text, drawn) = apc.take(&buf[..n]);
                         if let Ok(mut t) = sink.lock() {
-                            t.process(&buf[..n]);
+                            t.process(&text);
+                            if !drawn.is_empty()
+                                && let Ok(mut store) = drawing.lock()
+                            {
+                                // Anchored to the line of the pane's whole
+                                // history the cursor is on, so the image moves
+                                // with its text rather than with the screen.
+                                let (line, col) = whole_history(&mut t);
+                                for cmd in &drawn {
+                                    store.apply(cmd, line, col);
+                                }
+                            }
                         }
                         // A send failure means the UI is gone; so is the reason
                         // to keep reading.
@@ -241,6 +292,7 @@ impl Pane {
             exit: None,
             closing: false,
             occupant: crate::agent::Occupant::default(),
+            graphics: images,
             metadata: std::collections::BTreeMap::new(),
             hinted: None,
             agent_name: None,
