@@ -133,9 +133,88 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 - [x] `0073` Start an agent from the nav <sup>feature · p1 · agents</sup>
 - [x] `0098` Elision throws away the word that distinguishes <sup>bug · p2 · naming · rail</sup>
 
+## v0.6 — Driving it from outside
+
+`··········` 0% · 0 of 9 done · due 2027-03-15
+
+The socket API can be asked things. This is the half that lets a program use
+
+### backlog
+
+- [ ] `0116` agent prompt: give an agent work over the socket <sup>feature · p0 · api</sup>
+- [ ] `0117` agent wait: block until a state, not until a sleep <sup>feature · p0 · api</sup>
+- [ ] `0118` pane wait-output: the same, for things that are not agents <sup>feature · p1 · api</sup>
+- [ ] `0119` pane run: a command, submitted <sup>feature · p2 · api</sup>
+- [ ] `0120` Direct attach: one pane in your terminal, no interface <sup>feature · p2 · api</sup>
+- [ ] `0121` A terminal size when nobody is looking <sup>feature · p1 · server</sup>
+- [ ] `0122` dirk api schema: the socket protocol, as data <sup>feature · p2 · api</sup>
+- [ ] `0123` Shell completions <sup>feature · p2 · packaging</sup>
+- [ ] `0124` dirk notify: an interruption a script can cause <sup>feature · p3 · api</sup>
+
+## v0.7 — Agents you do not have to babysit
+
+`··········` 0% · 0 of 8 done · due 2027-04-30
+
+dirk guesses at agent state where it could be told. Installing the hook rather
+
+### backlog
+
+- [ ] `0125` Resume the conversation, not just the directory <sup>feature · p0 · agents</sup>
+- [ ] `0126` Install the hook, do not print it <sup>feature · p0 · agents</sup>
+- [ ] `0127` Detection rules as files, replaceable one at a time <sup>feature · p1 · agents</sup>
+- [ ] `0128` agent explain: why this pane is in this state <sup>feature · p1 · agents</sup>
+- [ ] `0129` Reading a full-screen agent's history <sup>feature · p2 · agents</sup>
+- [ ] `0130` Telling dirk what is behind the wrapper <sup>feature · p2 · agents</sup>
+- [ ] `0131` Display tokens an outside program can set <sup>feature · p2 · agents</sup>
+- [ ] `0132` Per-agent sound <sup>feature · p3 · agents</sup>
+
+## v0.8 — The rest of the multiplexer
+
+`··········` 0% · 0 of 10 done · due 2027-06-15
+
+What v0.5 did not finish, and the terminal features a pane needs before it is
+
+### backlog
+
+- [ ] `0133` Resizing a split from the keyboard <sup>feature · p1 · mux</sup>
+- [ ] `0134` Copy mode: word and paragraph motions <sup>feature · p2 · mux</sup>
+- [ ] `0135` Searching where you are reading <sup>feature · p2 · mux</sup>
+- [ ] `0136` Tabs, and moving a pane between them <sup>feature · p1 · mux</sup>
+- [ ] `0137` Images in a pane <sup>feature · p2 · mux</sup>
+- [ ] `0138` The title dirk writes to the terminal it runs in <sup>feature · p2 · chrome</sup>
+- [ ] `0139` Login shells, and where a new pane starts <sup>feature · p2 · config</sup>
+- [ ] `0140` Pane borders, and turning the mouse off <sup>feature · p3 · chrome</sup>
+- [ ] `0141` Bindings without a prefix <sup>feature · p2 · config</sup>
+- [ ] `0142` A third row layout for the nav <sup>feature · p3 · nav</sup>
+
+## v0.9 — Coming back to it
+
+`··········` 0% · 0 of 4 done · due 2027-07-31
+
+A session survives detaching. It should also survive the binary changing under
+
+### backlog
+
+- [ ] `0143` Something on the screen after a restart <sup>feature · p1 · server</sup>
+- [ ] `0144` Replacing the binary without ending the work <sup>feature · p2 · server</sup>
+- [ ] `0145` dirk update <sup>feature · p2 · packaging</sup>
+- [ ] `0146` Watching and driving a terminal over the socket <sup>feature · p2 · api</sup>
+
+## v0.10 — More than one machine
+
+`··········` 0% · 0 of 3 done · due 2027-09-15
+
+Local and several saved machines in one nav, one agent list across all of them,
+
+### backlog
+
+- [ ] `0147` Saved machines, in the nav <sup>feature · p0 · nav</sup>
+- [ ] `0148` Getting dirk onto the far side of an ssh connection <sup>feature · p1 · server</sup>
+- [ ] `0149` One attention column across every machine <sup>feature · p1 · nav</sup>
+
 ## v1.0 — Production
 
-`#####·····` 42% · 10 of 24 done · due 2027-04-01
+`#####·····` 42% · 10 of 24 done · due 2027-11-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 

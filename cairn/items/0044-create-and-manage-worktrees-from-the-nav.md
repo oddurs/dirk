@@ -25,3 +25,12 @@ is practical there at all.
 - [ ] Remove a worktree, refusing when it has uncommitted changes unless forced
 - [ ] Worktrees are visibly distinct from ordinary checkouts in the nav
 - [ ] Listing worktrees does not require leaving dirk
+
+## 2026-09-07
+
+From reading herdr (see doc/parity-herdr.md), two parts worth folding in here
+rather than filing separately: `[worktrees] directory` should name the checkout
+root, so worktrees land somewhere chosen rather than beside the repository by
+default; and closing a checkout that has open worktree spaces under it should
+need explicit intent, because closing one row and losing five is not a thing
+anybody meant. Drawing them under the parent is `0094`.
