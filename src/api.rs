@@ -481,6 +481,11 @@ pub const COMMANDS: &[Command] = &[
         answer: "commands[]",
     },
     Command {
+        name: "session.notify",
+        args: "<workspace|pane> <text...> [--blocked]",
+        answer: "notified, workspace, why",
+    },
+    Command {
         name: "session.reload",
         args: "",
         answer: "reloaded",

@@ -816,6 +816,13 @@ are reordered. Every managed pane gets `DIRK_PANE_ID` and `DIRK_SESSION`, and
 `--current` resolves from them — so a command from inside a pane reaches the
 session holding it without the caller looking anything up first.
 
+`dirk session notify <target> <text>` puts a build, a deploy or a cron job
+through the same path an agent's blocking takes, and therefore through the same
+rules: nothing about the workspace you are looking at, not more often than the
+floor, nothing audible for a project that asked to be quiet. `--blocked` picks
+the interrupting sound rather than the finished one. A suppressed notification
+is a success that says why, not a failure — the caller did nothing wrong.
+
 `dirk completion bash|zsh|fish` prints a completion script, generated from that
 same table. Ids complete too, by asking the running session — `w7:p12` is not a
 thing anybody remembers and it is the argument almost every command wants.
@@ -839,6 +846,7 @@ $ dirk session list          # every session, and whether anyone is watching
 $ dirk session reload        # re-read config.toml without restarting
 $ dirk session quit          # end one without going and standing in it
 $ dirk session prune         # remove sockets nothing is listening on
+$ dirk session notify --current "the deploy finished"
 ```
 
 A reload keeps what is running. An open layout keeps its panes — rebuilding a
