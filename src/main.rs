@@ -3763,11 +3763,49 @@ impl App {
         let step = |v: u16, d: isize, max: u16| {
             (v as isize + d).clamp(0, max.saturating_sub(1) as isize) as u16
         };
+        // While a query is being typed, every key is part of it. A letter that
+        // moved the cursor would be a letter you could not search for.
+        if mode.search.as_ref().is_some_and(|s| s.typing) {
+            return self.search_key(k);
+        }
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => {
+                // Escape clears a search before it leaves, so the first press
+                // takes the highlight off and the second puts you back.
+                if mode.search.take().is_some() && k.code == KeyCode::Esc {
+                    self.note("read: v select · y copy · esc");
+                    return;
+                }
                 self.copy = None;
                 self.session.unscroll_focused();
                 self.status.clear();
+            }
+            // `/` forward and `?` backward, `n` and `N` to repeat in the same
+            // and the opposite direction: the pair every pager has.
+            KeyCode::Char(c @ ('/' | '?')) => {
+                mode.search = Some(copy::Search {
+                    query: String::new(),
+                    forward: c == '/',
+                    typing: true,
+                });
+                self.note(&format!("{c}"));
+            }
+            KeyCode::Char(c @ ('n' | 'N')) => {
+                let Some(search) = mode.search.clone() else {
+                    return self.note("nothing to look for yet");
+                };
+                let forward = search.forward != (c == 'N');
+                let pane = mode.pane;
+                let from = mode.at;
+                let lines = self.copy_lines(pane);
+                match search.find(&lines, from, forward) {
+                    Some(at) => {
+                        if let Some(mode) = self.copy.as_mut() {
+                            mode.at = at;
+                        }
+                    }
+                    None => self.note(&format!("no {:?} on this screen", search.query)),
+                }
             }
             // Anchoring where the cursor is, so `v` then a movement selects the
             // way it does in every editor that has this.
@@ -3843,6 +3881,52 @@ impl App {
             KeyCode::Char('G') => {
                 self.session.unscroll_focused();
                 mode.at.0 = rows.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
+    /// A key while a search query is being typed.
+    ///
+    /// Enter takes you to the first match and leaves the query standing, so `n`
+    /// repeats it. Escape abandons the search and puts the cursor back where it
+    /// was, which is what makes trying one free.
+    fn search_key(&mut self, k: KeyEvent) {
+        let Some(mode) = self.copy.as_mut() else {
+            return;
+        };
+        let Some(search) = mode.search.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                mode.search = None;
+                self.note("read: v select · y copy · esc");
+            }
+            KeyCode::Enter => {
+                search.typing = false;
+                let (search, pane, from) = (search.clone(), mode.pane, mode.at);
+                let forward = search.forward;
+                let lines = self.copy_lines(pane);
+                match search.find(&lines, from, forward) {
+                    Some(at) => {
+                        if let Some(mode) = self.copy.as_mut() {
+                            mode.at = at;
+                        }
+                        self.note(&format!("/{} · n next · N back", search.query));
+                    }
+                    None => self.note(&format!("no {:?} on this screen", search.query)),
+                }
+            }
+            KeyCode::Backspace => {
+                search.query.pop();
+                let line = format!("{}{}", if search.forward { '/' } else { '?' }, search.query);
+                self.note(&line);
+            }
+            KeyCode::Char(c) => {
+                search.query.push(c);
+                let line = format!("{}{}", if search.forward { '/' } else { '?' }, search.query);
+                self.note(&line);
             }
             _ => {}
         }
