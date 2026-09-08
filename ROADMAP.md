@@ -132,13 +132,12 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v0.6 — Driving it from outside
 
-`##········` 11% · 1 of 9 done · due 2027-03-15
+`###·······` 22% · 2 of 9 done · due 2027-03-15
 
 The socket API can be asked things. This is the half that lets a program use
 
 ### backlog
 
-- [ ] `0116` agent prompt: give an agent work over the socket <sup>feature · p0 · api</sup>
 - [ ] `0117` agent wait: block until a state, not until a sleep <sup>feature · p0 · api</sup>
 - [ ] `0120` Direct attach: one pane in your terminal, no interface <sup>feature · p2 · api</sup>
 - [ ] `0122` dirk api schema: the socket protocol, as data <sup>feature · p2 · api</sup>
@@ -152,6 +151,7 @@ The socket API can be asked things. This is the half that lets a program use
 
 ### done
 
+- [x] `0116` agent prompt: give an agent work over the socket <sup>feature · p0 · api</sup>
 - [x] `0118` pane wait-output: the same, for things that are not agents <sup>feature · p1 · api</sup>
 
 ## v0.7 — Agents you do not have to babysit

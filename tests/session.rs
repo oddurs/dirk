@@ -2691,3 +2691,157 @@ fn waiting_for_a_line_out_of_a_pane_that_holds_no_agent() {
 
     drop(client);
 }
+
+#[test]
+fn a_prompt_is_written_once_and_refused_when_the_agent_is_asking() {
+    // dirk could start an agent and could recognise one, and could not talk to
+    // one. That is the whole of what this closes.
+    let session = unique("prompt");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = ids(&list).last().expect("a second workspace").clone();
+    let (ok, out) = ask(&session, &["agent", "state", "idle", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    // The shell in that pane is a stand-in for an agent's interface: what is
+    // being tested is that the text and its return arrive together, and a shell
+    // shows that by running the line.
+    let (ok, said) = ask(
+        &session,
+        &["agent", "prompt", &ws, "printf 'zzPROMPTED\\n'"],
+    );
+    assert!(ok, "the prompt was refused: {said}");
+    assert!(
+        said.contains("\"agent\""),
+        "the answer did not carry the agent it was about: {said}"
+    );
+    let (ok, panes) = ask(&session, &["pane", "list", &ws]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    assert!(
+        appears_in_pane(&session, &pane, "zzPROMPTED", START),
+        "the prompt was not submitted"
+    );
+
+    // An agent sitting on a question is not one to type a prompt at: the dialog
+    // wants an answer, and a prompt would be read as one.
+    let (ok, out) = ask(&session, &["agent", "state", "blocked", &ws]);
+    assert!(ok, "the report was refused: {out}");
+    let (ok, said) = ask(&session, &["agent", "prompt", &ws, "printf 'zzNOTSENT\\n'"]);
+    assert!(!ok, "a blocked agent was typed at: {said}");
+    assert!(
+        said.contains("blocked"),
+        "the refusal did not say why: {said}"
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !ask(&session, &["pane", "read", &pane, "40"])
+            .1
+            .contains("zzNOTSENT"),
+        "a refused prompt was written to the pane anyway"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn waiting_on_a_prompt_waits_for_it_to_have_started_something() {
+    // Without this the wait is satisfied by the state the agent was already in:
+    // one that was idle when you prompted it is still idle an instant later,
+    // for the same reason as before.
+    let session = unique("promptwait");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = ids(&list).last().expect("a second workspace").clone();
+    let (ok, out) = ask(&session, &["agent", "state", "idle", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    let waiting = ask_later(
+        &session,
+        &[
+            "agent",
+            "prompt",
+            &ws,
+            "true",
+            "--wait",
+            "--timeout",
+            "30000",
+        ],
+    );
+    // Idle throughout would once have ended this immediately.
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(
+        !waiting.is_finished(),
+        "the wait was satisfied by the state the agent was already in"
+    );
+
+    let (ok, out) = ask(&session, &["agent", "state", "working", &ws]);
+    assert!(ok, "the report was refused: {out}");
+    std::thread::sleep(Duration::from_millis(300));
+    let (ok, out) = ask(&session, &["agent", "state", "done", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    let (ok, said) = waiting.join().expect("the wait thread");
+    assert!(ok, "the wait failed: {said}");
+    assert!(
+        said.contains("\"state\": \"done\""),
+        "the wait did not answer with the settled agent: {said}"
+    );
+
+    drop(client);
+}
+
+#[test]
+fn a_prompt_that_starts_nothing_says_so_rather_than_waiting_it_out() {
+    let session = unique("stalled");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, _) = ask(&session, &["workspace", "create"]);
+    assert!(ok, "workspace create failed");
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let ws = ids(&list).last().expect("a second workspace").clone();
+    let (ok, out) = ask(&session, &["agent", "state", "idle", &ws]);
+    assert!(ok, "the report was refused: {out}");
+
+    // Nothing will ever report working here. The wait should give up on the
+    // prompt having started something, not sit until the timeout.
+    let at = Instant::now();
+    let (ok, said) = ask(
+        &session,
+        &[
+            "agent",
+            "prompt",
+            &ws,
+            "true",
+            "--wait",
+            "--timeout",
+            "60000",
+        ],
+    );
+    assert!(
+        !ok,
+        "a prompt that started nothing was called a success: {said}"
+    );
+    assert!(
+        at.elapsed() < Duration::from_secs(30),
+        "it waited out the caller's timeout rather than its own"
+    );
+    assert!(
+        said.contains("sent"),
+        "the failure did not say the prompt had been sent: {said}"
+    );
+
+    drop(client);
+}
