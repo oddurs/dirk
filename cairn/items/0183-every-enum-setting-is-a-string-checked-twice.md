@@ -38,6 +38,34 @@ holding its own copy of the answer.
 
 ## Acceptance criteria
 
-- [ ] Adding a value to a setting means editing one place
-- [ ] An unrecognised value still warns and still falls back
-- [ ] A test that a new value cannot be added to the accessor alone
+- [x] Adding a value to a setting means editing one place
+- [x] An unrecognised value still warns and still falls back
+- [x] A test that a new value cannot be added to the accessor alone
+
+## 2026-09-08
+
+A `choice!` macro rather than a wrapper type, because the field has to stay a
+`String`: a typed field makes serde reject the whole document, and the whole
+point of the behaviour being kept is that a typo in one setting must not cost
+somebody the dirk they were about to start.
+
+Seven of them — `nav.rows`, `nav.attention`, `ui.pane_rules`,
+`terminal.shell_mode`, `identity.session`, `identity.host` and the
+`sound.agents` values. The last was already an enum with a hand-written parser
+beside it, so it went in too and lost the parser.
+
+The fallback is derived from the same list rather than assumed to be the first
+word in it, because for `sound.agents` it is not — `default` sits last and is
+what an unrecognised value means. That was very nearly a complaint saying
+"using on".
+
+The complaint is one sentence for all of them now, which changed the wording,
+which broke two tests that were asserting on the wording rather than on what was
+said. Both now ask for the three things that matter: which setting, what it
+could not read, and what it is going to do instead.
+
+The test the item asked for is `every_word_a_setting_offers_is_accepted`: it
+walks every setting and every word, and fails if dirk offers a value and then
+complains about it. Its companion checks the other direction. Both read from one
+list of settings, so the failure they cannot catch — a setting added to
+`choice!` and to nothing else — is the one the list itself is a comment about.
