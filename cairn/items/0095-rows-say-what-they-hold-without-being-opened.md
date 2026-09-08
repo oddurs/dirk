@@ -22,6 +22,6 @@ state glyph and the number are, which is where the eye starts, and a disclosure
 there competes with the two things that matter more.
 
 ## Acceptance criteria
-- [ ] A row with children carries a disclosure mark at its right edge
-- [ ] A row with none carries nothing, rather than a dimmed mark
-- [ ] Clicking the mark folds; clicking the row goes there
+- [x] A row with children carries a disclosure mark at its right edge
+- [x] A row with none carries nothing, rather than a dimmed mark
+- [x] Clicking the mark folds; clicking the row goes there

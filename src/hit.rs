@@ -36,6 +36,12 @@ pub enum Target {
         p: usize,
         w: usize,
     },
+    /// The disclosure at the right of a space, as against the row it sits on.
+    /// Clicking the mark folds; clicking the row goes there.
+    SpaceFold {
+        p: usize,
+        w: usize,
+    },
     /// One pane inside the focused workspace, by draw order.
     Pane {
         index: usize,

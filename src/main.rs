@@ -2185,6 +2185,16 @@ impl App {
     ///
     /// Clicking a row and pressing Enter on it arrive here with the same value,
     /// which is the only reason the two cannot drift apart.
+    /// Whether a space has anything worth opening.
+    ///
+    /// Tabs as well as panes: a space with two tabs of one pane each has a
+    /// subtree, and asking only about the tab on screen said it did not.
+    fn holds_a_subtree(&self, p: usize, w: usize) -> bool {
+        self.session
+            .workspace(p, w)
+            .is_some_and(|ws| ws.tabs.len() > 1 || ws.panes().len() > 1)
+    }
+
     fn act(&mut self, target: Target) {
         // Doing anything else is a change of mind.
         if !matches!(target, Target::Quit) {
@@ -2207,22 +2217,27 @@ impl App {
                 if self.session.workspace(p, w).is_none() {
                     return;
                 }
-                // Clicking a workspace that is already focused and has several
-                // panes opens it, which is the only thing left for that click
-                // to mean.
-                let expand = self.session.focus == Focus::Ws { p, w }
-                    && self
-                        .session
-                        .workspace(p, w)
-                        // Tabs as well as panes: a space with two tabs of one
-                        // pane each has a subtree worth opening, and asking
-                        // only about the tab on screen said it did not.
-                        .is_some_and(|ws| ws.tabs.len() > 1 || ws.panes().len() > 1);
-                if expand && let Some(ws) = self.session.workspace_mut(p, w) {
-                    ws.expanded = !ws.expanded;
+                // A row you are already on cannot take you anywhere, so the
+                // only thing left for that to mean is opening it. This is what
+                // the keyboard does with the row it is sitting on; the pointer
+                // has the mark at the right edge and does not need it.
+                let here = self.session.focus == Focus::Ws { p, w };
+                if here && self.holds_a_subtree(p, w) {
+                    self.act(Target::SpaceFold { p, w });
                     return;
                 }
                 self.session.focus = Focus::Ws { p, w };
+            }
+            Target::SpaceFold { p, w } => {
+                // The mark is only drawn on a row that has something under it,
+                // but the keyboard reaches this by another road and a row can
+                // lose its panes between frames.
+                if !self.holds_a_subtree(p, w) {
+                    return;
+                }
+                if let Some(ws) = self.session.workspace_mut(p, w) {
+                    ws.expanded = !ws.expanded;
+                }
             }
             Target::NavTab { p, w, t } => {
                 self.session.focus = Focus::Ws { p, w };
