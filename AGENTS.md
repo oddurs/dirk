@@ -21,9 +21,9 @@ Every branch gets a worktree of its own, so two agents can work at once without
 sharing a build directory. Never `git switch` in a checkout someone else may be
 building in.
 
-`make check` is `cargo fmt --check`, `cargo clippy --all-targets -D warnings`
-and the full test suite. It must pass. Do not ship around it and do not use
-`--no-verify`.
+`make check` is `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
+`shellcheck` over the scripts, and the full test suite. It must pass. Do not
+ship around it and do not use `--no-verify`.
 
 ## What the code is trying to be
 

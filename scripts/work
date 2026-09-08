@@ -200,7 +200,7 @@ cmd_ship() {
     # commit -- and it cannot commit it itself, because the trunk is protected
     # and takes changes only through a pull request. Five items stayed open
     # through five merges that way, each one printing `closed 0092` truthfully.
-    if [ -n "$id" ] && [ "$(cairn_field "$id" status)" != done ]; then
+    if [ -n "$id" ] && [ "$(cairn_field "$id" status)" != "done" ]; then
         step "closing $(cairn_field "$id" ref)"
         cairn_try close "$id"
         cairn_try render
@@ -331,7 +331,7 @@ cmd_land() {
     if [ -n "$id" ]; then
         local status; status=$(cairn_field "$id" status)
         case $status in
-            done|dropped|'') say "$(cairn_field "$id" ref) is ${status:-closed}" ;;
+            "done"|dropped|'') say "$(cairn_field "$id" ref) is ${status:-closed}" ;;
             *) say "$(cairn_field "$id" ref) is still \"$status\": the branch did not carry its close.
      cairn set $id status=done   -- on a branch of its own, so it reaches $trunk" ;;
         esac

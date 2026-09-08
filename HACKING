@@ -89,8 +89,8 @@ The gate
 
     $ make check
 
-`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and the full
-test suite. It is what CI runs, and `git work ship` runs it before it pushes,
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `shellcheck`
+over the scripts and hooks, and the full test suite. It is what CI runs, and `git work ship` runs it before it pushes,
 so a red pull request should be a surprise.
 
     $ make shot
