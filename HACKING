@@ -161,6 +161,12 @@ There are no ad-hoc TODO, PLAN or NOTES files in this repository, and there
 should not be: an item carries the same information, appears on the board, and
 arrives in the generated roadmap. `ROADMAP.md` is generated — never edit it.
 
+Two passes fill it from outside the day's work, and both are written down so
+they can be run again rather than reinvented. `doc/parity-herdr.md` compares
+dirk to herdr and says what is worth taking. `doc/audit.md` goes over the tree
+looking for what is wrong with it rather than what is missing from it — worth a
+pass after a run of feature work has landed.
+
 
 Agents
 ------
