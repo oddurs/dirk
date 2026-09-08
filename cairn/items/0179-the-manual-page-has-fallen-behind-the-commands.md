@@ -2,7 +2,7 @@
 id: 179
 title: The manual page has fallen behind the commands
 type: docs
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2
