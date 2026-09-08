@@ -1470,6 +1470,30 @@ pub fn content_of(labelled: bool, r: Rect) -> Rect {
     }
 }
 
+/// The bytes one prompt is submitted as.
+///
+/// Bracketed when the program has asked for bracketed paste, which is what makes
+/// a multi-line prompt arrive as one paste rather than as several submissions:
+/// an interface that runs each line as it lands would otherwise be given the
+/// first line of a prompt as the whole of it.
+///
+/// The return is in the same vector as the text. Two writes is two chances for
+/// a program reading slowly to act on a partial prompt — and the markers are in
+/// it too, because a paste whose opening marker arrives alone leaves the
+/// program waiting for text it has not been sent.
+pub fn submission(text: &str, bracketed: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[200~");
+    }
+    bytes.extend_from_slice(text.as_bytes());
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[201~");
+    }
+    bytes.push(b'\r');
+    bytes
+}
+
 fn resize_tree(ws: &mut Workspace, area: Rect) {
     for (id, r) in ws.tree().rects(area) {
         if let Some(pane) = ws.every_pane_mut().find(|p| p.id == id) {
@@ -1759,6 +1783,33 @@ impl Session {
     /// is a right id and a dead process.
     pub fn pane_alive(&mut self, id: PaneId) -> Option<bool> {
         self.pane_anywhere_mut(id).map(|pane| !pane.dead)
+    }
+
+    /// Submit a prompt to whatever is in a pane, as one write.
+    ///
+    /// See [`submission`] for what is written.
+    ///
+    /// Bracketed when the program has asked for it, which is what makes a
+    /// multi-line prompt arrive as one paste rather than as several
+    /// submissions — an agent whose interface runs each line as it lands would
+    /// otherwise be given the first line of a prompt as the whole of it.
+    ///
+    /// One write, including the return. Two is two chances for a program that
+    /// reads slowly to act on a partial prompt.
+    pub fn submit(&mut self, id: PaneId, text: &str) -> bool {
+        let Some(pane) = self.pane_anywhere_mut(id) else {
+            return false;
+        };
+        if pane.dead {
+            return false;
+        }
+        let bracketed = pane
+            .term
+            .lock()
+            .map(|t| t.screen().bracketed_paste())
+            .unwrap_or(false);
+        pane.write(&submission(text, bracketed));
+        true
     }
 
     /// Send keys to a pane, encoded the way the program in it expects them.
@@ -2251,6 +2302,31 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use super::submission;
+
+    #[test]
+    fn a_prompt_is_bracketed_when_the_program_asked_for_it() {
+        // A multi-line prompt sent to an interface that runs each line as it
+        // lands is a prompt whose first line was the whole of it.
+        let plain = submission("do the thing", false);
+        assert_eq!(plain, b"do the thing\r");
+
+        let pasted = submission("first\nsecond", true);
+        assert_eq!(pasted, b"\x1b[200~first\nsecond\x1b[201~\r");
+    }
+
+    #[test]
+    fn the_return_travels_with_the_text() {
+        // In the same vector, so it is one write. Two is two chances for a
+        // program reading slowly to act on half a prompt -- and the closing
+        // marker has to be in it too, or the program waits for text it has
+        // already been sent.
+        for bracketed in [false, true] {
+            let bytes = submission("x", bracketed);
+            assert_eq!(bytes.last(), Some(&b'\r'));
+        }
+    }
+
     use super::*;
     use crate::agent::State;
 

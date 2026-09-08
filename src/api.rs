@@ -322,6 +322,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("agent.start", "<kind> [pane]"),
     (
+        "agent.prompt",
+        "<workspace|pane> <text...> [--wait] [--until STATE]... [--timeout MS]",
+    ),
+    (
         "agent.wait",
         "<workspace|pane> [--until STATE]... [--timeout MS]",
     ),

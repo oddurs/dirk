@@ -34,9 +34,32 @@ A timeout does not prove nothing was sent. Say so in the error, because the
 caller's next move is to read the pane rather than prompt again.
 
 ## Acceptance criteria
-- [ ] `agent prompt <target> <text>` submits text and Enter as one ordered write
-- [ ] Bracketed paste is used when the pane has it on
-- [ ] An agent already `blocked` is refused, with an error naming that reason
-- [ ] `--wait` observes activity before waiting for the settled state
-- [ ] `--timeout` is honoured, and the timeout error says input may have been sent
-- [ ] The answer carries the agent's state at the moment the command returned
+- [x] `agent prompt <target> <text>` submits text and Enter as one ordered write
+- [x] Bracketed paste is used when the pane has it on
+- [x] An agent already `blocked` is refused, with an error naming that reason
+- [x] `--wait` observes activity before waiting for the settled state
+- [x] `--timeout` is honoured, and the timeout error says input may have been sent
+- [x] The answer carries the agent's state at the moment the command returned
+
+## 2026-09-07
+
+The two-phase wait is the part worth keeping. A prompt sent to an idle agent
+leaves it idle for an instant afterwards, for the same reason as before, so a
+wait for `idle` would be satisfied by a state that has nothing to do with the
+prompt. It therefore watches for the agent to be *working* or *blocked* first,
+and only then waits for it to settle.
+
+Five seconds for that: long enough that a harness slow to redraw is not accused
+of ignoring the prompt, short enough that a caller waiting on one that went
+nowhere is not left there. A very fast turn that completes inside the sampling
+interval could in principle be read as stalled; the alternative — satisfying the
+wait from the state before the prompt — is wrong far more often.
+
+`agent.prompt` acts before it decides whether to wait, which the answer path did
+not have a shape for: `hold` returned "this is a wait" or "this is ordinary",
+and ordinary meant running the command again. Hence `Begin`, with a third arm
+for a command that has already done its work and only needs its answer sent.
+
+A timeout on a prompt says the prompt was sent. It is the one timeout that
+proves something happened, and a caller retrying on the strength of it would
+submit the same work twice.

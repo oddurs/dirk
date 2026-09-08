@@ -48,6 +48,20 @@ pub struct Held {
     pub deadline: Option<Instant>,
 }
 
+impl What {
+    /// What a caller has to know if this one times out.
+    ///
+    /// A timeout does not prove nothing happened, and for a prompt it proves
+    /// rather little: the text was written before the waiting started. A caller
+    /// that retried on the strength of a timeout would submit it twice.
+    pub fn on_timeout(&self) -> &'static str {
+        match self {
+            What::Prompt { .. } => "the prompt was sent; read the agent before sending it again",
+            _ => "",
+        }
+    }
+}
+
 pub enum What {
     /// An agent reaching one of these states.
     Agent { pane: PaneId, until: Vec<State> },
@@ -56,6 +70,20 @@ pub enum What {
         pane: PaneId,
         looking_for: Match,
         lines: u16,
+    },
+    /// A prompt that has been submitted, settling.
+    ///
+    /// Two phases, and the first is why this is not `Agent`. A prompt whose
+    /// agent never starts working would otherwise be satisfied the moment the
+    /// agent was observed idle — which it already was, one instant after
+    /// submission and for the same reason as before. So the wait first watches
+    /// for the prompt to have started something, and only then waits for it to
+    /// finish.
+    Prompt {
+        pane: PaneId,
+        until: Vec<State>,
+        /// Cleared once the agent has been seen working or blocked.
+        started_by: Option<Instant>,
     },
 }
 
@@ -90,6 +118,13 @@ impl Match {
     }
 }
 
+/// How long a prompt has to visibly start something before it is called stalled.
+///
+/// Long enough that a harness taking its time to redraw is not accused of
+/// having ignored the prompt, and short enough that a caller waiting on one
+/// that genuinely went nowhere is not left there.
+pub const STARTS_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Why a held question is finished, once it is.
 pub enum Settled {
     /// It happened. The value is what the caller asked about, as it now is.
@@ -97,8 +132,9 @@ pub enum Settled {
     /// It cannot happen any more. Distinct from a timeout: a caller that waited
     /// for an agent which then exited should retry nothing.
     Gone(&'static str),
-    /// The patience ran out. Says nothing about whether it would have happened.
-    Late,
+    /// The patience ran out. Says nothing about whether it would have happened,
+    /// and carries what else the caller needs to know before it retries.
+    Late(&'static str),
 }
 
 impl Settled {
@@ -106,7 +142,10 @@ impl Settled {
         match self {
             Settled::Reached(v) => Reply::ok(v),
             Settled::Gone(why) => Reply::err(why),
-            Settled::Late => Reply::err("timeout"),
+            Settled::Late(note) => Reply::err(match note.is_empty() {
+                true => "timeout".to_string(),
+                false => format!("timeout: {note}"),
+            }),
         }
     }
 }

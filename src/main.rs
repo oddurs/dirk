@@ -113,7 +113,7 @@ JSON; `--current` means the pane you are in.
   workspace list|focus|create|rename|close
   pane      list|focus|split|read|run|send-text|send-keys|close
   layout    list|open
-  agent     list|start|state|wait|hooks
+  agent     list|start|state|prompt|wait|hooks
   worktree  list|add|remove
   tab       list|new|focus|rename|close
   session   info|list|reload|commands|quit|prune
@@ -450,6 +450,17 @@ fn as_request(args: &[String]) -> Option<wire::Request> {
         cmd: format!("{noun}.{verb}"),
         args: rest,
     })
+}
+
+/// What a command turns out to be, before the ordinary answer path sees it.
+enum Begin {
+    /// Answer it the usual way.
+    Ordinary,
+    /// Already done, and here is what to say. For a command that acts before it
+    /// decides whether to wait — running it twice would act twice.
+    Answered(serde_json::Value),
+    /// Its answer does not exist yet.
+    Waiting(wait::What),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1195,8 +1206,12 @@ impl App {
                 // rather than answered. The caller's socket thread is already
                 // blocked on the other end of `reply`, so holding it is the
                 // whole of what "wait" means here.
-                match self.hold(&req) {
-                    Ok(Some(what)) => {
+                match self.begin(&req) {
+                    Ok(Begin::Answered(value)) => {
+                        let _ = reply.send(wire::Reply::ok(value));
+                        return;
+                    }
+                    Ok(Begin::Waiting(what)) => {
                         let (_, opts) = wait::options(&req.args);
                         match wait::deadline(&opts) {
                             Ok(deadline) => {
@@ -1216,7 +1231,7 @@ impl App {
                         }
                         return;
                     }
-                    Ok(None) => {}
+                    Ok(Begin::Ordinary) => {}
                     Err(why) => {
                         let _ = reply.send(wire::Reply::err(why));
                         return;
@@ -1407,14 +1422,14 @@ impl App {
     /// Reads are answered by `api::read` and never touch the seen rule: asking
     /// about a workspace is not looking at one, and without that a status line
     /// polling the session would clear every notification it exists to show.
-    /// Is this a question that has to be answered later?
+    /// What happens to a command that the ordinary answer path does not handle.
     ///
-    /// `Ok(None)` is an ordinary command. `Err` is one that can never be
+    /// `Ordinary` falls through to `ask`. `Err` is a command that can never be
     /// answered — a target that does not exist, a state that does not — and
     /// those are refused at the door rather than waited out, because a caller
     /// that misspelled a state should not learn about it when its timeout
     /// expires.
-    fn hold(&mut self, req: &wire::Request) -> Result<Option<wait::What>, String> {
+    fn begin(&mut self, req: &wire::Request) -> Result<Begin, String> {
         let (words, opts) = wait::options(&req.args);
         if req.cmd == "pane.wait-output" {
             if let Some(bad) = wait::unknown(&opts, &["regex", "lines", "timeout"]) {
@@ -1430,14 +1445,66 @@ impl App {
             if text.is_empty() {
                 return Err("pane.wait-output needs something to look for".into());
             }
-            return Ok(Some(wait::What::Output {
+            return Ok(Begin::Waiting(wait::What::Output {
                 pane,
                 looking_for: wait::Match::read(&text, &opts)?,
                 lines: wait::lines(&opts, api::READ_LINES)?,
             }));
         }
+        if req.cmd == "agent.prompt" {
+            if let Some(bad) = wait::unknown(&opts, &["wait", "until", "timeout"]) {
+                return Err(format!("agent.prompt takes no --{bad}"));
+            }
+            let Some(target) = words.first() else {
+                return Err("agent.prompt needs a workspace or a pane".into());
+            };
+            let Some((p, w)) = api::target_workspace(&self.session, target) else {
+                return Err(format!("no such workspace or pane: {target}"));
+            };
+            if api::agent_json(&self.session, p, w).is_none() {
+                return Err(format!("no agent in {target}"));
+            }
+            let text = words[1..].join(" ");
+            if text.is_empty() {
+                return Err("agent.prompt needs something to say".into());
+            }
+            let state = self.session.workspace(p, w).map(|ws| ws.state);
+            // An agent sitting on a question is not one to type a prompt at.
+            // The dialog wants an answer, and a prompt would be read as one --
+            // so the caller is sent to look at it rather than having its input
+            // silently become a menu selection.
+            if state == Some(agent::State::Blocked) {
+                return Err(
+                    "that agent is blocked; read it and answer with agent send-keys".into(),
+                );
+            }
+            let Some(pane) = self
+                .session
+                .workspace(p, w)
+                .and_then(|ws| ws.active_pane())
+                .map(|pane| pane.id)
+            else {
+                return Err(format!("no agent in {target}"));
+            };
+            if !self.session.submit(pane, &text) {
+                return Err("that pane's program has exited".into());
+            }
+            // Answered here rather than by `ask`, because the writing has
+            // already happened: a second pass over the same command would
+            // either submit it twice or have to remember that it must not.
+            let said = api::agent_json(&self.session, p, w).unwrap_or(serde_json::Value::Null);
+            if !opts.iter().any(|(k, _)| k == "wait") {
+                return Ok(Begin::Answered(serde_json::json!({ "agent": said })));
+            }
+            let until = wait::until(&opts)?;
+            return Ok(Begin::Waiting(wait::What::Prompt {
+                pane,
+                until,
+                started_by: Some(Instant::now() + wait::STARTS_WITHIN),
+            }));
+        }
         if req.cmd != "agent.wait" {
-            return Ok(None);
+            return Ok(Begin::Ordinary);
         }
         if let Some(bad) = wait::unknown(&opts, &["until", "timeout"]) {
             return Err(format!("agent.wait takes no --{bad}"));
@@ -1460,7 +1527,7 @@ impl App {
             return Err(format!("no agent in {target}"));
         };
         let until = wait::until(&opts)?;
-        Ok(Some(wait::What::Agent { pane, until }))
+        Ok(Begin::Waiting(wait::What::Agent { pane, until }))
     }
 
     /// Answer every held question that can now be answered.
@@ -1474,8 +1541,8 @@ impl App {
         }
         let now = Instant::now();
         let mut waiting = Vec::new();
-        for held in std::mem::take(&mut self.waits) {
-            match self.verdict(&held.what, held.deadline, now) {
+        for mut held in std::mem::take(&mut self.waits) {
+            match self.verdict(&mut held.what, held.deadline, now) {
                 Some(settled) => {
                     let _ = held.back.send(settled.reply());
                 }
@@ -1488,7 +1555,7 @@ impl App {
     /// Has this happened, become impossible, or run out of time?
     fn verdict(
         &self,
-        what: &wait::What,
+        what: &mut wait::What,
         deadline: Option<Instant>,
         now: Instant,
     ) -> Option<wait::Settled> {
@@ -1506,6 +1573,39 @@ impl App {
                 let state = self.session.workspace(p, w).map(|ws| ws.state);
                 state
                     .is_some_and(|s| until.contains(&s))
+                    .then_some(serde_json::json!({ "agent": agent }))
+            }
+            wait::What::Prompt {
+                pane,
+                until,
+                started_by,
+            } => {
+                let Some((p, w)) = api::locate(&self.session, *pane) else {
+                    return Some(wait::Settled::Gone("that pane is gone"));
+                };
+                let Some(agent) = api::agent_json(&self.session, p, w) else {
+                    return Some(wait::Settled::Gone("that agent is no longer running"));
+                };
+                let Some(state) = self.session.workspace(p, w).map(|ws| ws.state) else {
+                    return Some(wait::Settled::Gone("that agent is no longer running"));
+                };
+                if let Some(by) = *started_by {
+                    let working = matches!(state, agent::State::Working | agent::State::Blocked);
+                    if working {
+                        *started_by = None;
+                    } else if now >= by {
+                        return Some(wait::Settled::Gone(
+                            "the prompt was sent and nothing started; read the agent \
+                             before sending it again",
+                        ));
+                    } else {
+                        // Still might. An `idle` here is the state the agent
+                        // was in before the prompt, not an answer to it.
+                        return None;
+                    }
+                }
+                until
+                    .contains(&state)
                     .then_some(serde_json::json!({ "agent": agent }))
             }
             wait::What::Output {
@@ -1533,7 +1633,7 @@ impl App {
             // on the same turn is answered rather than timed out.
             None => deadline
                 .is_some_and(|at| now >= at)
-                .then_some(wait::Settled::Late),
+                .then_some(wait::Settled::Late(what.on_timeout())),
         }
     }
 

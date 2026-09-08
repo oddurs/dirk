@@ -754,6 +754,7 @@ $ dirk pane list
 $ dirk pane split w7:p12 rows
 $ dirk pane run --current "cargo test"
 $ dirk agent list
+$ dirk agent prompt reviewer "Review the current diff" --wait --timeout 600000
 $ dirk agent wait --current --until done --timeout 600000
 $ dirk pane wait-output w7:p3 "passed|failed" --regex --timeout 120000
 $ dirk session commands          # the whole surface
@@ -766,6 +767,22 @@ program reading slowly to see a bare newline and run half of what you typed.
 name — `esc`, `up`, `ctrl+c`, `f5` — which is what an interactive program needs
 and what a shell does not; the arrows come out as whichever sequence that pane's
 program has asked for, which is a thing only the pane knows.
+
+**`dirk agent prompt <target> <text>` gives an agent work.** The text and the
+return that submits it go in one write, bracketed when the agent's interface has
+asked for bracketed paste — otherwise a multi-line prompt arrives as several
+submissions and the agent is given its first line as the whole of it.
+
+An agent that is already blocked is refused rather than typed at: the dialog on
+its screen wants an answer, and a prompt would be read as one. Go and look at it,
+then answer with `agent send-keys`.
+
+`--wait` holds until the agent settles, and waits for the prompt to have started
+something first. Without that, an agent that was idle when you prompted it is
+still idle an instant later for the same reason as before, and the wait would be
+satisfied by the state it was already in. If nothing starts within a few seconds
+the wait says so — and if it times out it says the prompt *was* sent, because a
+caller that retried on a timeout would submit it twice.
 
 **Waiting is a question like any other.** `dirk agent wait <target>` returns when
 the agent reaches one of the states named by `--until`, which repeats and
