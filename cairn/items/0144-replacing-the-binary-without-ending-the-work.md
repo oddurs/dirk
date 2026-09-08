@@ -2,10 +2,10 @@
 id: 144
 title: Replacing the binary without ending the work
 type: feature
-status: backlog
+status: done
 milestone: v0.9
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: server
 effort: xl
