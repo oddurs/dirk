@@ -545,6 +545,7 @@ pub fn watch(path: &Path, target: &str, takeover: bool) -> io::Result<()> {
             cols,
             rows,
             takeover,
+            observe: false,
         },
     )?;
 
@@ -646,5 +647,154 @@ fn pump_watch(reader: &mut UnixStream, writer: UnixStream) -> io::Result<()> {
     match leaving.load(Ordering::Relaxed) {
         true => Ok(()),
         false => Err(io::Error::other("the pane went away")),
+    }
+}
+
+/// Watch a pane as data, or drive one, for a program rather than a person.
+///
+/// `pane read` answers with text at a moment, so anything that wants to follow
+/// a pane has to poll, and anything that wants to *render* one cannot: the
+/// escapes are stripped and there is no stream. This is the honest version of a
+/// plugin API. Somebody building a different front end for dirk needs bytes out
+/// and bytes in, not a manifest format.
+///
+/// Newline-delimited JSON, because the consumer is a program: one object per
+/// line, each with the terminal bytes base64'd, and a closing record saying why
+/// it stopped. A stream that simply ends is indistinguishable from a connection
+/// that dropped, and those mean opposite things to whatever is reading.
+pub fn stream(path: &Path, target: &str, control: bool, takeover: bool) -> io::Result<()> {
+    let mut sock = UnixStream::connect(path)?;
+    let mut reader = sock.try_clone()?;
+    // A hint only, and only when controlling. An observer takes the pane at
+    // whatever size it is; asking for one would resize somebody else's shell to
+    // suit a recorder.
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    wire::send_json(
+        &mut sock,
+        Kind::Watch,
+        &wire::Watch {
+            pane: target.to_string(),
+            cols,
+            rows,
+            takeover,
+            observe: !control,
+        },
+    )?;
+
+    // Read before anything is streamed: "no such pane" and "somebody else has
+    // it" are the two things the caller has to be told in a form it can branch
+    // on, and a stream is not that form.
+    match wire::recv(&mut reader)? {
+        Some((Kind::Reply, body)) => {
+            let reply: wire::Reply = serde_json::from_slice(&body).map_err(io::Error::other)?;
+            if !reply.ok {
+                return Err(io::Error::other(reply.error.unwrap_or_default()));
+            }
+            emit(&serde_json::json!({ "open": reply.result }));
+        }
+        _ => return Err(io::Error::other("the session did not answer")),
+    }
+
+    if control {
+        // Commands on stdin, on their own thread: reading stdin blocks and so
+        // does reading the socket, and neither may wait for the other.
+        let sending = sock;
+        std::thread::spawn(move || drive(sending));
+    }
+
+    let why = loop {
+        match wire::recv(&mut reader) {
+            Ok(Some((Kind::Frame, bytes))) => {
+                emit(&serde_json::json!({ "bytes": crate::clipboard::base64(&bytes) }));
+            }
+            Ok(Some((Kind::Bye, body))) => {
+                break String::from_utf8_lossy(&body).trim().to_string();
+            }
+            Ok(Some(_)) => {}
+            // The pane ended, or the session did. Either way this is an ending
+            // that happened rather than a connection that failed.
+            Ok(None) => break "the pane ended".into(),
+            Err(e) => break format!("the connection failed: {e}"),
+        }
+    };
+    emit(&serde_json::json!({ "end": why }));
+    Ok(())
+}
+
+/// One record, and out. Flushed each time: a consumer reading line by line is
+/// the entire point, and a buffered stream arrives in four-kilobyte lumps.
+fn emit(value: &serde_json::Value) {
+    use io::Write;
+    let mut out = io::stdout().lock();
+    // A closed pipe is `dirk pane observe | head`, which is a reasonable thing
+    // to type and not an error worth a panic.
+    let _ = writeln!(out, "{value}");
+    let _ = out.flush();
+}
+
+/// Commands, one JSON object per line, from standard input.
+///
+/// `{"input": "ls\r"}` types, `{"scroll": 2}` moves two pages back through what
+/// has gone past (negative for forwards), `{"resize": {"rows": 40, "cols":
+/// 120}}` resizes, and `{"release": true}` gives the pane back.
+///
+/// Anything unrecognised is ignored rather than fatal: a newer caller talking
+/// to an older dirk should lose the command it does not understand, not the
+/// stream it is in the middle of.
+fn drive(mut sock: UnixStream) {
+    use io::BufRead;
+    for line in io::stdin().lock().lines() {
+        let Ok(line) = line else { return };
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if doc.get("release").and_then(|v| v.as_bool()) == Some(true) {
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+            return;
+        }
+        if let Some(text) = doc.get("input").and_then(|v| v.as_str()) {
+            for ch in text.chars() {
+                let event = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(ch),
+                    crossterm::event::KeyModifiers::NONE,
+                ));
+                if let Some(input) = wire::Input::from_event(&event)
+                    && wire::send_json(&mut sock, Kind::Input, &input).is_err()
+                {
+                    return;
+                }
+            }
+        }
+        // Positive is backwards, the way scrollback is counted everywhere else
+        // in dirk. Sent as the keys the watch path already scrolls on rather
+        // than as a command of its own: one way to move a pane's view, so the
+        // two cannot come to disagree about what a page is.
+        if let Some(n) = doc.get("scroll").and_then(|v| v.as_i64()) {
+            let code = match n < 0 {
+                true => crossterm::event::KeyCode::PageDown,
+                false => crossterm::event::KeyCode::PageUp,
+            };
+            for _ in 0..n.unsigned_abs().min(1000) {
+                let event = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+                    code,
+                    crossterm::event::KeyModifiers::NONE,
+                ));
+                if let Some(input) = wire::Input::from_event(&event)
+                    && wire::send_json(&mut sock, Kind::Input, &input).is_err()
+                {
+                    return;
+                }
+            }
+        }
+        if let Some(size) = doc.get("resize") {
+            let rows = size.get("rows").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+            let cols = size.get("cols").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+            if rows > 0
+                && cols > 0
+                && wire::send_json(&mut sock, Kind::Hello, &wire::Hello { cols, rows }).is_err()
+            {
+                return;
+            }
+        }
     }
 }

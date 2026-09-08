@@ -100,9 +100,9 @@ pub fn osc52(text: &str) -> Vec<u8> {
 
 /// Base64, written out rather than depended on.
 ///
-/// Forty lines against a crate and a transitive tree, for the places dirk
-/// needs it: here, and the handoff note, which carries a pane's screen through
-/// a channel of JSON.
+/// Forty lines against a crate and a transitive tree, for the three places dirk
+/// needs it: here, the handoff note carrying a pane's screen, and the pane
+/// streams carrying terminal bytes -- both of them down a channel of JSON.
 pub fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
