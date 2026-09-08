@@ -2,7 +2,7 @@
 id: 185
 title: Three overlays, three copies of one renderer
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
@@ -37,6 +37,26 @@ rather than the line count.
 
 ## Acceptance criteria
 
-- [ ] One overlay frame, three callers
-- [ ] The box arithmetic and the hit map have unit tests
-- [ ] All three look the way they look now
+- [x] One overlay frame, three callers
+- [x] The box arithmetic and the hit map have unit tests
+- [x] All three look the way they look now
+
+## 2026-09-08
+
+The last criterion held except in one place, and the exception is the point of
+having done it.
+
+Two of the three kept the selection on screen by starting the list at
+`selected - (rows - 1)` when it had run past the bottom. The picker did not: it
+took the first `rows` matches and stopped, so holding an arrow down walked the
+selection off a list that never scrolled — invisible, and unreachable by the
+key that was moving it. The window is in the frame now, so it is in all three.
+
+The picker was also drawing its cursor and its rule as literal `▌` and `─`
+rather than asking the glyph table, which is the thing `0066` was about. It
+takes the glyphs now like the other two, so `[nav] glyphs = "ascii"` reaches it.
+
+Six tests where there were none, and the ones worth having are the edge cases
+none of the three had ever been asked about: a screen smaller than the smallest
+box the overlay asks for, an empty list, and a row's hit landing where the row
+was drawn after the list has scrolled.

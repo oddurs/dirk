@@ -29,7 +29,8 @@ use crate::find::Find;
 use crate::glyph::G;
 use crate::hit::{HitMap, Target};
 use crate::theme::THEME;
-use crate::ui::{cells, elide, fill, write_str};
+use crate::ui::elide;
+use crate::ui::overlay::{self, Overlay};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -40,115 +41,60 @@ pub fn render(
     find: &Find,
     hits: &mut HitMap,
 ) {
-    let h = area.height.clamp(3, 12).min(area.height);
-    let box_area = Rect {
-        x: area.x,
-        y: area.bottom().saturating_sub(h),
-        width: area.width,
-        height: h,
-    };
-    fill(buf, box_area, THEME.panel());
-
-    let inner_w = box_area.width.saturating_sub(4);
-    let x = box_area.x + 2;
-
-    // The count is part of the prompt: an incremental search with no idea how
-    // many it found is one you keep typing at hopefully.
-    let found = find.hits().len();
-    let prompt = format!("find  {}", find.query);
-    let mut px = write_str(buf, x, box_area.y, &prompt, THEME.text(), inner_w);
-    px += write_str(
+    let all = find.hits();
+    let at = overlay::along_the_bottom(area, (3, 12));
+    let panel = Overlay::open(
         buf,
-        x + px,
-        box_area.y,
-        "▌",
-        THEME.working(),
-        inner_w.saturating_sub(px),
-    );
-    let tally = match found {
-        0 if find.query.is_empty() => String::new(),
-        0 => "none".into(),
-        n => format!("{} of {n}", find.at + 1),
-    };
-    write_str(
-        buf,
-        box_area
-            .right()
-            .saturating_sub(cells(&tally).saturating_add(2)),
-        box_area.y,
-        &tally,
-        THEME.faint(),
-        inner_w.saturating_sub(px),
+        g,
+        at,
+        &format!("find  {}", find.query),
+        find.at,
+        all.len(),
     );
 
-    for col in 0..inner_w {
-        write_str(
-            buf,
-            x + col,
-            box_area.y + 1,
-            g.text(G::Rule),
-            THEME.rule_strong(),
-            inner_w,
-        );
-    }
+    // The count belongs beside what was typed: an incremental search with no
+    // idea how many it found is one you keep typing at hopefully.
+    panel.tally(
+        buf,
+        &match all.len() {
+            0 if find.query.is_empty() => String::new(),
+            0 => "none".into(),
+            n => format!("{} of {n}", find.at + 1),
+        },
+    );
 
-    // A window that keeps the current match in it, so stepping past the bottom
-    // does not walk off the list.
-    let rows = h.saturating_sub(2) as usize;
-    let first = find.at.saturating_sub(rows.saturating_sub(1));
-    for (row, (index, hit)) in find
-        .hits()
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(rows)
-        .enumerate()
-    {
-        let Some(line) = find.line(*hit) else {
+    for row in panel.showing(all.len()) {
+        let Some(line) = find.line(all[row]) else {
             continue;
         };
-        let y = box_area.y + 2 + row as u16;
-        let full = Rect {
-            x: box_area.x,
-            y,
-            width: box_area.width,
-            height: 1,
-        };
-        let here = index == find.at;
-        if here {
-            fill(buf, full, THEME.selected());
-        }
+        let mut strip = panel.strip(
+            buf,
+            hits,
+            row - panel.first,
+            row == find.at,
+            Target::FoundRow(row),
+        );
 
         // The pane first and fixed-width, so the results line up as a column
         // you can read down rather than as ragged prose.
         const WHERE: usize = 22;
         let from = elide(&line.where_from, WHERE, g.text(G::Ellipsis));
-        let mut cx = x;
-        cx += write_str(
-            buf,
-            cx,
-            y,
-            &format!("{from:<WHERE$}"),
-            match here {
-                true => THEME.selected(),
-                false => THEME.project(),
-            },
-            inner_w,
-        );
-        cx += write_str(buf, cx, y, "  ", THEME.faint(), inner_w);
+        let style = match strip.chosen {
+            true => THEME.selected(),
+            false => THEME.project(),
+        };
+        strip.write(buf, &format!("{from:<WHERE$}"), style);
+        strip.write(buf, "  ", THEME.faint());
 
-        let left = box_area.right().saturating_sub(cx + 2) as usize;
-        write_str(
+        let style = match strip.chosen {
+            true => THEME.selected(),
+            false => THEME.dim(),
+        };
+        let room = strip.room.saturating_sub(2) as usize;
+        strip.write(
             buf,
-            cx,
-            y,
-            &elide(line.text.trim(), left, g.text(G::Ellipsis)),
-            match here {
-                true => THEME.selected(),
-                false => THEME.dim(),
-            },
-            inner_w,
+            &elide(line.text.trim(), room, g.text(G::Ellipsis)),
+            style,
         );
-        hits.push(full, Target::FoundRow(index));
     }
 }

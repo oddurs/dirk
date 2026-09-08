@@ -25,7 +25,8 @@ use crate::glyph::G;
 use crate::hit::{HitMap, Target};
 use crate::palette::Palette;
 use crate::theme::THEME;
-use crate::ui::{cells, elide, fill, write_str};
+use crate::ui::overlay::{self, Overlay};
+use crate::ui::{cells, elide, write_str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -36,103 +37,57 @@ pub fn render(
     palette: &Palette,
     hits: &mut HitMap,
 ) {
-    let w = area.width.clamp(30, 64).min(area.width);
-    let h = area.height.clamp(3, 16).min(area.height);
-    let box_area = Rect {
-        x: area.x + (area.width - w) / 2,
-        y: area.y + (area.height - h) / 4,
-        width: w,
-        height: h,
-    };
-    fill(buf, box_area, THEME.panel());
-
-    let inner = w.saturating_sub(4);
-    let x = box_area.x + 2;
-
-    let prompt = format!("do  {}", palette.query);
-    let px = write_str(buf, x, box_area.y, &prompt, THEME.text(), inner);
-    write_str(
+    let all = palette.matches();
+    let at = overlay::centred(area, (30, 64), (3, 16), 4);
+    let panel = Overlay::open(
         buf,
-        x + px,
-        box_area.y,
-        g.text(G::BarFocused),
-        THEME.working(),
-        inner.saturating_sub(px),
+        g,
+        at,
+        &format!("do  {}", palette.query),
+        palette.selected,
+        all.len(),
     );
 
-    for col in 0..inner {
-        write_str(
+    for row in panel.showing(all.len()) {
+        let (index, entry) = &all[row];
+        let mut strip = panel.strip(
             buf,
-            x + col,
-            box_area.y + 1,
-            g.text(G::Rule),
-            THEME.rule_strong(),
-            inner,
+            hits,
+            row - panel.first,
+            row == palette.selected,
+            Target::PaletteRow(*index),
         );
-    }
-
-    let rows = h.saturating_sub(2) as usize;
-    let all = palette.matches();
-    // A window that keeps the selection in it, so holding down the arrow does
-    // not walk off the end of what is drawn.
-    let first = palette.selected.saturating_sub(rows.saturating_sub(1));
-    for (row, (index, entry)) in all.iter().skip(first).take(rows).enumerate() {
-        let at = first + row;
-        let y = box_area.y + 2 + row as u16;
-        let full = Rect {
-            x: box_area.x,
-            y,
-            width: w,
-            height: 1,
-        };
-        let here = at == palette.selected;
-        if here {
-            fill(buf, full, THEME.selected());
-        }
 
         // The key first, right-aligned in its own narrow column, so the eye can
         // run down it looking for the one thing worth remembering.
         const KEY: usize = 3;
-        let key = format!("{:>KEY$}", entry.key);
-        let mut cx = x;
-        cx += write_str(buf, cx, y, &key, THEME.key(), inner);
-        cx += write_str(buf, cx, y, "  ", THEME.faint(), inner);
+        strip.write(buf, &format!("{:>KEY$}", entry.key), THEME.key());
+        strip.write(buf, "  ", THEME.faint());
 
         // The reason is reserved before the label, so a long label elides
         // rather than running over the thing that says why it is greyed out.
-        let mut right = 0u16;
+        let mut reserved = 0u16;
         if let Some(why) = &entry.why_not {
             let why = elide(why, 20, g.text(G::Ellipsis));
-            right = cells(&why) + 2;
+            reserved = cells(&why) + 2;
             write_str(
                 buf,
-                box_area.right().saturating_sub(cells(&why) + 2),
-                y,
+                panel.at.right().saturating_sub(reserved),
+                strip.y,
                 &why,
                 THEME.faint(),
                 cells(&why),
             );
         }
 
-        let left = box_area
-            .right()
-            .saturating_sub(cx + 2)
-            .saturating_sub(right) as usize;
-        let style = match (here, entry.why_not.is_some()) {
+        let style = match (strip.chosen, entry.why_not.is_some()) {
             (true, _) => THEME.selected(),
             // Shown rather than hidden: a palette that omits what it cannot do
             // teaches you that dirk cannot do it.
             (false, true) => THEME.faint(),
             (false, false) => THEME.text(),
         };
-        write_str(
-            buf,
-            cx,
-            y,
-            &elide(&entry.label, left, g.text(G::Ellipsis)),
-            style,
-            inner,
-        );
-        hits.push(full, Target::PaletteRow(*index));
+        let room = strip.room.saturating_sub(reserved + 2) as usize;
+        strip.write(buf, &elide(&entry.label, room, g.text(G::Ellipsis)), style);
     }
 }
