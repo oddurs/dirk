@@ -409,6 +409,54 @@ impl Source {
     }
 }
 
+/// The two commands a harness runs to tell dirk what it is doing.
+///
+/// Guarded on `DIRK_PANE_ID`, which only exists inside a managed pane, so both
+/// are inert everywhere else and safe to leave in a settings file for good.
+///
+/// `case` rather than `[ -n "$X" ]` because this ends up inside a JSON string,
+/// and a snippet somebody has to repair before pasting is a snippet they will
+/// not paste. No double quotes, and no expansion outside a pane.
+pub fn command(state: &str) -> String {
+    format!("case $DIRK_PANE_ID in ?*) dirk agent state {state} --current;; esac")
+}
+
+/// Whether a command in somebody's settings file is one of dirk's.
+///
+/// By shape rather than by a marker, because the file it lives in is JSON and
+/// JSON has no comments. Anything that reports a state to dirk from inside a
+/// pane is dirk's; whether it is *current* is a separate question, and the
+/// difference between those two is what `status` reports.
+pub fn ours(command: &str) -> bool {
+    command.contains("dirk agent state") && command.contains("--current")
+}
+
+/// A harness whose hooks dirk knows how to install, and where they go.
+pub struct Hookable {
+    /// The settings file, under the user's home directory.
+    pub path: &'static str,
+    /// The event that means a turn ended, and the one that means it stopped to
+    /// ask. Named as that harness names them.
+    pub done: &'static str,
+    pub blocked: &'static str,
+}
+
+/// Where this harness keeps its hooks, if dirk knows.
+///
+/// One entry today, which is one more than the number that could be installed
+/// before. The rest print a snippet and say plainly that nobody has written one
+/// rather than that it cannot be done.
+pub fn hookable(kind: &str) -> Option<Hookable> {
+    match kind {
+        "claude" => Some(Hookable {
+            path: ".claude/settings.json",
+            done: "Stop",
+            blocked: "Notification",
+        }),
+        _ => None,
+    }
+}
+
 /// What to install so a harness reports its own state.
 ///
 /// The whole ladder below this is inference: argv, a window title, prose on a
@@ -420,13 +468,7 @@ impl Source {
 /// Guarded on `DIRK_PANE_ID`, which only exists inside a managed pane, so the
 /// hook is inert everywhere else and safe to leave in a settings file for good.
 pub fn hooks(kind: &str) -> String {
-    // `case` rather than `[ -n "$X" ]` because this ends up inside a JSON
-    // string, and a snippet somebody has to repair before pasting is a snippet
-    // they will not paste. No double quotes, and no expansion outside a pane.
-    let say = |state: &str| {
-        format!("case $DIRK_PANE_ID in ?*) dirk agent state {state} --current;; esac")
-    };
-    let (done, blocked) = (say("done"), say("blocked"));
+    let (done, blocked) = (command("done"), command("blocked"));
     match kind {
         "claude" => format!(
             "Add to ~/.claude/settings.json:\n\

@@ -54,6 +54,7 @@ mod find;
 mod git;
 mod glyph;
 mod hit;
+mod hook;
 mod keys;
 mod llm;
 mod mux;
@@ -425,10 +426,58 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // Answered without a session, because installing a hook is something you do
+    // before there is one -- and because a snippet to paste is worse for having
+    // been through JSON on the way.
     if command_args_are(&args, "agent", "hooks") {
-        let kind = words(&args).get(2).copied().unwrap_or("claude").to_string();
-        say(&crate::agent::hooks(&kind));
-        return Ok(());
+        let words = words(&args);
+        let (verb, kind) = match words.get(2).copied() {
+            Some(v @ ("install" | "uninstall" | "status")) => {
+                (v, words.get(3).copied().unwrap_or("claude"))
+            }
+            other => ("print", other.unwrap_or("claude")),
+        };
+        let said = match verb {
+            "print" => {
+                say(&crate::agent::hooks(kind));
+                return Ok(());
+            }
+            "status" => {
+                // Every harness dirk can install for, not only the one asked
+                // about: the question behind this is "am I running on rank one
+                // anywhere", and one line per harness answers it.
+                let cfg = Config::load();
+                let mut out = String::new();
+                for k in cfg.kinds() {
+                    let Some(path) = hook::path(&k.name) else {
+                        continue;
+                    };
+                    out.push_str(&format!(
+                        "{:<14} {:<10} {}\n",
+                        k.name,
+                        hook::state(&k.name).name(),
+                        path.display()
+                    ));
+                }
+                if out.is_empty() {
+                    out.push_str("dirk installs hooks for no harness it knows about\n");
+                }
+                say(&out);
+                return Ok(());
+            }
+            "install" => hook::install(kind),
+            _ => hook::uninstall(kind),
+        };
+        match said {
+            Ok(line) => {
+                say(&format!("{line}\n"));
+                return Ok(());
+            }
+            Err(why) => {
+                eprintln!("dirk: {why}");
+                std::process::exit(1);
+            }
+        }
     }
 
     // Not a request and a reply: what comes back is a stream, and the client

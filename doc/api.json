@@ -1,213 +1,226 @@
 {
+  "version": "0.4.0",
+  "nouns": [
+    "api",
+    "workspace",
+    "pane",
+    "layout",
+    "agent",
+    "session",
+    "worktree",
+    "tab"
+  ],
   "commands": [
     {
+      "name": "api.schema",
+      "args": "",
       "answer": [
         "version",
         "nouns[]",
         "commands[]",
         "reply"
-      ],
-      "args": "",
-      "name": "api.schema"
+      ]
     },
     {
+      "name": "workspace.list",
+      "args": "",
       "answer": [
         "workspaces[]"
-      ],
-      "args": "",
-      "name": "workspace.list"
+      ]
     },
     {
+      "name": "workspace.focus",
+      "args": "<workspace|pane>",
       "answer": [
         "focused"
-      ],
-      "args": "<workspace|pane>",
-      "name": "workspace.focus"
+      ]
     },
     {
+      "name": "workspace.create",
+      "args": "[path]",
       "answer": [
         "workspace"
-      ],
-      "args": "[path]",
-      "name": "workspace.create"
+      ]
     },
     {
+      "name": "workspace.rename",
+      "args": "<workspace> <name...>",
       "answer": [
         "label"
-      ],
-      "args": "<workspace> <name...>",
-      "name": "workspace.rename"
+      ]
     },
     {
+      "name": "workspace.close",
+      "args": "<workspace>",
       "answer": [
         "closed"
-      ],
-      "args": "<workspace>",
-      "name": "workspace.close"
+      ]
     },
     {
+      "name": "pane.list",
+      "args": "[workspace]",
       "answer": [
         "panes[]"
-      ],
-      "args": "[workspace]",
-      "name": "pane.list"
+      ]
     },
     {
+      "name": "pane.focus",
+      "args": "<pane>",
       "answer": [
         "focused"
-      ],
-      "args": "<pane>",
-      "name": "pane.focus"
+      ]
     },
     {
+      "name": "pane.split",
+      "args": "<pane> [cols|rows]",
       "answer": [
         "pane"
-      ],
-      "args": "<pane> [cols|rows]",
-      "name": "pane.split"
+      ]
     },
     {
+      "name": "pane.read",
+      "args": "<pane> [lines]",
       "answer": [
         "text"
-      ],
-      "args": "<pane> [lines]",
-      "name": "pane.read"
+      ]
     },
     {
-      "answer": [
-        "sent"
-      ],
+      "name": "pane.run",
       "args": "<pane> <command...>",
-      "name": "pane.run"
-    },
-    {
       "answer": [
         "sent"
-      ],
-      "args": "<pane> <text...>",
-      "name": "pane.send-text"
+      ]
     },
     {
+      "name": "pane.send-text",
+      "args": "<pane> <text...>",
+      "answer": [
+        "sent"
+      ]
+    },
+    {
+      "name": "pane.send-keys",
+      "args": "<pane> <key...>",
       "answer": [
         "sent[]"
-      ],
-      "args": "<pane> <key...>",
-      "name": "pane.send-keys"
+      ]
     },
     {
+      "name": "pane.wait-output",
+      "args": "<pane> <text...> [--regex] [--lines N] [--timeout MS]",
       "answer": [
         "pane",
         "matched"
-      ],
-      "args": "<pane> <text...> [--regex] [--lines N] [--timeout MS]",
-      "name": "pane.wait-output"
+      ]
     },
     {
+      "name": "pane.attach",
+      "args": "<pane> [--takeover]",
       "answer": [
         "pane",
         "rows",
         "cols",
         "then that pane's screen until you detach"
-      ],
-      "args": "<pane> [--takeover]",
-      "name": "pane.attach"
+      ]
     },
     {
+      "name": "pane.close",
+      "args": "<pane>",
       "answer": [
         "closed"
-      ],
-      "args": "<pane>",
-      "name": "pane.close"
+      ]
     },
     {
+      "name": "layout.list",
+      "args": "",
       "answer": [
         "layouts[]"
-      ],
-      "args": "",
-      "name": "layout.list"
+      ]
     },
     {
+      "name": "layout.open",
+      "args": "<name>",
       "answer": [
         "opened"
-      ],
-      "args": "<name>",
-      "name": "layout.open"
+      ]
     },
     {
+      "name": "tab.list",
+      "args": "[workspace]",
       "answer": [
         "tabs[]"
-      ],
-      "args": "[workspace]",
-      "name": "tab.list"
+      ]
     },
     {
+      "name": "tab.new",
+      "args": "[workspace]",
       "answer": [
         "tab"
-      ],
-      "args": "[workspace]",
-      "name": "tab.new"
+      ]
     },
     {
+      "name": "tab.focus",
+      "args": "<tab>",
       "answer": [
         "focused"
-      ],
-      "args": "<tab>",
-      "name": "tab.focus"
+      ]
     },
     {
+      "name": "tab.rename",
+      "args": "<tab> <name...>",
       "answer": [
         "renamed"
-      ],
-      "args": "<tab> <name...>",
-      "name": "tab.rename"
+      ]
     },
     {
+      "name": "tab.close",
+      "args": "<tab>",
       "answer": [
         "closed"
-      ],
-      "args": "<tab>",
-      "name": "tab.close"
+      ]
     },
     {
+      "name": "worktree.list",
+      "args": "",
       "answer": [
         "worktrees[]"
-      ],
-      "args": "",
-      "name": "worktree.list"
+      ]
     },
     {
+      "name": "worktree.add",
+      "args": "<branch>",
       "answer": [
         "branch",
         "path",
         "workspace"
-      ],
-      "args": "<branch>",
-      "name": "worktree.add"
+      ]
     },
     {
+      "name": "worktree.remove",
+      "args": "<branch|path> [--force]",
       "answer": [
         "removed"
-      ],
-      "args": "<branch|path> [--force]",
-      "name": "worktree.remove"
+      ]
     },
     {
+      "name": "agent.list",
+      "args": "",
       "answer": [
         "agents[]"
-      ],
-      "args": "",
-      "name": "agent.list"
+      ]
     },
     {
+      "name": "agent.state",
+      "args": "<blocked|working|done|idle|starting> [workspace|pane]",
       "answer": [
         "state",
         "workspace",
         "seen"
-      ],
-      "args": "<blocked|working|done|idle|starting> [workspace|pane]",
-      "name": "agent.state"
+      ]
     },
     {
+      "name": "agent.explain",
+      "args": "<workspace|pane>",
       "answer": [
         "workspace",
         "pane",
@@ -219,109 +232,96 @@
         "signals[]",
         "screen",
         "window"
-      ],
-      "args": "<workspace|pane>",
-      "name": "agent.explain"
+      ]
     },
     {
+      "name": "agent.rules",
+      "args": "",
       "answer": [
         "agents[]"
-      ],
-      "args": "",
-      "name": "agent.rules"
+      ]
     },
     {
+      "name": "agent.start",
+      "args": "<kind> [pane]",
       "answer": [
         "agent",
         "pane",
         "workspace"
-      ],
-      "args": "<kind> [pane]",
-      "name": "agent.start"
+      ]
     },
     {
-      "answer": [
-        "agent"
-      ],
+      "name": "agent.prompt",
       "args": "<workspace|pane> <text...> [--wait] [--until STATE]... [--timeout MS]",
-      "name": "agent.prompt"
-    },
-    {
       "answer": [
         "agent"
-      ],
-      "args": "<workspace|pane> [--until STATE]... [--timeout MS]",
-      "name": "agent.wait"
+      ]
     },
     {
+      "name": "agent.wait",
+      "args": "<workspace|pane> [--until STATE]... [--timeout MS]",
+      "answer": [
+        "agent"
+      ]
+    },
+    {
+      "name": "agent.hooks",
+      "args": "<kind>",
       "answer": [
         "kind",
         "hooks"
-      ],
-      "args": "<kind>",
-      "name": "agent.hooks"
+      ]
     },
     {
+      "name": "session.info",
+      "args": "",
       "answer": [
         "version",
         "workspaces",
         "layouts",
         "clients",
         "attached"
-      ],
-      "args": "",
-      "name": "session.info"
+      ]
     },
     {
+      "name": "session.commands",
+      "args": "",
       "answer": [
         "commands[]"
-      ],
-      "args": "",
-      "name": "session.commands"
+      ]
     },
     {
+      "name": "session.notify",
+      "args": "<workspace|pane> <text...> [--blocked]",
       "answer": [
         "notified",
         "workspace",
         "why"
-      ],
-      "args": "<workspace|pane> <text...> [--blocked]",
-      "name": "session.notify"
+      ]
     },
     {
+      "name": "session.reload",
+      "args": "",
       "answer": [
         "reloaded"
-      ],
-      "args": "",
-      "name": "session.reload"
+      ]
     },
     {
+      "name": "session.quit",
+      "args": "",
       "answer": [
         "quit"
-      ],
-      "args": "",
-      "name": "session.quit"
+      ]
     }
   ],
-  "nouns": [
-    "api",
-    "workspace",
-    "pane",
-    "layout",
-    "agent",
-    "session",
-    "worktree",
-    "tab"
-  ],
   "reply": {
-    "err": {
-      "error": "what went wrong, as a sentence",
-      "ok": false
-    },
     "ok": {
       "ok": true,
       "result": "the keys named by `answer`"
+    },
+    "err": {
+      "ok": false,
+      "error": "what went wrong, as a sentence"
     }
-  },
-  "version": "0.4.0"
+  }
 }
