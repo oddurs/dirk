@@ -33,15 +33,16 @@
 
 use crate::agent::State;
 use crate::mux::PaneId;
-use crate::wire::Reply;
-use std::sync::mpsc::SyncSender;
+use crate::wire::{Answer, Reply};
 use std::time::Instant;
 
 /// A question waiting for the session to become the answer.
 pub struct Held {
     /// Where the reply goes. Holding this is what keeps the caller waiting:
-    /// its socket thread is blocked reading the other end.
-    pub back: SyncSender<Reply>,
+    /// its socket thread is blocked reading the other end. It also says
+    /// whether that thread is still there, which is how a wait nobody is
+    /// waiting on gets let go of.
+    pub back: Answer,
     pub what: What,
     /// `None` waits indefinitely, which is what a caller with its own patience
     /// asked for.

@@ -33,6 +33,8 @@ use crossterm::event::{
 };
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
+use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 /// The largest message anyone may send.
 ///
@@ -401,6 +403,46 @@ pub fn recv<R: Read + ?Sized>(r: &mut R) -> io::Result<Option<(Kind, Vec<u8>)>> 
     let mut body = vec![0u8; len as usize];
     r.read_exact(&mut body)?;
     Ok(Some((kind, body)))
+}
+
+/// Where a reply goes, and whether anybody is still there to read it.
+///
+/// The sender alone cannot say. A `SyncSender` learns that its receiver has
+/// gone only by sending, and a question the session has not answered yet has
+/// nothing to send — so a caller that walked away from an open-ended wait was
+/// invisible, and the session kept the question, the thread and the socket for
+/// as long as it ran.
+///
+/// The token says it instead. The caller holds one end of it for exactly as
+/// long as it is waiting, so holding the only remaining reference is what
+/// "nobody wants this any more" means. It carries nothing; its count is the
+/// whole of the message.
+#[derive(Debug)]
+pub struct Answer {
+    back: SyncSender<Reply>,
+    caller: Arc<()>,
+}
+
+impl Answer {
+    /// The pair: what the session holds, and what the caller holds while it
+    /// waits. Dropping the second is how the first finds out.
+    pub fn pair(back: SyncSender<Reply>) -> (Self, Arc<()>) {
+        let caller = Arc::new(());
+        let held = Arc::clone(&caller);
+        (Answer { back, caller }, held)
+    }
+
+    /// Answer, if anybody is listening. A full channel or a departed caller are
+    /// the same outcome from here: the reply goes nowhere, and there is nothing
+    /// useful to do about it.
+    pub fn send(&self, reply: Reply) {
+        let _ = self.back.send(reply);
+    }
+
+    /// Is the caller still waiting?
+    pub fn wanted(&self) -> bool {
+        Arc::strong_count(&self.caller) > 1
+    }
 }
 
 #[cfg(test)]

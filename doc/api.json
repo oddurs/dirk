@@ -296,7 +296,8 @@
         "workspaces",
         "layouts",
         "clients",
-        "attached"
+        "attached",
+        "waiting"
       ]
     },
     {

@@ -1555,7 +1555,7 @@ impl App {
                 // whole of what "wait" means here.
                 match self.begin(&req) {
                     Ok(Begin::Answered(value)) => {
-                        let _ = reply.send(wire::Reply::ok(value));
+                        reply.send(wire::Reply::ok(value));
                         return;
                     }
                     Ok(Begin::Waiting(what)) => {
@@ -1573,14 +1573,14 @@ impl App {
                                 self.settle();
                             }
                             Err(why) => {
-                                let _ = reply.send(wire::Reply::err(why));
+                                reply.send(wire::Reply::err(why));
                             }
                         }
                         return;
                     }
                     Ok(Begin::Ordinary) => {}
                     Err(why) => {
-                        let _ = reply.send(wire::Reply::err(why));
+                        reply.send(wire::Reply::err(why));
                         return;
                     }
                 }
@@ -1595,7 +1595,7 @@ impl App {
                         view.focus = now;
                     }
                 }
-                let _ = reply.send(answer);
+                reply.send(answer);
             }
             Ev::Watch { watcher, back } => {
                 let answer = self.begin_watch(*watcher);
@@ -2293,10 +2293,15 @@ impl App {
         let now = Instant::now();
         let mut waiting = Vec::new();
         for mut held in std::mem::take(&mut self.waits) {
+            // Asked before it is answered: a caller that walked away is not
+            // waiting for anything, and deciding its question would be work
+            // done for nobody -- on every turn of this loop, for as long as the
+            // session runs.
+            if !held.back.wanted() {
+                continue;
+            }
             match self.verdict(&mut held.what, held.deadline, now) {
-                Some(settled) => {
-                    let _ = held.back.send(settled.reply());
-                }
+                Some(settled) => held.back.send(settled.reply()),
                 None => waiting.push(held),
             }
         }
@@ -2565,6 +2570,12 @@ impl App {
                 "layouts": self.session.layouts.len(),
                 "attached": !self.views.is_empty(),
                 "clients": self.views.len(),
+                // Questions the session is holding: `pane wait-output` and its
+                // relatives, still waiting for the thing they were told to wait
+                // for. Reported because a script that seems hung is the first
+                // reason to ask, and because a number that only ever goes up is
+                // how this was found leaking.
+                "waiting": self.waits.len(),
                 "version": env!("CARGO_PKG_VERSION"),
             })),
 
