@@ -171,6 +171,42 @@ from the nav, and does nothing else.
 
 Everything else goes straight through to the program in the pane.
 
+### Bindings without a prefix
+
+An action can be reached both ways at once. The prefix form is the one somebody
+reading this finds; the direct chord is the one your hands learn.
+
+```toml
+[keys]
+"pane.split-cols" = ["prefix+v", "ctrl+alt+d"]
+"tab.next"        = ["prefix+.", "ctrl+alt+]"]
+```
+
+The hard part is not binding a chord, it is knowing which ones survive. Three
+layers take a cut before dirk sees anything: the operating system, your outer
+terminal, and the program in the pane. `ctrl+alt` is the one modifier family
+that is almost untouched — terminals leave it alone, macOS does not compose it
+into a character the way it does plain <kbd>Alt</kbd>, and it transmits even
+without a modern keyboard protocol.
+
+A few of that family are still spoken for, and dirk says so at startup rather
+than leaving you with a binding that appears not to have worked:
+
+| chord | owned by |
+| --- | --- |
+| `ctrl+alt+t` | the terminal launcher on Ubuntu and Fedora |
+| `ctrl+alt+l`, `ctrl+alt+a` | the lock screen and the attention window on KDE |
+| `ctrl+alt+s`, `ctrl+alt+u` | Konsole |
+| `ctrl+alt+` arrows | workspace switching on GNOME, and Ghostty |
+
+And two families reach dirk but should not be taken: `ctrl+j` and `ctrl+m` are
+what a terminal sends for <kbd>Enter</kbd>, `ctrl+i` for <kbd>Tab</kbd> and
+`ctrl+h` for <kbd>Backspace</kbd> — bind one and no pane will see that key
+again. dirk says that too.
+
+A direct chord is answered last, after every mode that is holding the keyboard.
+One typed into the palette's filter is a letter.
+
 ## What the column says
 
 Three zones down the left, in the order you ask the questions: **boards** are

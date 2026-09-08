@@ -153,6 +153,46 @@ pub fn named(text: &str) -> Option<KeyEvent> {
     Some(KeyEvent::new(code, mods))
 }
 
+/// How a key is written in a configuration file.
+///
+/// The inverse of [`named`], so the palette and `--keys` show a chord the way
+/// somebody would have to type it back.
+pub fn spell(k: KeyEvent) -> String {
+    let mut out = String::new();
+    for (m, name) in [
+        (KeyModifiers::CONTROL, "ctrl"),
+        (KeyModifiers::ALT, "alt"),
+        (KeyModifiers::SHIFT, "shift"),
+    ] {
+        if k.modifiers.contains(m) {
+            out.push_str(name);
+            out.push('+');
+        }
+    }
+    out.push_str(&match k.code {
+        KeyCode::Char(' ') => "space".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::F(n) => format!("f{n}"),
+        KeyCode::Enter => "enter".into(),
+        KeyCode::Esc => "esc".into(),
+        KeyCode::Tab => "tab".into(),
+        KeyCode::BackTab => "backtab".into(),
+        KeyCode::Backspace => "backspace".into(),
+        KeyCode::Delete => "delete".into(),
+        KeyCode::Insert => "insert".into(),
+        KeyCode::Up => "up".into(),
+        KeyCode::Down => "down".into(),
+        KeyCode::Left => "left".into(),
+        KeyCode::Right => "right".into(),
+        KeyCode::Home => "home".into(),
+        KeyCode::End => "end".into(),
+        KeyCode::PageUp => "pageup".into(),
+        KeyCode::PageDown => "pagedown".into(),
+        other => format!("{other:?}").to_lowercase(),
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
