@@ -2,8 +2,9 @@
 id: 109
 title: 'Identity: whose machine, which session, which host'
 type: feature
-status: backlog
+status: done
 milestone: v0.5
+assignee: oddurs
 labels:
 - rail
 created: 2026-09-07
@@ -62,10 +63,35 @@ existing configuration file breaks.
 
 ## Acceptance criteria
 
-- [ ] With no configuration, the rail shows the mark and `$USER`
-- [ ] A session started with `--session NAME` shows that name
+- [x] With no configuration, the rail shows the mark and `$USER`
+- [x] A session started with `--session NAME` shows that name
 - [ ] A session reached with `--remote HOST` shows the host, in its own colour
-- [ ] An existing `[brand] name = "dirk"` still puts `dirk` in the rail
-- [ ] The smoke test asserts the mark is in the rail, rather than the word
+- [x] An existing `[brand] name = "dirk"` still puts `dirk` in the rail
+- [x] The smoke test asserts the mark is in the rail, rather than the word
 
 Design note: https://claude.ai/code/artifact/0540f4dc-aa3a-4eea-af94-42d910635ce0
+
+## 2026-09-07
+
+Four of five, and the fifth is a heuristic rather than the thing asked for.
+
+`--remote` cannot be detected from inside the process that draws the bar. The
+far-side dirk renders and the relay is a pipe carrying bytes; the server never
+learns that its client arrived over ssh, and teaching it would be a change to
+the protocol rather than to the rail.
+
+What `host = "remote"` does instead is ask the environment whether *this* dirk
+is on the far side of an ssh connection — `SSH_CONNECTION`, `SSH_TTY`,
+`SSH_CLIENT` — which is the question every shell prompt asks and answers the
+same way. For `dirk --remote prod` it is right whenever the environment
+propagates through sshd to the server, and `always` in that machine\x27s own
+configuration is the escape hatch for when it does not.
+
+The hostname is short: `prod.example.com` in a bar is four columns of
+information and eleven of domain.
+
+`[brand]` is still read, and was checked: a file with `[brand] name = "dirk"`
+still puts `dirk` in the rail. A notification uses the configured name when
+there is one and the product name when there is not — someone who has renamed
+the program has renamed all of it, and a notification saying "oddurs" would be
+naming the wrong thing.

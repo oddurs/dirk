@@ -447,7 +447,20 @@ fn each_client_looks_where_it_is_looking() {
 
     let mut second = Client::attach(&session);
     assert!(second.wait_for(READY, START), "the second never drew");
-    assert!(second.wait_for("3 spaces", START), "not three spaces yet");
+    // The nav counts the spaces; the rail no longer does, because a number
+    // that is always there is a middle that can never be empty.
+    assert!(
+        second.wait_until(START, |c| c.rows().iter().any(|r| {
+            // The sidebar's columns only. Past them is a pane, and on a runner
+            // that pane has a shell prompt in it -- so the row ends in `$` and
+            // a count at the end of the *row* is not the count at the end of
+            // the section header.
+            let nav: String = r.chars().take(34).collect();
+            nav.contains("spaces") && nav.trim_end().ends_with('3')
+        })),
+        "not three spaces yet\n{}",
+        second.drawn()
+    );
 
     // One of them moves, with a key rather than over the socket -- the socket
     // has no screen of its own and moves them all, which is a different thing.
@@ -455,8 +468,8 @@ fn each_client_looks_where_it_is_looking() {
     second.send(b"j");
     std::thread::sleep(Duration::from_millis(800));
 
-    // The rail marks the chip you are in, so the two screens disagree about
-    // which one that is -- which is the point.
+    // The rail names where you are, so the two screens disagree about where
+    // that is -- which is the point.
     let bar = |c: &Client| c.rows().last().cloned().unwrap_or_default();
     assert_ne!(
         bar(&first),

@@ -2,8 +2,9 @@
 id: 106
 title: The rail hides what is owed before it hides the clock
 type: bug
-status: backlog
+status: done
 milestone: v0.5
+assignee: oddurs
 labels:
 - rail
 created: 2026-09-07
@@ -53,3 +54,13 @@ that is a defect rather than a judgement, and it is separated out so it can be
 fixed on its own without waiting for the rest.
 
 Design note: https://claude.ai/code/artifact/0540f4dc-aa3a-4eea-af94-42d910635ce0
+
+## 2026-09-07
+
+Fixed by 0097 rather than on its own: the ladder is one ordered list and
+attention is not on it, so there is no longer a place where the clock could be
+laid out first and the counts fitted in around it.
+
+`the_rail_gives_up_the_clock_before_it_gives_up_what_is_owed` walks the bar
+down from eighty columns to twenty-four with an agent blocked, and asserts the
+count is there at every one of them and that the clock is not, by the bottom.

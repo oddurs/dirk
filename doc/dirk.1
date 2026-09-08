@@ -161,11 +161,29 @@ the pane.
 .B dirk
 runs with no configuration file.
 .I ~/.config/dirk/config.toml
-overrides what it names and leaves the rest alone: the brand shown in the bar,
+overrides what it names and leaves the rest alone: who the bar says you are,
 where the project picker looks, the sidebar width, the scrollback depth, the
 shell, the boards, the layouts, the naming thresholds, and the size a session
 has when nothing is attached to it
 .RB ( [server] " " headless_cols ", " headless_rows ).
+.PP
+.B [identity]
+decides the first cells of the bar:
+.B name
+(empty means
+.BR $USER ),
+.B mark
+(empty means the glyph set's),
+.B session
+.RI ( never " | " named " | " always )
+and
+.B host
+.RI ( never " | " remote " | " always ).
+.B remote
+means dirk is on the far side of an
+.BR ssh (1)
+connection, which is worth saying: a local session and one on another machine
+are otherwise identical on screen.
 .PP
 .B dirk session reload
 re\-reads it without restarting. An open layout keeps its panes.

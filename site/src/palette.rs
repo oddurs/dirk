@@ -176,12 +176,23 @@ fn roles(src: &str) -> BTreeMap<String, Role> {
             continue;
         }
 
-        // The body is the next line, in a file `cargo fmt` decides the shape of.
-        let Some(body) = lines.peek() else { continue };
-        let body = body.trim();
+        // The whole body, joined. Reading only the next line was enough until a
+        // role needed both a ground and a foreground: `cargo fmt` breaks a
+        // chain that long across lines, and the role then vanished from the
+        // stylesheet without anything noticing -- which is the exact failure
+        // this file exists to prevent.
+        let mut body = String::new();
+        for line in lines.by_ref() {
+            let line = line.trim();
+            if line == "}" {
+                break;
+            }
+            body.push_str(line);
+        }
         if body.starts_with("match") || !body.starts_with("Style::default()") {
             continue;
         }
+        let body = body.as_str();
 
         let pick = |call: &str| -> Option<String> {
             let arg = body.split_once(call)?.1.split_once(')')?.0.trim();

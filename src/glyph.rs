@@ -130,10 +130,17 @@ marks! {
     // A layout with panes behind it, as against one not built yet.
     Running   "running"    "o"  "•",
 
-    // The rail: a chip you are in, a chip you are not, and the way out.
+    // The rail: a chip you are in, a chip you are not, and the two ways out.
+    // They are different things -- one parks the work and one ends it -- so
+    // they are two marks and not one.
     BarFocused "bar-focused" "|" "▊",
     BarPlain   "bar-plain"   ":" "▏",
     Close      "close"       "x" "✕",
+    Detach     "detach"      "^" "⏏",
+
+    // Between the steps of where you are, and how far back you are reading.
+    Crumb      "crumb"       ">" "▸",
+    Back       "back"        "^" "↑",
 
     // Where a name ran out of room, what stands between two things on one
     // line, and what a board says when it could not answer.

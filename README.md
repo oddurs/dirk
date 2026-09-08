@@ -468,9 +468,11 @@ sidebar_width = 34
 scrollback    = 5000
 shell         = ""           # empty means $SHELL
 
-[brand]
-mark = ""                    # empty takes the glyph set's; naming one makes it yours
-name = "dirk"
+[identity]
+mark    = ""                 # empty takes the glyph set's ◆
+name    = ""                 # empty means $USER
+session = "named"            # never | named | always
+host    = "remote"           # never | remote | always
 
 default_agent = "claude"     # what `a` starts, when a project does not say
 clipboard     = []           # empty finds pbcopy, wl-copy or xclip
@@ -586,6 +588,34 @@ A token that is not known is *absent*, not empty, so `"{project} {worktree}
 {branch}"` renders `dirk main` rather than `dirk  main`. A template naming a
 token that does not exist is reported at startup rather than rendering as
 silence.
+
+### Who the bar says you are
+
+The first cells of the rail used to hold the product's name. It never changed,
+it could not be clicked, and it answered "what program is this", which you knew
+before you started it.
+
+They now answer *where am I*: your account, the session when it has a name of
+its own, and the machine when this dirk is on the far side of an `ssh`
+connection. That last one is not decoration — a local session and one on a
+production host were identical on screen, which is how someone runs the right
+command in the wrong place.
+
+```
+◆ oddurs                    here, in the session everybody has
+◆ oddurs · api              a session you named
+◆ oddurs@prod · api         a session on another machine
+```
+
+`host = "remote"` asks the environment whether dirk is on the far side of an
+`ssh` connection, which is the question every shell prompt asks and answers the
+same way. `always` is the escape hatch for a machine that should always name
+itself; `never` turns it off.
+
+Naming yourself in `[identity]` makes it content, and content is yours — a
+notification then uses that name too, because someone who has renamed the
+program has renamed all of it. `[brand]` is still read, so a configuration file
+written before this keeps working.
 
 ## Naming, in detail
 

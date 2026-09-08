@@ -52,6 +52,20 @@ fn main() {
     cmd.cwd(stage());
     cmd.env("TERM", "xterm-256color");
     cmd.env("SHELL", "/bin/sh");
+    // The bar names whoever is running it, so an inherited `$USER` would put
+    // the person who last ran `make shots` on the project's front page and
+    // give the next contributor a diff for their trouble. Pinned, like the
+    // repository name and the branch, for the same reason.
+    cmd.env("USER", "dev");
+    cmd.env("LOGNAME", "dev");
+    // And a shot taken over ssh would otherwise pick up `@hostname` too.
+    for var in ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"] {
+        cmd.env(var, "");
+    }
+    // What is left is the clock, which is the one thing in the render that is
+    // genuinely the time. Regenerating produces a diff of four characters. The
+    // alternative is a way to lie to dirk about what time it is, which is a
+    // test hook in a program for the sake of a picture of it.
     // `DIRK_SHOT_CONFIG=<dir> cargo run --example shot` points dirk at a
     // configuration directory of your own, which is how a layout gets looked at
     // without installing it.

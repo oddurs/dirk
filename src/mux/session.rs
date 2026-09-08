@@ -237,6 +237,21 @@ impl Workspace {
         &self.here().panes
     }
 
+    /// Which pane has the keyboard, as one of how many.
+    ///
+    /// One-based, because it is for reading rather than for indexing. A
+    /// workspace holding one pane answers `(1, 1)`, and the rail says nothing:
+    /// "1/1" is a fact about a split that is not there.
+    pub fn pane_position(&self) -> (usize, usize) {
+        let tab = self.here();
+        let at = tab
+            .panes
+            .iter()
+            .position(|p| p.id == tab.focus)
+            .unwrap_or(0);
+        (at + 1, tab.panes.len())
+    }
+
     pub fn tree(&self) -> &Node {
         &self.here().tree
     }

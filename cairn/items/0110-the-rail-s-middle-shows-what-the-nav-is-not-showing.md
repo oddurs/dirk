@@ -2,8 +2,9 @@
 id: 110
 title: The rail's middle shows what the nav is not showing
 type: feature
-status: backlog
+status: done
 milestone: v0.5
+assignee: oddurs
 labels:
 - rail
 depends_on:
@@ -58,11 +59,26 @@ distinction; nothing about them changes except when they are there.
 
 ## Acceptance criteria
 
-- [ ] With the nav visible, the rail names the project, the focused intent and
+- [x] With the nav visible, the rail names the project, the focused intent and
       the pane as `n/m`
-- [ ] Pressing `b` turns the middle into chips, and pressing it again turns it
+- [x] Pressing `b` turns the middle into chips, and pressing it again turns it
       back
-- [ ] The chips remain clickable and keep their numbers
-- [ ] Neither form ever overruns the attention group
+- [x] The chips remain clickable and keep their numbers
+- [x] Neither form ever overruns the attention group
 
 Design note: https://claude.ai/code/artifact/0540f4dc-aa3a-4eea-af94-42d910635ce0
+
+## 2026-09-07
+
+The rule holds and the breadcrumb needed one thing the design note did not
+have.
+
+Three fresh workspaces in one project are all labelled after the project, so
+`dirk ▸ dirk` said the same thing in every one of them and two clients focused
+on different workspaces drew identical bars. A session test caught it, which is
+the test that exists to prove each client looks where it is looking.
+
+The breadcrumb now carries the number the nav reads by and the chips jump to —
+`dirk ▸ 2 Reading the vt100 grid ▸ 2/2` — so the one numbering runs through the
+nav, the chips and the crumb. Without it the bar could not answer the question
+it exists to answer, which is which of them you are in.

@@ -128,6 +128,25 @@ impl Theme {
         Style::default().fg(BASE5)
     }
 
+    // ── The top of the hierarchy ────────────────────────────────────────
+    // Two things take a ground of their own and nothing else does. That is
+    // what makes them impossible to miss in a surface one row tall, where
+    // weight and colour are the whole of the typography.
+    /// A count that is owed. `blocked` is the only state waiting on a human.
+    pub fn alarm(self) -> Style {
+        Style::default()
+            .bg(RED)
+            .fg(BASE8)
+            .add_modifier(Modifier::BOLD)
+    }
+    /// The prefix is down and the next key is a command, not a keystroke.
+    pub fn armed(self) -> Style {
+        Style::default()
+            .bg(ACCENT)
+            .fg(BASE0)
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// The colour and glyph for one herdr agent state.
     ///
     /// `blocked` is the only one that gets red: it is the only state that is
