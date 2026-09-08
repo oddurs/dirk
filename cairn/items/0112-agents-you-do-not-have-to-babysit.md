@@ -3,11 +3,11 @@ id: 112
 key: v0.7
 title: Agents you do not have to babysit
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 111
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 due: 2027-04-30
 ---
 

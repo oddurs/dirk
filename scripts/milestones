@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# milestones — a milestone is as done as the work scheduled into it.
+#
+# Run from cairn's `after-change` hook, so the answer is never something
+# somebody has to remember. Nine milestones were complete and every one of them
+# still said `backlog`: the roadmap renders its progress bar from the child
+# items, so it looked right, and the milestone's own status was the one field
+# nothing read and nothing maintained.
+#
+# `git work ship` cannot do this. It closes the item a branch carried, and a
+# milestone has no branch -- there is no commit that finishes one, only the
+# commit that finishes the last thing in it.
+#
+#   scripts/milestones          bring every milestone into line
+#   scripts/milestones --check  say what is wrong, change nothing, exit 1 if any
+#
+set -euo pipefail
+
+check=no
+[ "${1:-}" = "--check" ] && check=yes
+
+command -v cairn >/dev/null 2>&1 || exit 0
+
+# Suppressed for the reads, and for the writes below: a `set` fires
+# `after-change`, which is what runs this, and the second pass would find
+# nothing to do but would still render. One render at the end is enough.
+export CAIRN_NO_HOOKS=1
+
+plan=$(cairn list --all --json 2>/dev/null | python3 -c '
+import json, sys
+
+items = json.load(sys.stdin)
+work = [i for i in items if i["type"] != "milestone"]
+for m in (i for i in items if i["type"] == "milestone"):
+    key = m.get("key")
+    if not key:
+        continue
+    scheduled = [i for i in work if i.get("milestone") == key]
+    # A milestone with nothing in it is not finished, it is empty. Closing it
+    # would mean a milestone becomes done the moment it is created, and undone
+    # again as soon as anything is scheduled into it.
+    if not scheduled:
+        continue
+    finished = all(i["category"] in ("done", "dropped") for i in scheduled)
+    done = m["category"] == "done"
+    if finished and not done:
+        print("close", m["id"], key, sep="\t")
+    elif done and not finished:
+        print("reopen", m["id"], key, sep="\t")
+')
+
+[ -z "$plan" ] && exit 0
+
+if [ "$check" = yes ]; then
+    printf '%s\n' "$plan" | while IFS=$'\t' read -r verb id key; do
+        case $verb in
+            close)  printf 'milestone %s is finished and still open\n' "$key" >&2 ;;
+            reopen) printf 'milestone %s is closed and has open work in it\n' "$key" >&2 ;;
+        esac
+        : "$id"
+    done
+    exit 1
+fi
+
+printf '%s\n' "$plan" | while IFS=$'\t' read -r verb id key; do
+    case $verb in
+        close)  cairn close "$id" >/dev/null && printf 'closed milestone %s\n' "$key" >&2 ;;
+        reopen) cairn reopen "$id" >/dev/null && printf 'reopened milestone %s\n' "$key" >&2 ;;
+    esac
+done
+
+cairn render -q 2>/dev/null || true

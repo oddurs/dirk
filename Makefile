@@ -18,7 +18,7 @@ DIRK    := target/release/dirk
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DISTDIR := dirk-$(VERSION)
 
-.PHONY: all build check test fmt lint shellcheck shot shots site site-serve roadmap api setup \
+.PHONY: all build check test fmt lint shellcheck milestones shot shots site site-serve roadmap api setup \
         news ChangeLog dist install install-man install-completions uninstall clean distclean help
 
 all: build
@@ -36,14 +36,20 @@ check: fmt lint test
 fmt:
 	$(CARGO) fmt --all --check
 
-lint: shellcheck
+lint: shellcheck milestones
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 # The scripts are the workflow, and CI holds them to this. It was not in the
 # gate, so the first thing to fail on it was a change to the script that runs
 # the gate. Skipped rather than fatal when shellcheck is absent -- CI is the
 # authority and says so out loud rather than passing in silence.
-SCRIPTS = scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
+SCRIPTS = scripts/work scripts/news scripts/milestones .githooks/commit-msg .githooks/pre-push
+
+# A milestone is as done as the work in it, and cairn's hook keeps that true as
+# changes happen. This catches the case the hook cannot: somebody editing an
+# item file by hand, or a merge bringing two branches' items together.
+milestones:
+	@scripts/milestones --check
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \

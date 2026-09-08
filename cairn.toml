@@ -241,10 +241,20 @@ columns = ["id", "type", "title", "created"]
 # that drifts from the items is the rot cairn exists to prevent, and leaving it
 # to discipline is how it starts.
 
+# `scripts/milestones` renders too, so these do not double up. A milestone is as
+# done as the work scheduled into it, and that has to be worked out by something
+# rather than remembered by somebody: nine of them were complete and every one
+# still said `backlog`, because the roadmap draws its progress bar from the
+# child items and the milestone's own status was the field nothing read.
+#
+# All three events, because all three can change the answer -- the last item
+# closing, a new one being scheduled into a finished milestone, and the last
+# open one being deleted out of it.
+
 [hooks]
-after-create = "cairn render -q"
-after-change = "cairn render -q"
-after-remove = "cairn render -q"
+after-create = "scripts/milestones"
+after-change = "scripts/milestones"
+after-remove = "scripts/milestones"
 # after-render = "git add ROADMAP.md"
 # after-change = ["python3", "scripts/notify.py"]   # portable form
 

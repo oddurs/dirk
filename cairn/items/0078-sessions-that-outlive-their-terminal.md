@@ -3,10 +3,11 @@ id: 78
 key: v0.4
 title: Sessions that outlive their terminal
 type: milestone
-status: backlog
+status: done
 depends_on:
 - 77
 created: 2026-09-07
+updated: 2026-09-08
 due: 2027-01-15
 ---
 
