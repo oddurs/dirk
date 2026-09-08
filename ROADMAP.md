@@ -94,9 +94,20 @@ A daemon, detach and reattach, persistence across restarts, and a socket API
 
 ## v0.5 — A multiplexer you would not miss tmux from
 
-`##########` 100% · 21 of 21 done · due 2027-02-15
+`########··` 72% · 21 of 29 done · due 2027-02-15
 
 Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
+
+### backlog
+
+- [ ] `0097` The rail degrades by a ladder, not by whatever is measured first <sup>chore · p2 · chrome · rail</sup>
+- [ ] `0098` Elision throws away the word that distinguishes <sup>bug · p2 · naming · rail</sup>
+- [ ] `0105` Four levels of hierarchy where the rail has one <sup>feature · p1 · chrome · rail</sup>
+- [ ] `0106` The rail hides what is owed before it hides the clock <sup>bug · p0 · chrome · rail</sup>
+- [ ] `0107` An empty middle, and one place to look for what is owed <sup>feature · p1 · chrome · rail</sup>
+- [ ] `0108` The corner belongs to the safe way out <sup>feature · p1 · chrome · rail</sup>
+- [ ] `0109` Identity: whose machine, which session, which host <sup>feature · p1 · chrome · rail</sup>
+- [ ] `0110` The rail's middle shows what the nav is not showing <sup>feature · p1 · chrome · rail</sup>
 
 ### done
 
@@ -124,7 +135,7 @@ Scrollback, copy mode and search. Tabs, zoom, pane movement. A command palette
 
 ## v1.0 — Production
 
-`####······` 35% · 8 of 23 done · due 2027-04-01
+`####······` 38% · 9 of 24 done · due 2027-04-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -159,4 +170,5 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0087` A design system the program cannot drift from <sup>feature · p1 · web</sup>
 - [x] `0088` Real terminal output, on the page <sup>feature · p2 · web</sup>
 - [x] `0089` GitHub Pages, deployed by the workflow <sup>chore · p1 · web</sup>
+- [x] `0099` A shot at a size you choose <sup>chore · p3 · web</sup>
 
