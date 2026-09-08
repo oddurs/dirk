@@ -2,7 +2,7 @@
 id: 121
 title: A terminal size when nobody is looking
 type: feature
-status: review
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07

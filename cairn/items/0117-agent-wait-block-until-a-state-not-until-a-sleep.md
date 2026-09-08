@@ -2,7 +2,7 @@
 id: 117
 title: 'agent wait: block until a state, not until a sleep'
 type: feature
-status: backlog
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
