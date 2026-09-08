@@ -1843,3 +1843,92 @@ fn a_git_environment_from_outside_does_not_redirect_dirk() {
     drop(client);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn a_space_leads_with_what_it_is_and_captions_it_with_what_it_is_doing() {
+    // The intent is rewritten every time the agent revises what it says it is
+    // up to. Leading with it makes the column you scan for somewhere to go the
+    // one column that will not hold still.
+    let repo = a_repo("leads");
+    let session = unique("leads");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let id = first_field(&list, "id");
+    let (ok, out) = ask(&session, &["workspace", "rename", &id, "zzINTENT"]);
+    assert!(ok, "workspace rename failed: {out}");
+    assert!(
+        client.wait_for("zzINTENT", START),
+        "the name never landed\n{}",
+        client.drawn()
+    );
+    // The checkout is read on a timer. Until that first read lands the space
+    // has no branch, and its label is correctly on the identity line -- which
+    // is the other half of this behaviour and not the half being tested here.
+    assert!(
+        client.wait_until(START, |c| c.rows().iter().any(|r| r.contains("main"))),
+        "the branch was never read\n{}",
+        client.drawn()
+    );
+
+    let rows = client.rows();
+    let at = rows
+        .iter()
+        .position(|line| line.contains("zzINTENT"))
+        .expect("the intent line");
+    assert!(at > 0, "the intent is the first row the nav drew");
+    assert!(
+        rows[at - 1].contains("main"),
+        "the branch is not on the line above the intent it names\n{}",
+        client.drawn()
+    );
+    assert!(
+        !rows[at].contains("main"),
+        "identity and intent are on one line\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn a_space_with_no_branch_says_its_name_once() {
+    // Outside a repository the label is the only name there is, so it goes on
+    // the identity line -- and a caption underneath repeating it would be a
+    // row that says the same thing twice.
+    let session = unique("oneline");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["workspace", "list"]);
+    assert!(ok, "workspace list failed");
+    let id = first_field(&list, "id");
+    let (ok, out) = ask(&session, &["workspace", "rename", &id, "zzONLY"]);
+    assert!(ok, "workspace rename failed: {out}");
+    assert!(
+        client.wait_for("zzONLY", START),
+        "the name never landed\n{}",
+        client.drawn()
+    );
+
+    let rows = client.rows();
+    let at = rows
+        .iter()
+        .position(|line| line.contains("zzONLY"))
+        .expect("the name");
+    assert!(
+        !rows.get(at + 1).is_some_and(|r| r.contains("zzONLY")),
+        "the name is drawn twice, once as itself and once as its own caption\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+}

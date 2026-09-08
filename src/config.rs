@@ -351,7 +351,7 @@ pub struct Nav {
     /// Whether the attention zone holds its place: `when-needed`, `always` or
     /// `never`.
     pub attention: String,
-    /// `tall` gives a workspace a second line for its branch; `short` gives it
+    /// `tall` gives a workspace a second line for its intent; `short` gives it
     /// one line, which is what forty of them need.
     pub rows: String,
 }

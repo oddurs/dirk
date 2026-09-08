@@ -1210,9 +1210,10 @@ fn a_folded_project_still_says_something_is_waiting_inside_it() {
 }
 
 #[test]
-fn short_rows_drop_the_branch_and_keep_the_workspace() {
+fn short_rows_drop_the_intent_and_keep_the_identity() {
     // Two lines a workspace is right at five and wrong at forty. What goes is
-    // the branch, which the row above already implies.
+    // the caption -- the identity line is the row itself, and dropping that
+    // would leave a list of things doing something with no way to say which.
     let mut h = Harness::start_with_config("[nav]\nrows = \"short\"\n");
     assert!(h.wait_for(READY, START), "never started");
     std::thread::sleep(Duration::from_secs(2));
@@ -1220,13 +1221,27 @@ fn short_rows_drop_the_branch_and_keep_the_workspace() {
     let rows = h.rows();
     assert!(
         rows.iter().any(|r| r.contains("dirk")),
-        "the workspace went with the branch\n{}",
+        "the project went with the caption\n{}",
         h.drawn()
     );
-    // The nav's branch line is indented under the name and holds nothing else.
+    // One row per space: the identity line, and then straight to the footer
+    // that offers another. A caption would sit between the two.
+    let from = rows
+        .iter()
+        .position(|line| line.trim_start().starts_with("spaces"))
+        .expect("the spaces heading");
+    let at = rows
+        .iter()
+        .enumerate()
+        .skip(from)
+        .find_map(|(r, line)| {
+            let i = line.find("1 ")?;
+            line[..i].trim().is_empty().then_some(r)
+        })
+        .expect("the space's identity line");
     assert!(
-        !rows.iter().any(|r| r.trim() == "main"),
-        "the branch line survived the short form\n{}",
+        rows[at + 1].contains("workspace"),
+        "a second line survived the short form\n{}",
         h.drawn()
     );
 }
