@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn main() {
-    let (rows, cols) = (26u16, 92u16);
+    let (rows, cols) = size();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows,
@@ -142,6 +142,42 @@ fn main() {
     writer.write_all(b"q").unwrap();
     std::thread::sleep(Duration::from_millis(300));
     let _ = child.kill();
+}
+
+/// `DIRK_SHOT_SIZE=26x40`, or the default this has always rendered at.
+///
+/// Most of what the chrome does is width-dependent -- the rail gives things up
+/// as the terminal narrows, the nav drops a row's second line -- and none of it
+/// could be looked at without editing this file.
+///
+/// A bad value is a mistake at the keyboard, so it says which part it could not
+/// read and what the shape is. A backtrace out of `unwrap` would answer neither.
+fn size() -> (u16, u16) {
+    const DEFAULT: (u16, u16) = (26, 92);
+
+    let Ok(spec) = std::env::var("DIRK_SHOT_SIZE") else {
+        return DEFAULT;
+    };
+    let bad = |what: &str| -> ! {
+        eprintln!("shot: DIRK_SHOT_SIZE={spec:?}: {what}; expected ROWSxCOLS, e.g. 26x92");
+        std::process::exit(2)
+    };
+
+    let Some((rows, cols)) = spec.split_once(['x', 'X']) else {
+        bad("no `x` between the rows and the columns")
+    };
+    let Ok(rows) = rows.trim().parse::<u16>() else {
+        bad("the rows are not a number")
+    };
+    let Ok(cols) = cols.trim().parse::<u16>() else {
+        bad("the columns are not a number")
+    };
+    // vt100 and the layout both assume there is something to lay out; below
+    // this the shot is not a small screen, it is a crash.
+    if rows < 4 || cols < 20 {
+        bad("too small to draw; the floor is 4x20")
+    }
+    (rows, cols)
 }
 
 // ─── Where the shot is taken ────────────────────────────────────────────────

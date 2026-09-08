@@ -91,6 +91,20 @@ jobs:
         # disagree with each other, and a CI job that fails when the runner
         # image bumps a linter is a job nobody trusts.
         run: shellcheck -S warning scripts/work scripts/news .githooks/commit-msg .githooks/pre-push
+      # Two branches filing backlog items pick the same next id, and because
+      # the filenames differ git merges them without a conflict. `cairn check`
+      # catches it and CI does not have cairn; this catches the one failure
+      # mode that actually bites, in one line and with no dependency.
+      - name: no two backlog items share an id
+        run: |
+          ids=$(find cairn/items -name '*.md' -exec basename {} \; | sed 's/^\([0-9]*\).*/\1/')
+          dupes=$(printf '%s\n' "$ids" | sort | uniq -d)
+          if [ -n "$dupes" ]; then
+            echo "::error::duplicate item ids: $dupes — run \`cairn renumber\`, then check depends_on by hand"
+            exit 1
+          fi
+          printf '%s\n' "$ids" | wc -l | xargs echo items, all distinct:
+
       - name: no tool attribution in the history this branch adds
         run: |
           base=$(git merge-base origin/${{ github.base_ref || 'main' }} HEAD 2>/dev/null || echo HEAD~1)
