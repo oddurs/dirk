@@ -2,10 +2,10 @@
 id: 137
 title: Images in a pane
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: mux
 effort: xl

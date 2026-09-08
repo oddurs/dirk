@@ -197,13 +197,12 @@ dirk guesses at agent state where it could be told. Installing the hook rather
 
 ## v0.8 — The rest of the multiplexer
 
-`########··` 80% · 8 of 10 done · due 2027-06-15
+`#########·` 90% · 9 of 10 done · due 2027-06-15
 
 What v0.5 did not finish, and the terminal features a pane needs before it is
 
 ### backlog
 
-- [ ] `0137` Images in a pane <sup>feature · p2 · mux</sup>
 - [ ] `0142` A third row layout for the nav <sup>feature · p3 · nav</sup>
 
 ### done
@@ -212,6 +211,7 @@ What v0.5 did not finish, and the terminal features a pane needs before it is
 - [x] `0134` Copy mode: word and paragraph motions <sup>feature · p2 · mux</sup>
 - [x] `0135` Searching where you are reading <sup>feature · p2 · mux</sup>
 - [x] `0136` Tabs, and moving a pane between them <sup>feature · p1 · mux</sup>
+- [x] `0137` Images in a pane <sup>feature · p2 · mux</sup>
 - [x] `0138` The title dirk writes to the terminal it runs in <sup>feature · p2 · chrome</sup>
 - [x] `0139` Login shells, and where a new pane starts <sup>feature · p2 · config</sup>
 - [x] `0140` Pane borders, and turning the mouse off <sup>feature · p3 · chrome</sup>
