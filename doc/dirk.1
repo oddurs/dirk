@@ -61,9 +61,21 @@ works from inside one without looking anything up.
 .B workspace \fRlist | focus | create | rename | close
 .TP
 .B pane \fRlist | focus | split | read | run | send\-text | send\-keys |
-.B wait\-output | metadata | attach | close
+.B wait\-output | metadata | move | attach | close
+.TP
+.B tab \fRlist | new | focus | rename | close
+Tabs belong to a workspace: several arrangements of panes under one row, one
+of them on screen.
+.B pane move
+sends a pane to another one.
 .TP
 .B layout \fRlist | open
+.TP
+.B worktree \fRlist | add | remove
+Git worktrees for the project a workspace is in, made and removed without
+leaving dirk.
+.B add
+takes a branch and puts a workspace on it.
 .TP
 .B agent \fRlist | rules | explain | start | state | prompt | wait |
 .B hooks \fR[install | uninstall | status]
@@ -72,7 +84,7 @@ works from inside one without looking anything up.
 .TP
 .B completion \fRbash | zsh | fish
 .TP
-.B session \fRinfo | list | reload | commands | notify
+.B session \fRinfo | list | reload | commands | notify | quit
 .
 .SH OPTIONS
 .TP

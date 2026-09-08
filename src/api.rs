@@ -731,6 +731,40 @@ mod tests {
     }
 
     #[test]
+    fn every_command_is_in_the_manual_page() {
+        // The page is the interface's documentation, and CI only checks that it
+        // parses -- so `tab` and `worktree` were added, shipped, and had no
+        // entry between them for a milestone and a half.
+        //
+        // Scoped to the COMMANDS section, because `tab` is also a key and
+        // `close` is also prose: a word appearing somewhere in a manual page is
+        // not the same as a command being documented in it.
+        let page = include_str!("../doc/dirk.1");
+        let listed = page
+            .split(".SH COMMANDS")
+            .nth(1)
+            .and_then(|rest| rest.split(".SH OPTIONS").next())
+            .expect("the page has a COMMANDS section")
+            // Roff, unescaped just enough to find a word in it: `send\-keys` is
+            // written with the hyphen escaped so it is not a line break.
+            .replace("\\-", "-")
+            .replace("\\fR", " ")
+            .replace("\\fB", " ");
+        for cmd in COMMANDS {
+            let (noun, verb) = cmd.name.split_once('.').expect("noun and verb");
+            for word in [noun, verb] {
+                assert!(
+                    listed
+                        .split(|c: char| !c.is_alphanumeric() && c != '-')
+                        .any(|w| w == word),
+                    "{} is not in doc/dirk.1 -- add it to the COMMANDS section",
+                    cmd.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_listed_commands_are_the_ones_that_exist() {
         // A surface that says it accepts something it does not is worse than
         // one that says nothing.
