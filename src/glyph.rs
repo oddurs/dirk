@@ -98,6 +98,10 @@ marks! {
     Zoomed    "zoomed"     "Z"  "⤢",
     Held      "held"       "."  "·",
 
+    // How far a branch has gone, and how far it has been left.
+    Ahead     "ahead"      "^"  "↑",
+    Behind    "behind"     "v"  "↓",
+
     // Disclosure, and the pane subtree under a workspace.
     Collapsed "collapsed"  ">"  "▸",
     Rule      "rule"       "-"  "─",

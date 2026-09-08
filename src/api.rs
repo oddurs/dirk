@@ -92,6 +92,11 @@ fn workspace_json(session: &Session, p: usize, w: usize) -> Value {
         "panes": ws.tree().leaves().len(),
         "branch": tokens.get("branch"),
         "worktree": tokens.get("worktree").is_some(),
+        // Null rather than zero when there is no upstream to compare against.
+        // Read straight from the checkout rather than through the tokens: how
+        // far a branch has drifted is not a thing to name a workspace after.
+        "ahead": proj.repo_of(w).and_then(|r| r.track).map(|(a, _)| a),
+        "behind": proj.repo_of(w).and_then(|r| r.track).map(|(_, b)| b),
         "agent": tokens.get("agent"),
         "since": tokens.get("since"),
         "age": tokens.get("age"),

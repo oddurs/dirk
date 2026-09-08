@@ -36,6 +36,13 @@ pub struct Repo {
     /// Empty on a detached head, which is a state and not a name.
     pub branch: String,
     pub worktree: bool,
+    /// How far this branch has gone and how far it has been left: commits
+    /// ahead of its upstream, then commits behind it.
+    ///
+    /// `None` when there is nothing to compare against -- no upstream, or a
+    /// detached head. That is not the same as being level with one, and of the
+    /// two, answering "0" for "there is no answer" is the more misleading.
+    pub track: Option<(usize, usize)>,
 }
 
 /// How long an answer is good for. A branch changes a few times an hour at
@@ -122,7 +129,38 @@ pub fn read(dir: &Path) -> Option<Repo> {
         .filter(|b| b != "HEAD")
         .unwrap_or_default();
 
-    Some(Repo { branch, worktree })
+    // Both numbers out of one process. `--left-right` counts each side of the
+    // symmetric difference separately: the upstream side first, which is what
+    // this branch is behind, then this side, which is what it is ahead by.
+    //
+    // A branch with no upstream fails here rather than answering zeroes, and
+    // that failure is the answer worth keeping.
+    let track = git(
+        dir,
+        &["rev-list", "--count", "--left-right", "@{upstream}...HEAD"],
+    )
+    .as_deref()
+    .and_then(tracking);
+
+    Some(Repo {
+        branch,
+        worktree,
+        track,
+    })
+}
+
+/// Read `rev-list --count --left-right` the right way round.
+///
+/// Its own function because the order is the whole of what there is to get
+/// wrong, and getting it wrong is silent: a branch six ahead reads as six
+/// behind, which is the opposite advice.
+///
+/// The upstream side comes first -- it is the left of `@{upstream}...HEAD` --
+/// and that is what this branch is *behind*. Returned the other way round,
+/// because ahead-then-behind is the order everything else says it in.
+fn tracking(out: &str) -> Option<(usize, usize)> {
+    let (behind, ahead) = out.split_once(char::is_whitespace)?;
+    Some((ahead.trim().parse().ok()?, behind.trim().parse().ok()?))
 }
 
 /// One checkout of a repository, as `git worktree list` describes it.
@@ -262,6 +300,26 @@ pub struct Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ahead_and_behind_do_not_come_back_the_other_way_round() {
+        // `A...B` counts the left side first, and the left side is the
+        // upstream. Reading it the other way round is silent and says the
+        // opposite: a branch six ahead becomes one six behind.
+        assert_eq!(tracking("1\t6"), Some((6, 1)), "ahead first, behind second");
+        assert_eq!(tracking("0\t0"), Some((0, 0)));
+        assert_eq!(tracking("0 12"), Some((12, 0)), "spaces as well as tabs");
+    }
+
+    #[test]
+    fn an_answer_that_is_not_two_numbers_is_no_answer() {
+        // Rather than a zero. There is no upstream, or git said something this
+        // does not understand, and both of those are "nothing to compare
+        // against" -- which is not the same as being level with one.
+        assert_eq!(tracking(""), None);
+        assert_eq!(tracking("3"), None, "one number is not a pair");
+        assert_eq!(tracking("fatal: no upstream"), None);
+    }
 
     #[test]
     fn a_worktree_goes_beside_the_repository_it_belongs_to() {

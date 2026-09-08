@@ -207,28 +207,46 @@ fn stage() -> std::path::PathBuf {
     // An empty repository on an unborn branch reports no branch at all, and
     // the row the shot exists to show would lose its second line.
     let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .args(args)
+        let mut cmd = std::process::Command::new("git");
+        // `GIT_DIR` beats the working directory just as it beats `-C`, so a
+        // shot taken from a git alias -- or from a hook, or a `rebase --exec`
+        // -- would commit into whatever repository that pointed at. The point
+        // of staging somewhere fixed is undone if git looks elsewhere.
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_PREFIX",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.args(args)
             .current_dir(&stage)
+            .env("GIT_AUTHOR_NAME", "shot")
+            .env("GIT_AUTHOR_EMAIL", "shot@localhost")
+            .env("GIT_COMMITTER_NAME", "shot")
+            .env("GIT_COMMITTER_EMAIL", "shot@localhost")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
     };
+    let commit = |what: &str| git(&["commit", "-q", "--allow-empty", "-m", what]);
 
+    // Six ahead of an upstream and one behind it, because a branch level with
+    // its upstream draws no counts and the shot would not show them at all.
+    // The upstream is a local branch: `@{upstream}` reads whatever the branch
+    // was configured against, and a remote would mean a second directory and a
+    // fetch for a picture.
     let ready = git(&["init", "-q", "-b", "main"])
-        && git(&[
-            "-c",
-            "user.name=shot",
-            "-c",
-            "user.email=shot@localhost",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "the scratch repository a shot is taken in",
-        ]);
+        && commit("the scratch repository a shot is taken in")
+        && git(&["checkout", "-q", "-b", "base"])
+        && commit("what the upstream did meanwhile")
+        && git(&["checkout", "-q", "main"])
+        && (1..=6).all(|n| commit(&format!("work {n}")))
+        && git(&["branch", "--set-upstream-to=base", "main"]);
 
     if ready { stage } else { fallback }
 }
