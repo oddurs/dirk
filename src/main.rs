@@ -3490,6 +3490,7 @@ impl App {
                     height: full.height.saturating_sub(1),
                     ..full
                 },
+                &self.glyphs,
                 p,
                 &mut self.hits,
             );

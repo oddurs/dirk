@@ -24,9 +24,11 @@
 //! Directories are read once when the picker opens rather than watched. It is
 //! a list of repositories, not a live view of a filesystem.
 
+use crate::glyph::G;
 use crate::hit::{HitMap, Target};
 use crate::theme::THEME;
-use crate::ui::{elide, fill, write_str};
+use crate::ui::elide;
+use crate::ui::overlay::{self, Overlay};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
@@ -101,72 +103,40 @@ fn score(name: &str, query: &str) -> Option<usize> {
     Some(first.unwrap_or(0))
 }
 
-pub fn render(buf: &mut Buffer, area: Rect, picker: &Picker, hits: &mut HitMap) {
+pub fn render(
+    buf: &mut Buffer,
+    area: Rect,
+    g: &crate::glyph::Glyphs,
+    picker: &Picker,
+    hits: &mut HitMap,
+) {
     // Centred, and small: a picker that fills the screen hides the thing you
     // are picking for.
-    let w = area.width.clamp(20, 56).min(area.width);
-    let h = area.height.clamp(3, 18).min(area.height);
-    let box_area = Rect {
-        x: area.x + (area.width - w) / 2,
-        y: area.y + (area.height - h) / 3,
-        width: w,
-        height: h,
-    };
-
-    fill(buf, box_area, THEME.panel());
-
-    let inner_w = w.saturating_sub(4);
-    let x = box_area.x + 2;
-
-    let prompt = format!("open  {}", picker.query);
-    write_str(buf, x, box_area.y, &prompt, THEME.text(), inner_w);
-    // A block cursor, since the real one is parked on a pane behind this.
-    write_str(
+    let all = picker.matches();
+    let at = overlay::centred(area, (20, 56), (3, 18), 3);
+    let panel = Overlay::open(
         buf,
-        x + prompt.chars().count() as u16,
-        box_area.y,
-        "▌",
-        THEME.working(),
-        inner_w,
+        g,
+        at,
+        &format!("open  {}", picker.query),
+        picker.selected,
+        all.len(),
     );
 
-    for col in 0..inner_w {
-        write_str(
+    for row in panel.showing(all.len()) {
+        let (index, entry) = &all[row];
+        let mut strip = panel.strip(
             buf,
-            x + col,
-            box_area.y + 1,
-            "─",
-            THEME.rule_strong(),
-            inner_w,
+            hits,
+            row - panel.first,
+            row == picker.selected,
+            Target::PickerRow(*index),
         );
-    }
-
-    let rows = h.saturating_sub(2);
-    for (row, (index, entry)) in picker.matches().into_iter().take(rows as usize).enumerate() {
-        let y = box_area.y + 2 + row as u16;
-        let full = Rect {
-            x: box_area.x,
-            y,
-            width: w,
-            height: 1,
+        let style = match strip.chosen {
+            true => THEME.selected(),
+            false => THEME.dim(),
         };
-        let selected = row == picker.selected;
-        if selected {
-            fill(buf, full, THEME.selected());
-        }
-        let style = if selected {
-            THEME.selected()
-        } else {
-            THEME.dim()
-        };
-        write_str(
-            buf,
-            x,
-            y,
-            &elide(&entry.0, inner_w as usize, "…"),
-            style,
-            inner_w,
-        );
-        hits.push(full, Target::PickerRow(index));
+        let room = strip.room as usize;
+        strip.write(buf, &elide(&entry.0, room, g.text(G::Ellipsis)), style);
     }
 }
