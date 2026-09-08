@@ -129,7 +129,8 @@ fn main() {
     }
 
     if std::env::args().any(|a| a == "--html") {
-        print!("{}", html(&screen.lock().unwrap(), rows, cols));
+        let (first, last) = band(rows);
+        print!("{}", html(&screen.lock().unwrap(), first, last, cols));
     } else {
         for row in 0..rows {
             let s = screen.lock().unwrap();
@@ -192,6 +193,32 @@ fn size() -> (u16, u16) {
         bad("too small to draw; the floor is 4x20")
     }
     (rows, cols)
+}
+
+/// `DIRK_SHOT_ROWS=25-25`, or every row.
+///
+/// One row is how the rail is shown at three widths without three whole
+/// screens of scrollback around it: what is interesting about the bar is what
+/// it gives up as the terminal narrows, and the twenty-five rows above it are
+/// the same every time.
+fn band(rows: u16) -> (u16, u16) {
+    let Ok(spec) = std::env::var("DIRK_SHOT_ROWS") else {
+        return (0, rows - 1);
+    };
+    let bad = |what: &str| -> ! {
+        eprintln!("shot: DIRK_SHOT_ROWS={spec:?}: {what}; expected FIRST-LAST, e.g. 25-25");
+        std::process::exit(2)
+    };
+    let Some((first, last)) = spec.split_once('-') else {
+        bad("no `-` between the first row and the last")
+    };
+    let (Ok(first), Ok(last)) = (first.trim().parse::<u16>(), last.trim().parse::<u16>()) else {
+        bad("the rows are not numbers")
+    };
+    if first > last || last >= rows {
+        bad("outside the screen")
+    }
+    (first, last)
 }
 
 // ─── Where the shot is taken ────────────────────────────────────────────────
@@ -272,18 +299,24 @@ fn stage() -> std::path::PathBuf {
 /// Per-cell spans would be correct and four times the size. Runs are what make
 /// the difference between a render that is a few kilobytes and one that is not
 /// worth shipping, and a terminal line is mostly runs.
-fn html(parser: &vt100::Parser, rows: u16, cols: u16) -> String {
+fn html(parser: &vt100::Parser, first: u16, last: u16, cols: u16) -> String {
     let screen = parser.screen();
     let mut out = String::with_capacity(64 * 1024);
+    // A band of one row is the rail on its own, and what is worth knowing
+    // about it is the width it is at. A whole screen says so too, quietly.
+    let label = match first == last {
+        true => format!("{cols} columns"),
+        false => format!("dirk · {cols}\u{00d7}{}", last - first + 1),
+    };
 
     out.push_str(
         "<figure class=\"term\" aria-label=\"dirk, running: the nav on the left, panes on the right\">\n",
     );
     out.push_str("<div class=\"term-bar\"><span class=\"term-dot\"></span>");
-    out.push_str("<span class=\"term-name\">dirk</span></div>\n");
+    out.push_str(&format!("<span class=\"term-name\">{label}</span></div>\n"));
     out.push_str("<pre class=\"term-screen\">");
 
-    for row in 0..rows {
+    for row in first..=last {
         // A run is open while the style holds. `open` is the style it was
         // opened with, so a change closes it and a match extends it.
         let mut open: Option<String> = None;

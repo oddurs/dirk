@@ -20,8 +20,8 @@ toc = false
 ```shot overview
 ```
 
-<p class="lede">Real output from the real binary, on a real pseudo-terminal —
-not a screenshot. Select it.</p>
+<p class="lede">Every terminal on this page is real output from the real
+binary, on a real pseudo-terminal — not a screenshot. Select it.</p>
 
 ## Three ideas, and keeping them apart is the whole design
 
@@ -45,6 +45,37 @@ not a screenshot. Select it.</p>
     at.</p>
   </article>
 </div>
+
+## The nav is the product
+
+Three zones, ordered by what is likely to need you. Boards at the top are what
+you glance at; spaces in the middle are where the work lives; between them sits
+whatever is interrupting — and that zone occupies no rows at all when nothing
+is.
+
+A workspace is named from what the program inside it says it is doing. Not from
+the directory it was opened in, which you already knew.
+
+```shot nav
+```
+
+## It gives things up in an order
+
+The bar is the one surface that spans the whole terminal, and most of what it
+does is decide what to lose as the terminal narrows. That is a list, applied in
+order, each step giving up strictly less than the one before — so it shrinks
+without ever trading something you need for something you do not.
+
+```shot rail-wide
+```
+```shot rail-mid
+```
+```shot rail-narrow
+```
+
+The clock goes first. Then the pane counter, the project, the exit words. What
+is owed is not on the list at all: `blocked` is the only state waiting on a
+human, so it is the last thing on the screen rather than the first thing cut.
 
 ## It knows what the agents are doing
 

@@ -95,7 +95,15 @@ site-serve:
 shots:
 	$(CARGO) build
 	$(CARGO) run --quiet --example shot -- --html > site/shots/overview.html
-	@echo "wrote site/shots/overview.html"
+	@# The bar at three widths: what it gives up as the terminal narrows is
+	@# most of what it does, and one row of it says that without twenty-five
+	@# rows of unchanged scrollback around each one.
+	DIRK_SHOT_SIZE=26x92 DIRK_SHOT_ROWS=25-25 $(CARGO) run --quiet --example shot -- --html > site/shots/rail-wide.html
+	DIRK_SHOT_SIZE=26x56 DIRK_SHOT_ROWS=25-25 $(CARGO) run --quiet --example shot -- --html > site/shots/rail-mid.html
+	DIRK_SHOT_SIZE=26x34 DIRK_SHOT_ROWS=25-25 $(CARGO) run --quiet --example shot -- --html > site/shots/rail-narrow.html
+	@# The nav, at a width where it is most of the screen rather than a third.
+	DIRK_SHOT_SIZE=26x52 $(CARGO) run --quiet --example shot -- --html > site/shots/nav.html
+	@ls -1 site/shots/*.html
 
 
 

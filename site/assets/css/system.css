@@ -368,6 +368,20 @@ kbd {
   color-scheme: dark;
 }
 
+/* Consecutive terminals are one thing being shown three times — the same bar
+ * at three widths — so they join into a stack rather than stacking as three
+ * separate windows with three sets of chrome between them. */
+.prose > .term + .term {
+  margin-block-start: 0;
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+  border-block-start: 0;
+}
+.prose > .term:has(+ .term) {
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
 .term-bar {
   display: flex;
   align-items: center;
@@ -659,6 +673,133 @@ footer a { color: var(--dim); }
 }
 .card h3 { font-size: var(--text-base); color: var(--title); }
 .card p { margin-block-start: var(--space-1); color: var(--dim); font-size: var(--text-sm); }
+
+/* ═══ The backlog ════════════════════════════════════════════════════════
+ * Rows, not paragraphs. An item is a handful of fields and the page should be
+ * those fields: what it is, how urgent, which subsystem, and whether it is
+ * done. The marks are the ones the nav draws beside an agent, because a status
+ * is a status wherever it is read. */
+
+.stage { margin-block-start: var(--space-6); }
+.stage > summary { cursor: pointer; list-style: none; }
+.stage > summary::-webkit-details-marker { display: none; }
+/* The disclosure the nav draws, in the direction the nav draws it. */
+.stage > summary h2::before {
+  content: "▸ ";
+  color: var(--faint);
+  font-weight: 400;
+}
+.stage[open] > summary h2::before { content: "▾ "; }
+.stage-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding-block-end: var(--space-1);
+  border-block-end: var(--hairline) solid var(--rule-faint);
+}
+.stage-head h2 { border: 0; padding: 0; margin: 0; }
+.stage-head .key {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.stage-why {
+  margin-block-start: var(--space-2);
+  color: var(--dim);
+  max-inline-size: var(--measure);
+}
+
+/* Progress, as a length rather than as ten hashes. */
+.meter { display: flex; align-items: center; gap: var(--space-2); }
+.meter .bar {
+  inline-size: 7rem;
+  block-size: 0.4rem;
+  background: var(--surface-sunken);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.meter .bar i { display: block; block-size: 100%; background: var(--title); }
+.meter .count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.items { margin-block-start: var(--space-2); }
+
+.item {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  padding: 0.15rem var(--space-2);
+  margin-inline: calc(var(--space-2) * -1);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+  text-decoration: none;
+  border-inline-start: 2px solid transparent;
+}
+.item:hover { background: var(--surface-raised); border-inline-start-color: var(--title); }
+
+/* The mark the nav draws beside an agent, for the same states. */
+.item::before {
+  content: "·";
+  color: var(--faint);
+  inline-size: 1ch;
+}
+.item[data-status="done"]::before    { content: "+"; color: var(--ok); }
+.item[data-status="doing"]::before   { content: "*"; color: var(--working); }
+.item[data-status="blocked"]::before { content: "!"; color: var(--critical); font-weight: 600; }
+.item[data-status="review"]::before  { content: "~"; color: var(--warn); }
+
+.item .ref {
+  color: var(--faint);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.item[data-status="done"] .what { color: var(--dim); }
+.item .what { min-inline-size: 0; }
+
+.item .tags { display: flex; gap: var(--space-1); white-space: nowrap; }
+.item .tags i {
+  font-style: normal;
+  font-size: var(--text-xs);
+  color: var(--faint);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: var(--radius);
+  padding: 0 0.35em;
+}
+.item .tags i[data-p="p0"] { color: var(--critical); border-color: currentColor; }
+.item .tags i[data-p="p1"] { color: var(--warn); }
+.item .tags i[data-kind="bug"] { color: var(--critical); }
+.item .tags i[data-tag="status"] { color: var(--working); }
+
+@media (max-width: 40rem) {
+  .item { grid-template-columns: auto auto minmax(0, 1fr); }
+  .item .tags { grid-column: 3; justify-content: flex-start; margin-block-start: 0.1rem; }
+}
+
+.now {
+  margin-block-start: var(--space-5);
+  padding: var(--space-3);
+  background: var(--surface-chrome);
+  border: var(--hairline) solid var(--rule-faint);
+  border-radius: var(--radius-lg);
+}
+.now h2 { border: 0; padding: 0; margin: 0; font-size: var(--text-base); }
+
+.sidebar .pct {
+  float: inline-end;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ═══ State glyphs ═══════════════════════════════════════════════════════
  * The same colours the nav uses, for the same words. */
