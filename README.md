@@ -475,6 +475,15 @@ name = "dirk"
 default_agent = "claude"     # what `a` starts, when a project does not say
 clipboard     = []           # empty finds pbcopy, wl-copy or xclip
 
+# How big the session is when nobody is looking at it. A pane is sized from the
+# client watching it, and a session driven from a script has no client — so this
+# is not a placeholder, it is the size of every pane such a caller makes. Raise
+# it for orchestration: output read back at 80 columns has the wrap points of a
+# screen nobody saw.
+[server]
+headless_cols = 80
+headless_rows = 24
+
 [nav]
 glyphs    = "unicode"        # unicode | ascii | round
 attention = "when-needed"    # when-needed | always | never
