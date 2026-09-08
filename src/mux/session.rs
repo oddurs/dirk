@@ -707,6 +707,18 @@ impl Session {
         }
     }
 
+    /// Move the edge beside the focused pane, by cells.
+    ///
+    /// Answers whether there was an edge to move: a pane with no boundary that
+    /// way should say so rather than appear to have done nothing.
+    pub fn nudge(&mut self, dir: Dir, cells: i32, area: Rect) -> bool {
+        let Some(ws) = self.focused_workspace_mut() else {
+            return false;
+        };
+        let target = ws.focus();
+        ws.tree_mut().nudge(target, dir, cells, area)
+    }
+
     /// Split the focused pane, putting a second shell beside it.
     pub fn split(&mut self, dir: Dir, rows: u16, cols: u16) {
         let Some(from) = self

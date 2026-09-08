@@ -140,6 +140,7 @@ jump. `dirk --keys` prints the same list to a terminal.
 | `b` | hide the nav |
 | `u` | release a held name, so naming may claim the workspace again |
 | `r` | restart a stopped pane |
+| `R` | move the edge beside this pane — `hjkl`, a count, Escape to finish |
 | `w` | give the nav the keyboard — `j` `k` to move, Enter to go, Escape back |
 | `a` | start an agent here |
 | `W` | a worktree, and a space open in it |
@@ -148,6 +149,15 @@ jump. `dirk --keys` prints the same list to a terminal.
 | `/` | find a line, in any pane |
 | `d` | **detach** — leave, and let everything keep running |
 | `q` | **quit** — end every shell and every agent |
+
+`R` is a mode rather than a chord because resizing is never one keystroke, and
+holding a modifier through six of them is worse than pressing one key first.
+`10l` is one gesture. It moves the *edge*, not the pane: from the pane on the
+right of a pair, `l` moves the boundary right and makes that pane narrower —
+which is what tmux does, and the alternative would have `l` and `h` swapping
+meaning depending on which pane you were in. The innermost split running the
+right way is the one that moves, so a column inside a row moves the column's
+edge and not the outer one.
 
 **Leaving and quitting are different things.** A session outlives the terminal it
 was started in, so detaching is the ordinary way out: press `d`, or click
