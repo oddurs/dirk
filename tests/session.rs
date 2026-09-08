@@ -35,7 +35,18 @@ const START: Duration = Duration::from_secs(30);
 /// One configuration directory for the whole run, away from the checkout.
 fn config_home() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("dirk-tests-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::create_dir_all(dir.join("dirk"));
+    // Non-login shells, for the same reason the suite sets `SHELL` and clears
+    // the `GIT_*` variables: these tests assert on what is drawn, and a login
+    // shell brings /etc/profile, /etc/bashrc and somebody's prompt into it. A
+    // prompt that publishes its directory as a window title is a workspace
+    // label, and a label of a different length moves every column after it.
+    //
+    // The test that is *about* login shells writes its own configuration.
+    let _ = std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        "[terminal]\nshell_mode = \"non_login\"\n",
+    );
     dir
 }
 

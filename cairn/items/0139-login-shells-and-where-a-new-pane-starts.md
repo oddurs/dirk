@@ -2,10 +2,10 @@
 id: 139
 title: Login shells, and where a new pane starts
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: config
 effort: s
@@ -60,3 +60,16 @@ It also exposed a race in an existing test: it waited for `side` to appear
 anywhere on screen, and a pane's prompt carries its directory — `repo-hang-side`
 — so the wait was satisfied by the shell before git had answered. It now asks
 the session for the branch.
+
+CI then failed two nav tests that assert on drawn columns. A login shell brings
+`/etc/profile`, `/etc/bashrc` and somebody's prompt into the picture, and a
+prompt that publishes its directory as a window title becomes a workspace label
+— a label of a different length moves every column after it. The suite now pins
+`non_login`, for the same reason it already sets `SHELL` and clears the `GIT_*`
+variables: what is being tested is dirk, not the runner's login files. The test
+that is about login shells writes its own configuration.
+
+The smoke harness needed the same, and appended rather than prepended: a section
+header written before somebody's top-level keys swallows them into it, the file
+is refused for unknown fields, and the test runs on the defaults in silence —
+which is exactly what it looked like the first time.
