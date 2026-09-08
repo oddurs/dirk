@@ -3992,3 +3992,101 @@ fn one_chatty_harness_can_be_silenced_without_silencing_the_others() {
         "the harness that asked to be heard was silent"
     );
 }
+
+#[test]
+fn something_to_show_does_not_have_to_become_a_state_to_be_visible() {
+    // `agent state` is a small closed set dirk reasons about — waits,
+    // notifications, ordering, the attention column — and it has to stay that
+    // way. Anything a program wanted to *show* had nowhere else to go, which is
+    // how an indexer's progress ends up interrupting somebody.
+    let session = unique("said");
+    let dir = config_home().join("cfg-said");
+    std::fs::create_dir_all(dir.join("dirk")).expect("config dir");
+    std::fs::write(
+        dir.join("dirk").join("config.toml"),
+        "[naming]\ntemplates = [\"{intent} {said.summary}\"]\n",
+    )
+    .expect("config");
+
+    let client = Client::with_config(&session, &dir);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+
+    let (ok, said) = ask(&session, &["pane", "metadata", &pane, "summary=zzINDEXING"]);
+    assert!(ok, "pane metadata failed: {said}");
+    assert!(said.contains("zzINDEXING"), "it did not read back: {said}");
+
+    // It is display and nothing else: the state, the ordering and what is owed
+    // are all exactly as they were.
+    let (ok, agents) = ask(&session, &["agent", "list"]);
+    assert!(ok, "agent list failed");
+    assert!(
+        !agents.contains("zzINDEXING"),
+        "a display token reached the agent list: {agents}"
+    );
+
+    // And it is available to a template, which is what a row shows. Naming only
+    // decides a label when there is an intent to decide one from, so the pane
+    // has to say what it is doing first — which is the only situation in which
+    // a template runs at all.
+    let (ok, out) = ask(
+        &session,
+        &["pane", "run", &pane, "printf '\\033]2;zzWORKING\\007'"],
+    );
+    assert!(ok, "pane run failed: {out}");
+    assert!(
+        client.wait_for("zzINDEXING", START),
+        "the token never reached the column\n{}",
+        client.drawn()
+    );
+
+    // An empty value clears rather than setting an empty one: absent and empty
+    // render the same and mean different things.
+    let (ok, said) = ask(&session, &["pane", "metadata", &pane, "summary="]);
+    assert!(ok, "clearing failed: {said}");
+    assert!(
+        !said.contains("zzINDEXING"),
+        "clearing left it behind: {said}"
+    );
+
+    // Nonsense is refused rather than stored.
+    let (ok, _) = ask(&session, &["pane", "metadata", &pane, "nokeyvalue"]);
+    assert!(!ok, "a token that is not key=value was accepted");
+
+    drop(client);
+}
+
+#[test]
+fn what_was_said_about_a_pane_does_not_survive_the_process_it_described() {
+    // These describe a moment in a process that is gone after a restart, and
+    // restoring them would be restoring a claim nobody is making any more.
+    let session = unique("saidgone");
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, out) = ask(&session, &["pane", "metadata", &pane, "summary=zzGONE"]);
+    assert!(ok, "pane metadata failed: {out}");
+
+    drop(client);
+    end(&session);
+    let client = Client::attach(&session);
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, panes) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_id(&panes);
+    let (ok, said) = ask(&session, &["pane", "metadata", &pane]);
+    assert!(ok, "pane metadata failed: {said}");
+    assert!(
+        !said.contains("zzGONE"),
+        "what was said about a dead process came back: {said}"
+    );
+
+    drop(client);
+}

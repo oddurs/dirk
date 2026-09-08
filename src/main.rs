@@ -2360,6 +2360,34 @@ impl App {
                 }
             }
 
+            // Display, deliberately not state. `agent state` is a small closed
+            // set dirk reasons about — it drives waits, notifications, ordering
+            // and the attention column — and it has to stay that way. This is
+            // where everything a program wants to *show* goes instead, so an
+            // indexer's progress stops having to become a state in order to be
+            // visible.
+            "pane.metadata" => {
+                let Some(id) = api::target_pane(&self.session, &arg(0)) else {
+                    return Reply::err("no such pane");
+                };
+                for pair in &req.args[1..] {
+                    let Some((key, value)) = pair.split_once('=') else {
+                        return Reply::err(format!("{pair:?} is not key=value"));
+                    };
+                    if key.is_empty() {
+                        return Reply::err("a token needs a name");
+                    }
+                    self.session.report_metadata(id, key, value);
+                }
+                match self.session.metadata(id) {
+                    Some(said) => Reply::ok(serde_json::json!({
+                        "pane": arg(0),
+                        "said": said,
+                    })),
+                    None => Reply::err("no such pane"),
+                }
+            }
+
             "pane.close" => {
                 let Some(id) = api::target_pane(&self.session, &arg(0)) else {
                     return Reply::err("no such pane");

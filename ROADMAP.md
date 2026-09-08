@@ -150,14 +150,13 @@ The socket API can be asked things. This is the half that lets a program use
 
 ## v0.7 — Agents you do not have to babysit
 
-`########··` 75% · 6 of 8 done · due 2027-04-30
+`#########·` 88% · 7 of 8 done · due 2027-04-30
 
 dirk guesses at agent state where it could be told. Installing the hook rather
 
 ### backlog
 
 - [ ] `0129` Reading a full-screen agent's history <sup>feature · p2 · agents</sup>
-- [ ] `0131` Display tokens an outside program can set <sup>feature · p2 · agents</sup>
 
 ### done
 
@@ -166,6 +165,7 @@ dirk guesses at agent state where it could be told. Installing the hook rather
 - [x] `0127` Detection rules as files, replaceable one at a time <sup>feature · p1 · agents</sup>
 - [x] `0128` agent explain: why this pane is in this state <sup>feature · p1 · agents</sup>
 - [x] `0130` Telling dirk what is behind the wrapper <sup>feature · p2 · agents</sup>
+- [x] `0131` Display tokens an outside program can set <sup>feature · p2 · agents</sup>
 - [x] `0132` Per-agent sound <sup>feature · p3 · agents</sup>
 
 ## v0.8 — The rest of the multiplexer

@@ -44,7 +44,20 @@ use std::collections::BTreeMap;
 /// A map rather than a struct of options: templates address these by name, the
 /// set grows, and every consumer already has to handle a token being absent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Tokens(BTreeMap<&'static str, String>);
+pub struct Tokens {
+    own: BTreeMap<&'static str, String>,
+    /// What somebody outside dirk said about this workspace.
+    ///
+    /// Separate because the names are not dirk's and cannot be checked against
+    /// anything: they are whatever the program reporting them chose. Addressed
+    /// as `{said.summary}`, so a template makes it obvious which half of the
+    /// vocabulary a token came from — and so a typo in one of dirk's own
+    /// tokens is still caught.
+    said: BTreeMap<String, String>,
+}
+
+/// The prefix a token reported from outside dirk is addressed under.
+pub const SAID: &str = "said.";
 
 /// Every token dirk publishes. Adding one means adding it here, which is the
 /// point — the list is the contract.
@@ -69,20 +82,28 @@ impl Tokens {
     pub fn set(&mut self, name: &'static str, value: impl Into<String>) {
         let value = value.into();
         if !value.trim().is_empty() {
-            self.0.insert(name, value);
+            self.own.insert(name, value);
         }
+    }
+
+    /// Take everything an outside program has said about this workspace.
+    pub fn said(&mut self, said: &BTreeMap<String, String>) {
+        self.said = said.clone();
     }
 
     /// Set only when the condition holds, for the tokens that are a flag with a
     /// word for a value: `worktree`, `locked`, `stale`.
     pub fn flag(&mut self, name: &'static str, value: &'static str, when: bool) {
         if when {
-            self.0.insert(name, value.to_string());
+            self.own.insert(name, value.to_string());
         }
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.get(name).map(String::as_str)
+        match name.strip_prefix(SAID) {
+            Some(key) => self.said.get(key).map(String::as_str),
+            None => self.own.get(name).map(String::as_str),
+        }
     }
 }
 
@@ -98,7 +119,10 @@ pub fn unknown(template: &str) -> Vec<String> {
         let after = &rest[open + 1..];
         let Some(close) = after.find('}') else { break };
         let name = &after[..close];
-        if !name.is_empty() && !NAMES.contains(&name) {
+        // Anything under `said.` is somebody else's vocabulary, so there is
+        // nothing to check it against. That is the price of the namespace and
+        // the reason for it: dirk's own names stay checkable.
+        if !name.is_empty() && !NAMES.contains(&name) && !name.starts_with(SAID) {
             out.push(name.to_string());
         }
         rest = &after[close + 1..];
@@ -140,6 +164,32 @@ fn tidy(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn what_somebody_else_said_lives_in_its_own_namespace() {
+        use std::collections::BTreeMap;
+        let mut t = super::Tokens::default();
+        t.set("agent", "claude");
+        let mut said = BTreeMap::new();
+        said.insert("summary".to_string(), "indexing".to_string());
+        said.insert("agent".to_string(), "not this one".to_string());
+        t.said(&said);
+
+        assert_eq!(t.get("said.summary"), Some("indexing"));
+        // The namespace is what stops somebody else's vocabulary shadowing
+        // dirk's, which is also why a template has to say which it means.
+        assert_eq!(t.get("agent"), Some("claude"));
+        assert_eq!(t.get("said.agent"), Some("not this one"));
+        assert_eq!(t.get("said.nothing"), None);
+    }
+
+    #[test]
+    fn a_template_can_name_a_token_dirk_cannot_check() {
+        // dirk checks its own names against the list and reports a typo. It
+        // cannot check yours, so yours live where a template makes that plain.
+        assert!(super::unknown("{said.anything}").is_empty());
+        assert_eq!(super::unknown("{branchh}"), vec!["branchh".to_string()]);
+    }
+
     use super::*;
 
     fn sample() -> Tokens {
@@ -218,6 +268,10 @@ mod tests {
         for name in NAMES {
             t.set(name, "x");
         }
-        assert_eq!(t.0.len(), NAMES.len(), "a name in the list is not settable");
+        assert_eq!(
+            t.own.len(),
+            NAMES.len(),
+            "a name in the list is not settable"
+        );
     }
 }

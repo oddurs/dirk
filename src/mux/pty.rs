@@ -72,6 +72,19 @@ pub struct Pane {
     pub closing: bool,
     /// What is running here, as of the last sample.
     pub occupant: crate::agent::Occupant,
+    /// What programs outside dirk have said about this pane, for display.
+    ///
+    /// Deliberately not state. `agent state` is a small closed set that dirk
+    /// reasons about — it drives waits, notifications, ordering and the
+    /// attention column — and it has to stay that way. Everything a program
+    /// wants to *show* had nowhere to go except into a state it would then be
+    /// reasoned about with, which is how an indexer's progress ends up
+    /// interrupting somebody.
+    ///
+    /// Ephemeral. These describe a moment in a process that is gone after a
+    /// restart, and restoring them would be restoring a claim nobody is making
+    /// any more.
+    pub metadata: std::collections::BTreeMap<String, String>,
     /// The wrapper that named the harness in here, when one did.
     ///
     /// Set when `DIRK_AGENT` on an unrecognised foreground process decided what
@@ -200,6 +213,7 @@ impl Pane {
             exit: None,
             closing: false,
             occupant: crate::agent::Occupant::default(),
+            metadata: std::collections::BTreeMap::new(),
             hinted: None,
             agent_name: None,
             scroll: 0,
