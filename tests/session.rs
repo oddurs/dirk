@@ -3628,3 +3628,130 @@ fn a_program_that_was_not_named_a_wrapper_keeps_its_own_identity() {
 
     drop(client);
 }
+
+/// Run dirk with a home directory of its own, so a test can install into one.
+fn at_home(home: &std::path::Path, args: &[&str]) -> (bool, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dirk"))
+        .args(args)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", config_home())
+        .output()
+        .expect("run dirk");
+    let said = match out.status.success() {
+        true => String::from_utf8_lossy(&out.stdout).into_owned(),
+        false => String::from_utf8_lossy(&out.stderr).into_owned(),
+    };
+    (out.status.success(), said)
+}
+
+#[test]
+fn the_hook_is_installed_rather_than_printed_at_you() {
+    // The README has always said rank one is worth installing and then asked
+    // you to install it by hand, so most people run on rank two for ever — and
+    // dirk spends its life inferring a state its agent could have told it.
+    let home = config_home().join("hookhome");
+    let settings = home.join(".claude").join("settings.json");
+    let _ = std::fs::remove_file(&settings);
+    std::fs::create_dir_all(settings.parent().unwrap()).expect("home");
+
+    // Somebody's file, with their setting and their hook in it.
+    std::fs::write(
+        &settings,
+        "{\n  \"model\": \"opus\",\n  \"hooks\": {\n    \"Stop\": [\n      { \"hooks\": [{ \"type\": \"command\", \"command\": \"npm test\" }] }\n    ]\n  }\n}\n",
+    )
+    .expect("settings");
+
+    let (ok, said) = at_home(&home, &["agent", "hooks", "status"]);
+    assert!(ok, "hooks status failed: {said}");
+    assert!(
+        said.contains("absent"),
+        "it did not say nothing was installed: {said}"
+    );
+
+    let (ok, said) = at_home(&home, &["agent", "hooks", "install", "claude"]);
+    assert!(ok, "install failed: {said}");
+    let after: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).expect("read")).expect("json");
+
+    // Their setting and their hook are still there.
+    assert_eq!(after.get("model"), Some(&serde_json::json!("opus")));
+    assert!(
+        std::fs::read_to_string(&settings)
+            .unwrap()
+            .contains("npm test"),
+        "installing removed somebody else's hook"
+    );
+
+    // Twice is a no-op, and says so rather than adding a second copy.
+    let (ok, said) = at_home(&home, &["agent", "hooks", "install", "claude"]);
+    assert!(ok, "installing twice failed: {said}");
+    assert!(
+        said.contains("already"),
+        "it did not say it was already there: {said}"
+    );
+    let (ok, said) = at_home(&home, &["agent", "hooks", "status"]);
+    assert!(ok && said.contains("installed"), "status is wrong: {said}");
+
+    // And out again, leaving what was there.
+    let (ok, said) = at_home(&home, &["agent", "hooks", "uninstall", "claude"]);
+    assert!(ok, "uninstall failed: {said}");
+    let text = std::fs::read_to_string(&settings).expect("read");
+    assert!(
+        text.contains("npm test"),
+        "uninstalling took somebody else's hook: {text}"
+    );
+    assert!(
+        !text.contains("dirk agent state"),
+        "uninstalling left ours: {text}"
+    );
+    assert!(text.contains("opus"), "uninstalling lost a setting: {text}");
+}
+
+#[test]
+fn a_hook_somebody_edited_is_reported_rather_than_overwritten() {
+    // The person who edited it is exactly the person who would never trust this
+    // again if it were silently replaced.
+    let home = config_home().join("hookedited");
+    let settings = home.join(".claude").join("settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).expect("home");
+    std::fs::write(
+        &settings,
+        "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\
+         \"command\":\"dirk agent state done --current && say done\"}]}]}}",
+    )
+    .expect("settings");
+
+    let (ok, said) = at_home(&home, &["agent", "hooks", "status"]);
+    assert!(ok, "hooks status failed: {said}");
+    assert!(
+        said.contains("edited"),
+        "an edited hook was not noticed: {said}"
+    );
+
+    let (ok, said) = at_home(&home, &["agent", "hooks", "install", "claude"]);
+    assert!(!ok, "it overwrote an edited hook: {said}");
+    let text = std::fs::read_to_string(&settings).expect("read");
+    assert!(
+        text.contains("say done"),
+        "somebody's edit did not survive a refused install: {text}"
+    );
+}
+
+#[test]
+fn a_harness_with_no_snippet_says_so_rather_than_pretending() {
+    let home = config_home().join("hooknone");
+    std::fs::create_dir_all(&home).expect("home");
+    let (ok, said) = at_home(&home, &["agent", "hooks", "install", "aider"]);
+    assert!(!ok, "it claimed to install a hook it does not have: {said}");
+    assert!(
+        said.contains("no snippet"),
+        "the refusal did not say why: {said}"
+    );
+    // And the printed form still works, which is what that harness has.
+    let (ok, said) = at_home(&home, &["agent", "hooks", "aider"]);
+    assert!(ok, "printing a snippet failed: {said}");
+    assert!(
+        said.contains("dirk agent state"),
+        "nothing to paste: {said}"
+    );
+}

@@ -351,11 +351,26 @@ The second form needs no session at all. That is how a wrong detection becomes
 a test case instead of a bug report with a screenshot in it: capture the screen,
 run it through the same rule, and put the file in `tests/`.
 
-**Rank one is worth installing.** `dirk agent hooks claude` prints a snippet;
+**Rank one is worth installing, so dirk installs it.** `install` adds two
+entries to the harness's own settings file and `uninstall` takes exactly those
+two back out; everything else in the file, including your other hooks and the
+order of your keys, is left as it was. Installing twice is a no-op.
+
+dirk recognises its own entries by their shape — a command that reports a state
+to dirk from inside a pane — because the file is JSON and JSON has no comments
+to leave a marker in. One that is dirk-shaped and *not* what dirk writes is
+somebody's edit: it is reported and left alone, because a silent overwrite would
+lose work that was done on purpose. The one thing this cannot preserve is your
+indentation, which becomes dirk's.
+
+ `dirk agent hooks claude` prints a snippet;
 everything below it is dirk guessing at something the agent already knows.
 
 ```console
-$ dirk agent hooks claude          # what to paste, and where
+$ dirk agent hooks install claude  # put it in ~/.claude/settings.json
+$ dirk agent hooks status          # which harnesses are on rank one
+$ dirk agent hooks uninstall claude
+$ dirk agent hooks claude          # or just what to paste, and where
 $ dirk agent list                  # state, and which signal decided it
 $ dirk agent wait w7 --until blocked   # return when it needs you
 ```
