@@ -79,6 +79,64 @@ pub struct Mode {
     pub at: (u16, u16),
     /// Whether the pointer is still down.
     pub dragging: bool,
+    /// A search in this pane, once there is one.
+    pub search: Option<Search>,
+}
+
+/// Looking for something in the pane you are already reading.
+///
+/// Session-wide find is the right default and better than what tmux does: the
+/// line you want is usually in the pane you were *not* watching. It is not what
+/// you want once you are in copy mode looking at one pane's scrollback — the
+/// results take you away, and the answer arrives as a list of places rather
+/// than as a cursor two hundred lines up from where you are.
+#[derive(Debug, Clone, Default)]
+pub struct Search {
+    /// What has been typed so far.
+    pub query: String,
+    /// Whether `n` goes forward. `?` searches backward and `N` inverts it,
+    /// which is what the pair does in every pager.
+    pub forward: bool,
+    /// Whether the query is still being typed.
+    pub typing: bool,
+}
+
+impl Search {
+    /// Smart case: case-insensitive unless the query has an uppercase letter in
+    /// it, which is the convention every tool in this space already uses.
+    pub fn matches(&self, line: &str) -> Option<usize> {
+        if self.query.is_empty() {
+            return None;
+        }
+        match self.query.chars().any(char::is_uppercase) {
+            true => line.find(&self.query),
+            false => line.to_lowercase().find(&self.query.to_lowercase()),
+        }
+    }
+
+    /// The next line and column matching, from `from`, in `lines`.
+    ///
+    /// Wraps, because a search that stopped at the end of the screen would be a
+    /// search you had to know the shape of. `None` when nothing matches at all.
+    pub fn find(&self, lines: &[String], from: (u16, u16), forward: bool) -> Option<(u16, u16)> {
+        let n = lines.len();
+        if n == 0 {
+            return None;
+        }
+        let start = (from.0 as usize).min(n - 1);
+        for step in 1..=n {
+            let i = match forward {
+                true => (start + step) % n,
+                false => (start + n - step % n) % n,
+            };
+            if let Some(col) = self.matches(&lines[i]) {
+                return Some((i as u16, col as u16));
+            }
+        }
+        // Nowhere else; the line under the cursor is the only candidate left.
+        self.matches(&lines[start])
+            .map(|c| (start as u16, c as u16))
+    }
 }
 
 impl Mode {
@@ -88,6 +146,7 @@ impl Mode {
             anchor: None,
             at,
             dragging: false,
+            search: None,
         }
     }
 
@@ -316,6 +375,63 @@ pub fn paragraph(lines: &[String], row: u16, forward: bool) -> u16 {
 #[cfg(test)]
 mod motions {
     use super::*;
+
+    fn lines(of: &[&str]) -> Vec<String> {
+        of.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_search_is_case_insensitive_until_you_type_a_capital() {
+        // The convention every tool in this space already uses, so nobody has
+        // to be told about it.
+        let lower = Search {
+            query: "err".into(),
+            forward: true,
+            typing: false,
+        };
+        assert!(lower.matches("ERROR: nope").is_some());
+        let upper = Search {
+            query: "ERR".into(),
+            ..lower.clone()
+        };
+        assert!(upper.matches("ERROR: nope").is_some());
+        assert!(upper.matches("error: nope").is_none());
+    }
+
+    #[test]
+    fn a_search_wraps_rather_than_stopping_at_the_edge() {
+        // A search that stopped at the end of the screen is one you would have
+        // to know the shape of.
+        let text = lines(&["alpha", "beta", "gamma", "beta"]);
+        let s = Search {
+            query: "beta".into(),
+            forward: true,
+            typing: false,
+        };
+        assert_eq!(s.find(&text, (0, 0), true), Some((1, 0)));
+        assert_eq!(s.find(&text, (1, 0), true), Some((3, 0)));
+        assert_eq!(s.find(&text, (3, 0), true), Some((1, 0)), "wrapped");
+        assert_eq!(s.find(&text, (3, 0), false), Some((1, 0)));
+        assert_eq!(s.find(&text, (1, 0), false), Some((3, 0)), "wrapped back");
+    }
+
+    #[test]
+    fn a_search_that_matches_nothing_says_so_rather_than_moving() {
+        let text = lines(&["alpha", "beta"]);
+        let s = Search {
+            query: "zzmissing".into(),
+            forward: true,
+            typing: false,
+        };
+        assert_eq!(s.find(&text, (0, 0), true), None);
+        // An empty query matches nothing rather than everything, so backspacing
+        // to nothing does not jump you to the top.
+        let empty = Search {
+            query: String::new(),
+            ..s
+        };
+        assert_eq!(empty.find(&text, (0, 0), true), None);
+    }
 
     #[test]
     fn a_word_is_what_vi_means_by_one() {

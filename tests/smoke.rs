@@ -2242,3 +2242,58 @@ fn copy_mode_moves_by_words_the_way_every_editor_does() {
         h.drawn()
     );
 }
+
+#[test]
+fn searching_inside_copy_mode_stays_in_the_pane_you_are_reading() {
+    // `/` outside copy mode searches every pane, which is the right default and
+    // better than what tmux does. It is not what you want once you are looking
+    // at one pane's scrollback: the results take you away, and the answer
+    // arrives as a list of places rather than as a cursor further up.
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started\n{}", h.drawn());
+    h.send(b"printf 'zzone\\nzztwo\\nzzthree\\n'\r");
+    assert!(
+        h.wait_for("zzthree", START),
+        "nothing printed\n{}",
+        h.drawn()
+    );
+
+    h.send(b"\x00[");
+    assert!(
+        h.wait_until(START, |h| h.drawn().contains("y copy")),
+        "copy mode did not open\n{}",
+        h.drawn()
+    );
+
+    // The query is echoed as it is typed, and every key is part of it — `y`
+    // here is a letter, not the copy command.
+    h.send(b"/zzty");
+    assert!(
+        h.wait_until(START, |h| h.drawn().contains("/zzty")),
+        "the query was not echoed\n{}",
+        h.drawn()
+    );
+    // Backspace takes it back, and Enter goes there.
+    h.send(b"\x7f\r");
+    assert!(
+        h.wait_until(START, |h| h.drawn().contains("n next")),
+        "the search did not land\n{}",
+        h.drawn()
+    );
+
+    // Escape clears the search before it leaves, so the first press takes the
+    // search off and the second leaves.
+    h.send(b"\x1b");
+    assert!(
+        h.wait_until(START, |h| h.drawn().contains("y copy")
+            && !h.drawn().contains("n next")),
+        "escape did not clear the search first\n{}",
+        h.drawn()
+    );
+    h.send(b"\x1b");
+    assert!(
+        h.wait_until(START, |h| !h.drawn().contains("y copy")),
+        "escape did not leave copy mode\n{}",
+        h.drawn()
+    );
+}

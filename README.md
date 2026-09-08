@@ -258,8 +258,17 @@ at it.
 | `{` `}` | move by paragraphs — a blank line is the boundary |
 | <kbd>Ctrl</kbd>+`u` `d`, <kbd>Ctrl</kbd>+`b` `f` | half a screen, and a whole one |
 | `v` | start selecting from here |
+| `/` `?` | search this pane, forward and backward |
+| `n` `N` | the next match, and the one the other way |
 | `y` <kbd>Enter</kbd> | copy, and leave |
 | `q` <kbd>Esc</kbd> | leave, back at the bottom |
+
+`/` inside copy mode searches the pane you are reading, not the session:
+`Ctrl-Space /` outside it is the session-wide find and is unchanged. Smart case
+— insensitive until you type a capital — and it wraps, because a search that
+stopped at the edge of the screen is one you would have to know the shape of.
+Escape clears the search before it leaves, so the first press takes the search
+off and the second puts you back.
 
 Words follow vi's rules rather than a Unicode segmentation library's: three
 classes, so `foo.bar` is three words. That is what makes `w` useful in code
