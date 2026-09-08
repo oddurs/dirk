@@ -1396,38 +1396,57 @@ fn must_be_disposable(at: &std::path::Path) {
     );
 }
 
+/// Run git in a fixture, and only there.
+///
+/// The environment is cleared because `GIT_DIR` beats `-C`. A suite run from a
+/// git alias -- which `git work ship` is -- inherits one, and every fixture
+/// here would quietly become a branch in whatever repository that pointed at.
+fn git_at(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let mut cmd = std::process::Command::new("git");
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .expect("git")
+}
+
 fn a_repo(name: &str) -> std::path::PathBuf {
     let dir = config_home().join(format!("repo-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("repo dir");
-    let git = |args: &[&str]| {
-        // Cleared, because `GIT_DIR` beats `-C`. A suite run from a git alias
-        // -- which `git work ship` is -- inherits one, and this fixture would
-        // quietly become a branch in whatever repository that pointed at.
-        let mut cmd = std::process::Command::new("git");
-        for var in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_COMMON_DIR",
-            "GIT_INDEX_FILE",
-        ] {
-            cmd.env_remove(var);
-        }
-        cmd.arg("-C")
-            .arg(&dir)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@example.com")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@example.com")
-            .output()
-            .expect("git")
-    };
-    git(&["init", "-q", "-b", "main"]);
+    git_at(&dir, &["init", "-q", "-b", "main"]);
     std::fs::write(dir.join("a.txt"), b"one\n").expect("a file");
-    git(&["add", "-A"]);
-    git(&["commit", "-qm", "one"]);
+    git_at(&dir, &["add", "-A"]);
+    git_at(&dir, &["commit", "-qm", "one"]);
     dir
+}
+
+/// Give a repository an upstream it has drifted from: two commits ahead of it
+/// and one behind.
+///
+/// The upstream is a local branch. `@{upstream}` does not care which kind it
+/// is -- it reads whatever the branch was configured against -- and a real
+/// remote would mean a second directory and a fetch for no extra coverage.
+fn diverged(dir: &std::path::Path) {
+    git_at(dir, &["checkout", "-q", "-b", "base"]);
+    git_at(dir, &["commit", "-q", "--allow-empty", "-m", "theirs"]);
+    git_at(dir, &["checkout", "-q", "main"]);
+    git_at(dir, &["commit", "-q", "--allow-empty", "-m", "mine one"]);
+    git_at(dir, &["commit", "-q", "--allow-empty", "-m", "mine two"]);
+    let out = git_at(dir, &["branch", "--set-upstream-to=base", "main"]);
+    assert!(out.status.success(), "no upstream to drift from");
 }
 
 #[test]
@@ -1931,4 +1950,100 @@ fn a_space_with_no_branch_says_its_name_once() {
     );
 
     drop(client);
+}
+
+#[test]
+fn a_branch_says_how_far_it_has_gone_and_how_far_it_has_been_left() {
+    // Twenty-two commits behind is the difference between work you can ship
+    // and work that is about to conflict, and finding out meant leaving.
+    let repo = a_repo("track");
+    diverged(&repo);
+    let session = unique("track");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    // The checkout is read on a timer and off the drawing thread, so the
+    // answer arrives after the row it belongs to.
+    let deadline = Instant::now() + START;
+    let mut list = String::new();
+    while Instant::now() < deadline {
+        let (ok, out) = ask(&session, &["workspace", "list"]);
+        list = out;
+        if ok && list.contains("\"ahead\": 2") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        list.contains("\"ahead\": 2"),
+        "two commits ahead of its upstream went unsaid: {list}"
+    );
+    assert!(
+        list.contains("\"behind\": 1"),
+        "one commit behind its upstream went unsaid: {list}"
+    );
+
+    // And on the row itself, beside the branch it is about.
+    assert!(
+        client.wait_for("↑2", START),
+        "nothing on the row said how far ahead it was\n{}",
+        client.drawn()
+    );
+    assert!(
+        client.drawn().contains("↓1"),
+        "nothing on the row said how far behind it was\n{}",
+        client.drawn()
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn a_branch_with_nothing_to_compare_against_says_nothing_rather_than_zero() {
+    // "0" for "there is no upstream" is the more misleading of the two: it
+    // reads as up to date with something, and there is no something.
+    let repo = a_repo("untracked");
+    let session = unique("untracked");
+    let client = Client::spawn(&session, COLS, ROWS, &{
+        let repo = repo.clone();
+        move |cmd| {
+            cmd.cwd(&repo);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    // Wait for the checkout to have been read at all, or this passes because
+    // nothing has happened yet rather than because nothing is drawn.
+    let deadline = Instant::now() + START;
+    let mut list = String::new();
+    while Instant::now() < deadline {
+        let (ok, out) = ask(&session, &["workspace", "list"]);
+        list = out;
+        if ok && list.contains("\"branch\": \"main\"") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        list.contains("\"branch\": \"main\""),
+        "the branch was never read, so this proves nothing: {list}"
+    );
+    assert!(
+        list.contains("\"ahead\": null") && list.contains("\"behind\": null"),
+        "a branch with no upstream was given numbers: {list}"
+    );
+    let drawn = client.drawn();
+    assert!(
+        !drawn.contains('↑') && !drawn.contains('↓'),
+        "counts drawn for a branch with nothing to compare against\n{drawn}"
+    );
+
+    drop(client);
+    let _ = std::fs::remove_dir_all(&repo);
 }

@@ -30,7 +30,8 @@ different, and saying "0" for "there is nothing to compare against" is the more
 misleading of the two.
 
 ## Acceptance criteria
-- [ ] Ahead and behind counts beside the branch
-- [ ] Nothing drawn when both are zero, or when there is no upstream
-- [ ] One process per project per refresh, not one per space
-- [ ] Never on the drawing thread
+- [x] Ahead and behind counts beside the branch
+- [x] Nothing drawn when both are zero, or when there is no upstream
+- [x] One process per project per refresh, not one per space
+      — per checkout, which is stricter: two worktrees are on two branches
+- [x] Never on the drawing thread

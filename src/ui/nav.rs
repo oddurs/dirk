@@ -24,7 +24,7 @@
 //!
 //! spaces                10
 //!  ▾ dirk
-//!    * 1 main                      2m
+//!    * 1 main ↑6 ↓1                2m
 //!        Building the mux core
 //!    · 2 feat/packaging-manifests ⑂  1d
 //!        Reading the vt100 grid
@@ -1115,6 +1115,25 @@ fn space_row(
     // then the label is the most stable name it has rather than a caption of
     // something above it.
     let branch = repo.map(|r| r.branch.as_str()).filter(|b| !b.is_empty());
+    // Where that branch stands, when there is anything to say. A count of zero
+    // is not information -- the same rule the rail follows for the attention
+    // counts -- so each side is drawn only when it is not zero, and a branch
+    // level with its upstream draws neither.
+    let track = match repo.and_then(|r| r.track) {
+        None => String::new(),
+        Some((ahead, behind)) => [
+            (ahead > 0).then(|| format!("{}{ahead}", cx.g.text(G::Ahead))),
+            (behind > 0).then(|| format!("{}{behind}", cx.g.text(G::Behind))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" "),
+    };
+    let track_w = match track.is_empty() {
+        true => 0,
+        false => cells(&track) + 1,
+    };
     let state = state_of(ws);
     let glyph = cx.g.text(G::state(state));
 
@@ -1164,7 +1183,7 @@ fn space_row(
     };
     let left = w
         .saturating_sub(x - inner.x)
-        .saturating_sub(age_w + 1 + mark) as usize;
+        .saturating_sub(age_w + 1 + mark + track_w) as usize;
     x += write_str(
         buf,
         x,
@@ -1180,6 +1199,12 @@ fn space_row(
         style,
         w,
     );
+    // Beside the branch rather than out by the age, and in the branch's own
+    // colour: `try ↑6 ↓1` is one phrase about one thing, and setting the
+    // numbers apart would read as scenery about the row instead.
+    if !track.is_empty() {
+        x += write_str(buf, x + 1, y, &track, THEME.branch(), w) + 1;
+    }
     // A zoomed workspace looks exactly like one with a single pane, so the row
     // is the only thing that can say the others are still there.
     if ws.here().zoomed && ws.panes().len() > 1 {
