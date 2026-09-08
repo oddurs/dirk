@@ -11,7 +11,8 @@
 #   git work sync                     rebase this worktree onto origin/main
 #   git work check                    the gate
 #   git work ship [--land]            check, push, pull request, merge on green
-#   git work land [branch]            close the item, remove the worktree
+#   git work land [branch]            remove the worktree; the item is
+#                                     already closed, by ship
 #   git work drop [branch]            abandon it, and hand the item back
 #   git work list                     what is in flight
 #   git work clean                    reap whatever has already merged
@@ -188,13 +189,32 @@ cmd_ship() {
     [ "$(git rev-list --count "$remote/$trunk..HEAD")" -gt 0 ] \
         || die "nothing to ship: $branch has no commits $remote/$trunk does not"
 
+    local id title body url
+    id=$(item_of "$branch")
+
+    # The close goes in the branch, before the gate, so it is part of the work
+    # rather than something done to it afterwards.
+    #
+    # It cannot go anywhere else. `land` runs on the trunk checkout with the
+    # branch already gone, so the file it edits there is one nothing will ever
+    # commit -- and it cannot commit it itself, because the trunk is protected
+    # and takes changes only through a pull request. Five items stayed open
+    # through five merges that way, each one printing `closed 0092` truthfully.
+    if [ -n "$id" ] && [ "$(cairn_field "$id" status)" != done ]; then
+        step "closing $(cairn_field "$id" ref)"
+        cairn_try close "$id"
+        cairn_try render
+        if ! git diff --quiet -- cairn ROADMAP.md 2>/dev/null; then
+            git add cairn ROADMAP.md 2>/dev/null || true
+            git commit --quiet -m "cairn: $(cairn_field "$id" ref) is done"
+        fi
+    fi
+
     cmd_check
 
     step "pushing $branch"
     git push --quiet --set-upstream "$remote" "$branch"
 
-    local id title body url
-    id=$(item_of "$branch")
     title=$(git log -1 --format=%s)
     if [ -n "$id" ]; then
         local t; t=$(cairn_field "$id" title)
@@ -217,8 +237,6 @@ cmd_ship() {
         gh pr merge "$branch" --squash --auto --delete-branch >/dev/null \
             || say "could not enable auto-merge; merge it by hand: $url"
     fi
-
-    [ -n "$id" ] && cairn_try set "$id" status=review
 
     say ""
     say "  $url"
@@ -306,10 +324,17 @@ cmd_land() {
             || die "$branch has not merged (pull request: $state)"
     fi
 
+    # Reported rather than done here. `ship` puts the close in the branch; if
+    # it is not there, this checkout is the trunk and an edit made in it is an
+    # edit nobody would ever commit. Saying so is the only useful thing left.
     local id; id=$(item_of "$branch")
     if [ -n "$id" ]; then
-        cairn_try close "$id"
-        say "closed $(cairn_field "$id" ref)"
+        local status; status=$(cairn_field "$id" status)
+        case $status in
+            done|dropped|'') say "$(cairn_field "$id" ref) is ${status:-closed}" ;;
+            *) say "$(cairn_field "$id" ref) is still \"$status\": the branch did not carry its close.
+     cairn set $id status=done   -- on a branch of its own, so it reaches $trunk" ;;
+        esac
     fi
 
     local dir; dir=$(worktree_dir_for "$branch")
