@@ -2,7 +2,7 @@
 id: 180
 title: Two hand-rolled gethostname wrappers
 type: chore
-status: backlog
+status: done
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3

@@ -293,11 +293,10 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 ## Unscheduled
 
-`###·······` 30% · 3 of 10 done
+`####······` 40% · 4 of 10 done
 
 ### backlog
 
-- [ ] `0180` Two hand-rolled gethostname wrappers <sup>chore · p3 · config</sup>
 - [ ] `0181` The hot path runs the diagnostic path <sup>chore · p3 · perf</sup>
 - [ ] `0182` main.rs is five thousand lines and one unit test <sup>chore · p2 · mux</sup>
 - [ ] `0183` Every enum setting is a string, checked twice <sup>chore · p3 · config</sup>
@@ -309,5 +308,6 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 
 - [x] `0178` An abandoned wait leaks a thread and a socket <sup>bug · p2 · api</sup>
 - [x] `0179` The manual page has fallen behind the commands <sup>docs · p2 · docs</sup>
+- [x] `0180` Two hand-rolled gethostname wrappers <sup>chore · p3 · config</sup>
 - [x] `0184` The smoke suite's git fixture trusts the environment <sup>bug · p2 · mux</sup>
 
