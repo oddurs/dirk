@@ -258,6 +258,43 @@ impl Workspace {
         }
     }
 
+    /// A workspace rebuilt from a handoff, around tabs that were already
+    /// running.
+    ///
+    /// The clocks start now rather than coming across. An age is "how long
+    /// since this pane last said something", and the answer after a handoff is
+    /// honestly "we have just started watching" -- carrying the old instants
+    /// would be carrying a measurement from a different monotonic clock, which
+    /// is not a smaller lie for being a smaller number.
+    pub fn adopted(note: &crate::handoff::Workspace, tabs: Vec<Tab>, tab: usize) -> Workspace {
+        Workspace {
+            id: note.id,
+            label: note.label.clone(),
+            at: note.at.clone(),
+            state: crate::agent::State::None,
+            seen: true,
+            notified: None,
+            state_since: Instant::now(),
+            intent_since: Instant::now(),
+            intent: None,
+            suggested: None,
+            asked: None,
+            turns: 0,
+            touched: Instant::now(),
+            reported: None,
+            source: crate::agent::Source::None,
+            agent_session: note.agent.clone(),
+            expanded: false,
+            tabs,
+            tab,
+            naming: NameState {
+                held: note.held,
+                applied: Some(note.label.clone()),
+                ..NameState::default()
+            },
+        }
+    }
+
     pub fn here(&self) -> &Tab {
         let at = self.tab.min(self.tabs.len().saturating_sub(1));
         &self.tabs[at]
@@ -591,6 +628,75 @@ impl Session {
     // ── Projects ────────────────────────────────────────────────────────
 
     /// Find the project for `path`, or add it. Returns its index.
+    /// Rebuild the session from a handoff, adopting every pane's pty and
+    /// process rather than starting anything.
+    ///
+    /// Ids come across unchanged. A pane id is what the socket API addresses,
+    /// what a hook reports against and what `DIRK_PANE_ID` told every shell it
+    /// was -- renumbering them would break every one of those in a way that
+    /// only shows up later.
+    pub fn adopt(&mut self, note: &crate::handoff::Handoff) -> Vec<String> {
+        let mut lost = Vec::new();
+        let mut highest = 0u64;
+        for p in &note.projects {
+            let at = self.open_project(&p.path);
+            for w in &p.workspaces {
+                let mut tabs = Vec::new();
+                for t in &w.tabs {
+                    let mut panes = Vec::new();
+                    for pane in &t.panes {
+                        match crate::mux::Pane::adopt(pane, self.scrollback, self.tx.clone()) {
+                            Ok(built) => panes.push(built),
+                            // Named rather than dropped silently: a pane that
+                            // did not come across is work somebody is about to
+                            // look for.
+                            Err(e) => lost.push(format!("pane {}: {e}", pane.id)),
+                        }
+                    }
+                    if panes.is_empty() {
+                        continue;
+                    }
+                    highest = highest
+                        .max(t.id)
+                        .max(panes.iter().map(|x| x.id).max().unwrap_or(0));
+                    let tree = crate::handoff::tree_into(&t.tree);
+                    // Any pane that did not arrive has to leave the tree too,
+                    // or the layout points at something that is not there.
+                    let tree =
+                        tree.without_missing(&panes.iter().map(|x| x.id).collect::<Vec<_>>());
+                    let focus = match panes.iter().any(|x| x.id == t.focus) {
+                        true => t.focus,
+                        false => panes[0].id,
+                    };
+                    tabs.push(Tab {
+                        id: t.id,
+                        label: t.label.clone(),
+                        panes,
+                        tree,
+                        zoomed: false,
+                        focus,
+                        expanded: false,
+                    });
+                }
+                if tabs.is_empty() {
+                    continue;
+                }
+                highest = highest.max(w.id);
+                let Some(proj) = self.projects.get_mut(at) else {
+                    continue;
+                };
+                proj.expanded = p.expanded;
+                let tab = w.tab.min(tabs.len() - 1);
+                proj.workspaces.push(Workspace::adopted(w, tabs, tab));
+            }
+        }
+        // Past everything that came across, so nothing made from here collides
+        // with a pane a shell already knows itself by.
+        self.next_id = self.next_id.max(highest + 1);
+        self.refocus();
+        lost
+    }
+
     pub fn open_project(&mut self, path: &Path) -> usize {
         // Resolved first, because git answers in resolved paths and a directory
         // reached two ways is one directory. On macOS `/tmp` is `/private/tmp`,
@@ -2423,7 +2529,7 @@ impl Session {
         }
     }
 
-    fn every_workspace(&self) -> impl Iterator<Item = &Workspace> {
+    pub fn every_workspace(&self) -> impl Iterator<Item = &Workspace> {
         self.layouts
             .iter()
             .filter_map(|l| l.ws.as_ref())

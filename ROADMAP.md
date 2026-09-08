@@ -216,19 +216,19 @@ What v0.5 did not finish, and the terminal features a pane needs before it is
 
 ## v0.9 — Coming back to it
 
-`###·······` 25% · 1 of 4 done · due 2027-07-31
+`#####·····` 50% · 2 of 4 done · due 2027-07-31
 
 A session survives detaching. It should also survive the binary changing under
 
 ### backlog
 
-- [ ] `0144` Replacing the binary without ending the work <sup>feature · p2 · server</sup>
 - [ ] `0145` dirk update <sup>feature · p2 · packaging</sup>
 - [ ] `0146` Watching and driving a terminal over the socket <sup>feature · p2 · api</sup>
 
 ### done
 
 - [x] `0143` Something on the screen after a restart <sup>feature · p1 · server</sup>
+- [x] `0144` Replacing the binary without ending the work <sup>feature · p2 · server</sup>
 
 ## v0.10 — More than one machine
 

@@ -55,6 +55,34 @@ $ git clone https://github.com/oddurs/dirk && cd dirk
 $ make && sudo make install
 ```
 
+**`dirk session handoff` replaces the binary without ending the work.**
+Upgrading otherwise means stopping the session, which means ending every shell
+and every agent — so people do not upgrade while they are working, which is
+always, and a long-running session is exactly the thing that makes an upgrade
+expensive and exactly the thing dirk is for.
+
+It is an `exec`, not a second process. dirk clears `FD_CLOEXEC` on every pty it
+holds, writes down which descriptor and which pid belong to which pane, and
+replaces its own image with the new binary. Same process, so every shell and
+agent keeps the parent it had; same descriptors, so the ptys they are talking
+through are the ones they were already talking through. Each pane's screen and
+its terminal modes come across, so a program that had asked for mouse reporting
+is still known to have asked.
+
+What is cut is documented rather than discovered, because a caller waiting on an
+agent through a handoff needs to know its wait ended rather than silently never
+returning: attached terminals are dropped and reconnect, outstanding waits end
+with an error naming the handoff, observers and controllers get a closing
+record, and scrollback goes — the screen comes across, what scrolled off it does
+not.
+
+**It is experimental and off.** `[session] handoff = true` turns it on. The new
+binary is run once before anything is committed to, so the realistic failure —
+a truncated download, the wrong architecture — is caught while the session is
+still entirely intact, and a failed `exec` simply returns. What that cannot
+catch is a binary that starts and then fails, and the thing at risk is every
+running pane in the session.
+
 [INSTALL](INSTALL) has the rest: verifying a download, `PREFIX` and `DESTDIR`,
 uninstalling, and what a packager needs. There is no crates.io release — the
 name was taken in 2019 by an unrelated tool — but `cargo install --git
@@ -764,6 +792,8 @@ headless_rows = 24
 resume_agents = true         # start a restored agent on the conversation it had
 pane_history = false         # keep each pane's last screen and paint it back;
                              # off, because that output is written to disk
+handoff      = false         # allow `session handoff` to replace the binary
+                             # without stopping the panes; experimental
 
 # A non-login shell on macOS never reads /etc/zprofile, so it never runs
 # path_helper or Homebrew's initialisation — and PATH inside a pane was missing

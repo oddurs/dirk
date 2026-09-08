@@ -84,13 +84,21 @@ takes a branch and puts a workspace on it.
 .TP
 .B completion \fRbash | zsh | fish
 .TP
-.B session \fRinfo | list | reload | commands | notify | quit
+.B session \fRinfo | list | reload | commands | notify | quit | handoff
 .B info
 answers with the version, what the session holds, how many clients are
 watching, and
 .B waiting
 \(em how many questions callers are still waiting on the answer to, which is
 the first thing to look at when a script seems hung.
+.IP
+.B handoff
+replaces the running binary without stopping the work: every pty and every
+process is kept across an \fBexec\fR, so shells and agents never notice.
+Attached terminals, outstanding waits and open streams are all cut and told so.
+Experimental, and refused unless
+.B [session] handoff
+is set.
 .
 .SH OPTIONS
 .TP

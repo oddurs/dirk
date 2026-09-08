@@ -329,6 +329,13 @@
       "answer": [
         "quit"
       ]
+    },
+    {
+      "name": "session.handoff",
+      "args": "",
+      "answer": [
+        "an error if it did not happen; nothing at all if it did"
+      ]
     }
   ],
   "reply": {

@@ -54,6 +54,7 @@ mod find;
 mod git;
 mod glyph;
 mod graphics;
+mod handoff;
 mod hit;
 mod hook;
 mod keys;
@@ -119,7 +120,7 @@ JSON; `--current` means the pane you are in.
   agent     list|rules|explain|start|state|prompt|wait|hooks
   worktree  list|add|remove
   tab       list|new|focus|rename|close
-  session   info|list|reload|commands|notify|quit|prune
+  session   info|list|reload|commands|notify|quit|prune|handoff
   api       schema
 
 Options:
@@ -681,14 +682,69 @@ enum Mode {
     Relay,
 }
 
+/// Let a descriptor survive an `exec`.
+fn keep_across_exec(fd: i32) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    match unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+/// Replace this process's image with a new binary, as a server for the same
+/// session.
+///
+/// Returns only on failure. `execv` does not come back when it works: from the
+/// kernel's point of view this is the same process throughout, which is exactly
+/// why every child keeps the parent it had.
+fn exec_self(binary: &std::path::Path, session: &str) -> io::Error {
+    use std::ffi::CString;
+    let Ok(path) = CString::new(binary.as_os_str().as_encoded_bytes()) else {
+        return io::Error::other("the binary's path cannot be passed to exec");
+    };
+    let args = ["dirk", "--session", session, "server"];
+    let owned: Vec<CString> = args.iter().filter_map(|a| CString::new(*a).ok()).collect();
+    if owned.len() != args.len() {
+        return io::Error::other("the arguments cannot be passed to exec");
+    }
+    let mut argv: Vec<*const libc::c_char> = owned.iter().map(|a| a.as_ptr()).collect();
+    argv.push(std::ptr::null());
+    unsafe { libc::execv(path.as_ptr(), argv.as_ptr()) };
+    io::Error::last_os_error()
+}
+
 /// Be the session.
 fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
-    let listener = server::bind(path)?;
+    // A note from the image this one replaced, if that is what happened. Read
+    // before anything else binds or spawns, because the descriptors it names
+    // are already open in this process and everything below depends on which
+    // of the two starts this is.
+    let note = std::env::var("DIRK_HANDOFF")
+        .ok()
+        .and_then(|at| handoff::read(std::path::Path::new(&at)));
+    // The listener came across too, still bound, so nothing is refused in the
+    // gap and the socket is never unlinked and rebound.
+    let listener = match &note {
+        Some(n) => {
+            use std::os::fd::FromRawFd;
+            unsafe { std::os::unix::net::UnixListener::from_raw_fd(n.listener) }
+        }
+        None => server::bind(path)?,
+    };
     // Inherited by every pane, so a command from inside one reaches the session
     // that holds it rather than the default.
     unsafe { std::env::set_var("DIRK_SESSION", session) };
     let cfg = Config::load();
 
+    // Kept before the listener is given away to its thread: the number is
+    // what a handoff passes on, and afterwards there is nothing here holding it.
+    let socket_fd = {
+        use std::os::fd::AsRawFd;
+        listener.as_raw_fd()
+    };
     let (tx, rx) = mpsc::channel::<Ev>();
     spawn_ticker(tx.clone());
     server::listen(listener, tx.clone());
@@ -705,10 +761,14 @@ fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
     let mut app = App::new(cfg, session_state, size, tx);
     app.socket = Some(path.to_path_buf());
     app.socket_inode = server::inode(path).ok();
+    app.listener = Some(socket_fd);
     app.session_name = Some(session.to_string());
-    // What was here before, if anything was.
-    if !app.restore() {
-        app.bootstrap();
+    // Adopted, restored, or new -- in that order, because a handoff carries
+    // running processes and a restore carries only the shape of them.
+    match note {
+        Some(n) => app.adopt(n),
+        None if app.restore() => {}
+        None => app.bootstrap(),
     }
 
     let ours = app.socket_inode;
@@ -997,6 +1057,10 @@ struct App {
     socket: Option<std::path::PathBuf>,
     /// Which socket, by inode. A path can be reused by somebody else.
     socket_inode: Option<u64>,
+    /// The listening socket's descriptor, kept so a handoff can pass it to the
+    /// next image still bound -- nothing is refused in the gap, and the socket
+    /// is never unlinked and rebound under a client mid-connect.
+    listener: Option<i32>,
     /// The clients being drawn for. A session with nobody looking at it keeps
     /// running; that is the point of the milestone this came from.
     ///
@@ -1064,6 +1128,7 @@ impl App {
             complained: false,
             socket: None,
             socket_inode: None,
+            listener: None,
             views: Vec::new(),
             sampling: false,
             quit_armed: None,
@@ -1087,6 +1152,112 @@ impl App {
     /// called — the parts a human arranged.
     ///
     /// Returns false when there was nothing to bring back.
+    /// Take over a session the image before this one was running.
+    ///
+    /// Everything below the descriptors is ordinary: adopted panes are panes,
+    /// and nothing after this cares which start it was.
+    fn adopt(&mut self, note: handoff::Handoff) {
+        let lost = self.session.adopt(&note);
+        for why in &lost {
+            self.note(why);
+        }
+        if self.session.is_empty() {
+            // Every pane failed to come across, which is a handoff that took
+            // the session with it. Better an empty dirk that says so than one
+            // that looks like a fresh start.
+            self.note("nothing survived the handoff");
+            self.bootstrap();
+            return;
+        }
+        self.written = Some(state::current(&self.session));
+        self.note(&format!("running {}", env!("CARGO_PKG_VERSION")));
+    }
+
+    /// Replace this binary with another, keeping every pane running.
+    ///
+    /// Returns the reason it did not, or never returns at all -- on success
+    /// this process becomes the new image and there is nothing here to come
+    /// back to.
+    fn hand_off(&mut self) -> String {
+        let Some(name) = self.session_name.clone() else {
+            return "this dirk is not a session".into();
+        };
+        let Ok(binary) = std::env::current_exe() else {
+            return "cannot tell which binary to run".into();
+        };
+        let Some(listener) = self.listener else {
+            return "there is no listening socket to hand on".into();
+        };
+
+        // Run it once before committing to it. This is the failure that
+        // actually happens -- a truncated download, the wrong architecture, a
+        // library that is not there -- and after `exec` there is nowhere to
+        // put the answer.
+        match std::process::Command::new(&binary)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Ok(s) if s.success() => {}
+            _ => return format!("{} does not run", binary.display()),
+        }
+
+        // Everything written down before anything is made to survive: a
+        // capture that fails must leave this process exactly as it was.
+        let note = match handoff::capture(&self.session, &name, listener) {
+            Ok(n) => n,
+            Err(why) => return why,
+        };
+        for pane in self.session.every_workspace().flat_map(|w| w.every_pane()) {
+            if let Err(e) = pane.master.keep_across_exec() {
+                return format!("pane {} cannot be handed on: {e}", pane.id);
+            }
+        }
+        if let Err(e) = keep_across_exec(listener) {
+            return format!("the listening socket cannot be handed on: {e}");
+        }
+        let at = match handoff::write(&name, &note) {
+            Ok(at) => at,
+            Err(e) => return format!("cannot write the handoff: {e}"),
+        };
+
+        // Told before they are cut, because after the exec there is nobody
+        // here to tell them.
+        self.announce_handoff();
+
+        unsafe { std::env::set_var("DIRK_HANDOFF", &at) };
+        let err = exec_self(&binary, &name);
+        // Only reached when `exec` refused, which leaves this process entirely
+        // intact -- so the note goes, the descriptors stay open, and the
+        // session carries on as though nothing was attempted.
+        let _ = std::fs::remove_file(&at);
+        unsafe { std::env::remove_var("DIRK_HANDOFF") };
+        format!("the handoff did not happen: {err}")
+    }
+
+    /// Tell everything that is about to be cut that it is being cut.
+    ///
+    /// A caller waiting on an agent through a handoff has to learn its wait
+    /// ended, rather than silently never returning.
+    fn announce_handoff(&mut self) {
+        let why = wire::Reply::err("the session handed off to a new binary".to_string());
+        // Cut, and told so. Everything here is a connection or a promise made
+        // by the image that is about to stop existing.
+        for held in &mut self.waits {
+            held.back.send(why.clone());
+        }
+        self.waits.clear();
+        for w in &mut self.watchers {
+            let _ = wire::send(&mut w.out, wire::Kind::Bye, b"the session handed off");
+        }
+        self.watchers.clear();
+        for v in &mut self.views {
+            let _ = wire::send(&mut v.out, wire::Kind::Bye, b"the session handed off");
+        }
+        self.views.clear();
+    }
+
     fn restore(&mut self) -> bool {
         let Some(name) = self.session_name.clone() else {
             return false;
@@ -2449,6 +2620,19 @@ impl App {
         let arg = |n: usize| req.args.get(n).cloned().unwrap_or_default();
 
         match req.cmd.as_str() {
+            "session.handoff" => {
+                if !self.cfg.session.handoff {
+                    return Reply::err(
+                        "handoff is experimental and off; set [session] handoff = true",
+                    );
+                }
+                // Only ever an error. On success this process becomes the new
+                // binary partway through the call, and the caller learns that
+                // by its connection ending -- which is the honest report, since
+                // the thing it was talking to no longer exists.
+                Reply::err(self.hand_off())
+            }
+
             "session.reload" => match Config::reload(&mut self.cfg, &mut self.session) {
                 Ok(said) => {
                     // Rebuilt here, which is the only place it can change. The

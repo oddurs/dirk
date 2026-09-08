@@ -122,6 +122,10 @@ fn pane_json(ws_id: u64, pane: &crate::mux::Pane, focused: bool) -> Value {
         "cols": cols,
         "cwd": pane.cwd,
         "program": pane.argv.first(),
+        // The process itself, which is what tells a pane that was kept across
+        // a handoff from one that was restarted -- and what a caller wanting to
+        // signal something in a pane has otherwise no way to name.
+        "pid": pane.pid(),
         "agent": pane.occupant.agent().map(|k| k.name.clone()),
         "agent_name": pane.agent_name,
         "available": pane.occupant.available(),
@@ -598,6 +602,14 @@ pub const COMMANDS: &[Command] = &[
         name: "session.quit",
         args: "",
         answer: "quit",
+    },
+    Command {
+        name: "session.handoff",
+        args: "",
+        // Only ever an error. When it works this process becomes the new binary
+        // partway through the call and there is nobody left to answer -- the
+        // caller learns by its connection ending, which is the honest report.
+        answer: "an error if it did not happen; nothing at all if it did",
     },
 ];
 

@@ -2,10 +2,10 @@
 id: 144
 title: Replacing the binary without ending the work
 type: feature
-status: backlog
+status: done
 milestone: v0.9
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: server
 effort: xl
@@ -32,9 +32,9 @@ Opt-in while it is new. This is the largest and riskiest item in the milestone
 and it should behave that way.
 
 ## Acceptance criteria
-- [ ] Pty file descriptors pass to the replacement server; processes keep running
-- [ ] Pane identity, agent state and session state come across
-- [ ] Mouse mode, bracketed paste and terminal modes are preserved per pane
-- [ ] A failed handoff leaves the old server running rather than losing the panes
-- [ ] What is cut is documented; waits end with an error naming the handoff
-- [ ] Opt-in, and marked experimental
+- [x] Pty file descriptors pass to the replacement server; processes keep running
+- [x] Pane identity, agent state and session state come across
+- [x] Mouse mode, bracketed paste and terminal modes are preserved per pane
+- [x] A failed handoff leaves the old server running rather than losing the panes
+- [x] What is cut is documented; waits end with an error naming the handoff
+- [x] Opt-in, and marked experimental
