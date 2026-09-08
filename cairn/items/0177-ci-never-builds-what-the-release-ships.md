@@ -2,7 +2,7 @@
 id: 177
 title: CI never builds what the release ships
 type: chore
-status: backlog
+status: done
 milestone: v1.0
 created: 2026-09-08
 updated: 2026-09-08
