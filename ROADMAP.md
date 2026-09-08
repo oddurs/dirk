@@ -244,7 +244,7 @@ Local and several saved machines in one nav, one agent list across all of them,
 
 ## v1.0 — Production
 
-`########··` 71% · 22 of 31 done · due 2027-11-01
+`########··` 72% · 23 of 32 done · due 2027-11-01
 
 Documented, packaged, hardened and fast. Safe for someone who is not the author
 
@@ -290,10 +290,11 @@ Documented, packaged, hardened and fast. Safe for someone who is not the author
 - [x] `0176` dirk does not build for aarch64 Linux <sup>bug · p0 · packaging</sup>
 - [x] `0177` CI never builds what the release ships <sup>chore · p1 · packaging</sup>
 - [x] `0188` A finished milestone still says it is open <sup>bug · p1 · packaging</sup>
+- [x] `0190` A milestone closes nowhere, when the merge that finished it lands <sup>bug · p1 · packaging</sup>
 
 ## Unscheduled
 
-`#####·····` 45% · 5 of 11 done
+`######····` 55% · 6 of 11 done
 
 ### backlog
 
