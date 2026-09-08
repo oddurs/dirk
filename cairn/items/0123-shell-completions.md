@@ -2,7 +2,7 @@
 id: 123
 title: Shell completions
 type: feature
-status: backlog
+status: done
 milestone: v0.6
 created: 2026-09-07
 updated: 2026-09-07
