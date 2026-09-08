@@ -2,10 +2,10 @@
 id: 131
 title: Display tokens an outside program can set
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: agents
 effort: m
