@@ -55,6 +55,17 @@ pub struct Kind {
     pub argv: Vec<String>,
     /// How to start one, for `agent start`. Empty means dirk cannot.
     pub command: Vec<String>,
+    /// How to start one again on the conversation it was having.
+    ///
+    /// `{session}` stands for whatever the harness called its session. Empty
+    /// means dirk does not know how to resume this one, and a restored pane
+    /// gets a shell — which is what every restored pane used to get.
+    ///
+    /// Configuration rather than a match arm because every harness spells this
+    /// differently and the spelling changes: `--resume <id>`, `resume <id>`,
+    /// `--session <path>`. A table of them in the source is a table that is
+    /// wrong a month after it is written.
+    pub resume: Vec<String>,
     /// Text that appears when this agent is waiting for an answer.
     ///
     /// The part of the table most likely to be wrong: these are strings another
@@ -121,19 +132,34 @@ pub fn defaults() -> Vec<Kind> {
         blocked: blocked.iter().map(|s| s.to_string()).collect(),
         choices,
         from: From::Shipped,
+        // Shipped empty. What a harness calls its session, and how it takes one
+        // back, is exactly the sort of thing that changes without telling
+        // anybody -- so the ones dirk is sure of are named below and the rest
+        // are a four-line file away.
+        resume: Vec::new(),
+    };
+    let resuming = |mut kind: Kind, resume: &[&str]| {
+        kind.resume = resume.iter().map(|s| s.to_string()).collect();
+        kind
     };
     vec![
-        k(
-            "claude",
-            &["claude-code", "claude/cli.js", ".claude/local"],
-            &["Do you want", "Would you like"],
-            true,
+        resuming(
+            k(
+                "claude",
+                &["claude-code", "claude/cli.js", ".claude/local"],
+                &["Do you want", "Would you like"],
+                true,
+            ),
+            &["claude", "--resume", "{session}"],
         ),
-        k(
-            "codex",
-            &["codex/cli", "openai/codex"],
-            &["Allow command?", "Approve?"],
-            true,
+        resuming(
+            k(
+                "codex",
+                &["codex/cli", "openai/codex"],
+                &["Allow command?", "Approve?"],
+                true,
+            ),
+            &["codex", "resume", "{session}"],
         ),
         // The four below are recognised but ship with no markers, on purpose.
         // A marker is a string another program prints, and these are ones dirk
@@ -418,7 +444,27 @@ impl Source {
 /// and a snippet somebody has to repair before pasting is a snippet they will
 /// not paste. No double quotes, and no expansion outside a pane.
 pub fn command(state: &str) -> String {
-    format!("case $DIRK_PANE_ID in ?*) dirk agent state {state} --current;; esac")
+    format!("case $DIRK_PANE_ID in ?*) dirk agent state {state} --current --hook;; esac")
+}
+
+/// The harness's own name for this conversation, out of the payload it pipes to
+/// its hook.
+///
+/// Read here rather than in the snippet because the snippet is a line of shell
+/// in somebody's settings file: extracting a JSON field there means depending
+/// on `jq` being installed, and a hook that fails on a machine without it is a
+/// hook that silently stops reporting state as well.
+///
+/// Every harness spells it differently, and none of them spell it in a way
+/// worth guessing at, so this reads the two spellings dirk has seen and takes
+/// the first that is a non-empty string.
+pub fn session_of(payload: &str) -> Option<String> {
+    let doc: serde_json::Value = serde_json::from_str(payload).ok()?;
+    ["session_id", "sessionId"]
+        .iter()
+        .find_map(|key| doc.get(key)?.as_str())
+        .map(str::to_string)
+        .filter(|id| !id.is_empty())
 }
 
 /// Whether a command in somebody's settings file is one of dirk's.
@@ -620,6 +666,28 @@ pub fn behind(proc: &Proc, kind: &Kind) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_harnesss_own_name_for_a_conversation_is_taken_out_of_its_payload() {
+        // Read here rather than in the snippet: extracting it there would mean
+        // depending on `jq`, and a hook that fails on a machine without it
+        // stops reporting state too.
+        assert_eq!(
+            super::session_of(r#"{"session_id":"abc123","cwd":"/tmp"}"#),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            super::session_of(r#"{"sessionId":"abc123"}"#),
+            Some("abc123".to_string())
+        );
+        // Nothing to take is not an error: the state half of the report still
+        // stands, and a harness that says nothing about sessions restores a
+        // shell like every pane used to.
+        assert_eq!(super::session_of(r#"{"cwd":"/tmp"}"#), None);
+        assert_eq!(super::session_of(r#"{"session_id":""}"#), None);
+        assert_eq!(super::session_of("not json at all"), None);
+        assert_eq!(super::session_of(""), None);
+    }
+
     fn blocked(kind: &super::Kind, window: &str) -> bool {
         super::examine(kind, window).blocked()
     }

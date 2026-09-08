@@ -134,6 +134,16 @@ pub struct Workspace {
     /// What decided the current state. Reported for the sake of being able to
     /// explain a badge that is wrong.
     pub source: crate::agent::Source,
+    /// The harness's own name for the conversation happening here.
+    ///
+    /// Reported by the same hook that reports state, because the harness is the
+    /// only thing that knows it. Written down with the workspace so that a
+    /// session restored after the server stops can start the agent on the work
+    /// it was doing rather than on an empty prompt.
+    ///
+    /// A claim, like everything else a hook says. A reference that no longer
+    /// resolves restores a shell.
+    pub agent_session: Option<(String, String)>,
     /// The second axis. A space is one piece of work; a tab is one arrangement
     /// of programs for it, and there is usually more than one -- an editor and
     /// a test runner are the same task and not the same screen.
@@ -657,6 +667,7 @@ impl Session {
             touched: Instant::now(),
             reported: None,
             source: crate::agent::Source::None,
+            agent_session: None,
             expanded: false,
             tabs: vec![Tab::new(tab_id, pane)],
             tab: 0,
@@ -839,6 +850,7 @@ impl Session {
                 touched: Instant::now(),
                 reported: None,
                 source: crate::agent::Source::None,
+                agent_session: None,
                 expanded: false,
                 // A board is one arrangement by definition -- that is what a
                 // board is -- so it has the one tab and no way to make another.
@@ -2455,6 +2467,7 @@ mod tests {
     fn ws(state: State, seen: bool) -> Workspace {
         Workspace {
             id: 0,
+            agent_session: None,
             label: String::new(),
             at: PathBuf::new(),
             state,

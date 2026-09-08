@@ -65,6 +65,17 @@ pub struct Workspace {
     /// Whether a human named this one. Kept, or a restart would quietly hand a
     /// name you wrote back to the naming policy.
     pub held: bool,
+    /// The harness that was working here, and its own name for the
+    /// conversation.
+    ///
+    /// The panes themselves are not restored — a process is a process — but a
+    /// conversation is not a process, and the harness can pick one up again.
+    /// Restoring the shape of the work while losing the work is close to the
+    /// worst available place to stop.
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub agent_session: Option<String>,
     /// The names of its tabs, in order.
     ///
     /// Only the names. What was running in one is a process, and a screenful of
@@ -219,6 +230,8 @@ pub fn current(session: &crate::mux::Session) -> Saved {
                         label: w.label.clone(),
                         at: w.at.clone(),
                         held: w.naming.held,
+                        agent: w.agent_session.as_ref().map(|(k, _)| k.clone()),
+                        agent_session: w.agent_session.as_ref().map(|(_, s)| s.clone()),
                         tabs: (0..w.tabs.len()).map(|i| w.tab_label(i)).collect(),
                     })
                     .collect(),
@@ -243,7 +256,19 @@ pub fn differs(a: &Saved, b: &Saved) -> bool {
                     p.expanded,
                     p.workspaces
                         .iter()
-                        .map(|w| (w.label.clone(), w.at.clone(), w.held, w.tabs.clone()))
+                        .map(|w| {
+                            (
+                                w.label.clone(),
+                                w.at.clone(),
+                                w.held,
+                                w.tabs.clone(),
+                                // Or a conversation reported after the last
+                                // write would never reach the file, and the
+                                // restart it exists for would find nothing.
+                                w.agent.clone(),
+                                w.agent_session.clone(),
+                            )
+                        })
                         .collect::<Vec<_>>(),
                 )
             })
@@ -271,6 +296,8 @@ mod tests {
                             tabs: Vec::new(),
                             label: (*l).to_string(),
                             held: false,
+                            agent: None,
+                            agent_session: None,
                         })
                         .collect(),
                 })
@@ -354,12 +381,16 @@ mod tests {
                         label: "main".into(),
                         at: here.clone(),
                         held: false,
+                        agent: None,
+                        agent_session: None,
                         tabs: Vec::new(),
                     },
                     Workspace {
                         label: "gone".into(),
                         at: dir.join("removed"),
                         held: false,
+                        agent: None,
+                        agent_session: None,
                         tabs: Vec::new(),
                     },
                 ],
@@ -386,6 +417,8 @@ mod tests {
                     label: "x".into(),
                     at: dir.join("repo-side"),
                     held: false,
+                    agent: None,
+                    agent_session: None,
                     tabs: Vec::new(),
                 }],
             }],

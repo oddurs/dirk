@@ -612,15 +612,29 @@ fn as_request(args: &[String]) -> Option<wire::Request> {
         return None;
     }
     let verb = args.get(1)?;
-    let rest = args
+    let mut rest: Vec<String> = args
         .get(2..)
         .unwrap_or_default()
         .iter()
+        .filter(|a| *a != "--hook")
         .map(|a| match a.as_str() {
             "--current" => std::env::var("DIRK_PANE_ID").unwrap_or_else(|_| a.clone()),
             _ => a.clone(),
         })
         .collect();
+    // `--hook` says the harness has piped its own payload in. dirk reads what
+    // it understands out of it -- today, the harness's name for the
+    // conversation -- and the rest of the command is unchanged, so a payload
+    // that says nothing costs nothing.
+    if args.iter().any(|a| a == "--hook") {
+        let mut payload = String::new();
+        use std::io::Read;
+        let _ = io::stdin().read_to_string(&mut payload);
+        if let Some(id) = agent::session_of(&payload) {
+            rest.push("--session".into());
+            rest.push(id);
+        }
+    }
     Some(wire::Request {
         cmd: format!("{noun}.{verb}"),
         args: rest,
@@ -905,6 +919,9 @@ struct App {
     badging: bool,
     /// Terminals attached to one pane each, with no interface around them.
     watchers: Vec<server::Watcher>,
+    /// Workspaces whose agent is to be started again on the conversation it was
+    /// having, once somebody is here to watch.
+    to_resume: Vec<(usize, u64)>,
     /// Questions whose answer does not exist yet.
     ///
     /// Settled at the end of every turn, which is after the states have been
@@ -988,6 +1005,7 @@ impl App {
             badges: std::collections::HashMap::new(),
             badging: false,
             watchers: Vec::new(),
+            to_resume: Vec::new(),
             waits: Vec::new(),
             copy: None,
             find: None,
@@ -1044,6 +1062,7 @@ impl App {
         }
 
         let (rows, cols) = (self.content.height, self.content.width);
+        let mut pending: Vec<(usize, u64)> = Vec::new();
         for project in &saved.projects {
             // Only when there is nothing else to go on. Each space opens its
             // own checkout below, and opening the repository proper as well
@@ -1076,6 +1095,14 @@ impl App {
                 ws.label = want.label.clone();
                 ws.naming.held = want.held;
                 ws.naming.applied = Some(want.label.clone());
+                // Remembered rather than started. Twelve agents resumed on a
+                // server nobody may ever attach to is twelve model sessions
+                // nobody asked for, so this waits for somebody to arrive --
+                // which is also when there is a real terminal size to draw at.
+                if let (Some(kind), Some(id)) = (&want.agent, &want.agent_session) {
+                    ws.agent_session = Some((kind.clone(), id.clone()));
+                    pending.push((p, ws.id));
+                }
                 // The first tab exists already; the rest are made, and all of
                 // them take back the names they had.
                 for (i, name) in want.tabs.iter().enumerate() {
@@ -1118,7 +1145,61 @@ impl App {
         }
         self.session.refocus();
         self.written = Some(state::current(&self.session));
+        self.to_resume = pending;
         true
+    }
+
+    /// Start the agents a restore remembered, on the conversations they were
+    /// having.
+    ///
+    /// Run when the first client arrives rather than at restore. Resuming
+    /// twelve agents on a server nobody may ever attach to is twelve model
+    /// sessions nobody asked for — and this is also the first moment there is a
+    /// real terminal size to draw them at.
+    fn resume_agents(&mut self) {
+        if !self.cfg.session.resume_agents {
+            self.to_resume.clear();
+            return;
+        }
+        for (p, ws_id) in std::mem::take(&mut self.to_resume) {
+            let Some(w) = self
+                .session
+                .projects
+                .get(p)
+                .and_then(|proj| proj.workspaces.iter().position(|x| x.id == ws_id))
+            else {
+                continue;
+            };
+            let Some((kind, id)) = self
+                .session
+                .workspace(p, w)
+                .and_then(|ws| ws.agent_session.clone())
+            else {
+                continue;
+            };
+            // A reference dirk cannot use is not an error. Every restored pane
+            // used to be a shell, and one that stays a shell has lost nothing
+            // it had a moment ago.
+            let Some(kind) = self.kinds.iter().find(|k| k.name == kind).cloned() else {
+                continue;
+            };
+            if kind.resume.is_empty() {
+                continue;
+            }
+            let Some(pane) = self.session.workspace(p, w).map(|ws| ws.focus()) else {
+                continue;
+            };
+            let line = kind
+                .resume
+                .iter()
+                .map(|word| word.replace("{session}", &id))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = self.session.write_to(pane, format!("{line}\r").as_bytes());
+            if let Some(ws) = self.session.workspace_mut(p, w) {
+                ws.reported = Some((crate::agent::State::Starting, Instant::now()));
+            }
+        }
     }
 
     /// Write the shape down, when it has changed.
@@ -1379,6 +1460,9 @@ impl App {
                 let _ = view.repaint();
                 self.views.push(view);
                 self.resize_panes();
+                // Now that somebody is here, and now that there is a terminal
+                // size that belongs to a screen rather than to a fallback.
+                self.resume_agents();
             }
             Ev::Command(req, reply) => {
                 // Questions whose answer does not exist yet are put aside
@@ -2416,13 +2500,36 @@ impl App {
                 let Some((p, w)) = target else {
                     return Reply::err("no such workspace");
                 };
+                // The harness's own name for this conversation, when the hook
+                // passed one along. Taken before the workspace is borrowed
+                // mutably, because reading it needs the kinds.
+                let named = req
+                    .args
+                    .iter()
+                    .position(|a| a == "--session")
+                    .and_then(|i| req.args.get(i + 1))
+                    .filter(|id| !id.is_empty())
+                    .cloned();
+                let kind = self
+                    .session
+                    .workspace(p, w)
+                    .and_then(|ws| ws.active_pane())
+                    .and_then(|pane| pane.occupant.agent())
+                    .map(|k| k.name.clone());
                 let Some(ws) = self.session.workspace_mut(p, w) else {
                     return Reply::err("no such workspace");
                 };
                 ws.reported = Some((state, Instant::now()));
+                // Kept only alongside the harness it came from: a reference is
+                // only meaningful to the program that issued it, and resuming
+                // codex on claude's id would start a conversation nobody had.
+                if let (Some(id), Some(kind)) = (named, kind) {
+                    ws.agent_session = Some((kind, id));
+                }
                 Reply::ok(serde_json::json!({
                     "workspace": api::workspace_id(ws.id),
                     "state": state.glyph_name(),
+                    "session": ws.agent_session.as_ref().map(|(_, id)| id.clone()),
                 }))
             }
 
