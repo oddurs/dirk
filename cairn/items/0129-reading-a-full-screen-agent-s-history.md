@@ -2,10 +2,10 @@
 id: 129
 title: Reading a full-screen agent's history
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p2
 area: agents
 effort: l
