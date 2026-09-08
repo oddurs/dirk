@@ -428,7 +428,18 @@ this is a feature or something you mute in a week:
 enabled = true               # off unless asked for; it is an interruption
 blocked = []                 # empty takes a sound the system already has
 done    = []
+
+# One harness at a time, for when three are running and one of them is chatty.
+# `on`, `off`, or `default` — and `default` is what an absent one means.
+[sound.agents]
+claude = "off"
 ```
+
+The harness is asked first, then the project, then the global setting: the more
+specific answer is the one somebody wrote about this exact thing, and a project
+answer cannot tell three agents in one repository apart. A name dirk has no
+rules for is complained about at startup rather than ignored — silence there is
+the shape of "I turned that off and it still rings".
 
 On macOS an empty command finds two sounds that ship with the machine, so this
 works with no file to hunt for. Elsewhere it falls through to the terminal's own

@@ -21,6 +21,21 @@ the problem when you run three at once.
 after the project rule. One more key on a table that already exists.
 
 ## Acceptance criteria
-- [ ] `[sound.agents]` keyed by harness, values on/off/default
-- [ ] Resolution order documented: agent, then project, then global
-- [ ] An unknown harness name warns at load rather than silently doing nothing
+- [x] `[sound.agents]` keyed by harness, values on/off/default
+- [x] Resolution order documented: agent, then project, then global
+- [x] An unknown harness name warns at load rather than silently doing nothing
+
+## 2026-09-08
+
+`default` and absent are the same answer, and both mean "say nothing" rather
+than "yes" — so the table only ever overrides, and adding a name you meant to
+type later changes nothing until you type it.
+
+A value dirk does not understand also says nothing, and is complained about. A
+typo that silently meant `off` is a notification you never hear and never find
+out you are not hearing.
+
+The test asserts both directions in two sessions rather than one. Reloading
+mid-test does not work: the noise is made on the client, from the client's own
+configuration, and that is cached — which is the same split `0033` established
+and worth not forgetting.

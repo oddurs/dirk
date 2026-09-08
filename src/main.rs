@@ -1629,8 +1629,25 @@ impl App {
                 continue;
             }
             // A muted project still reaches the column, the counts and the
-            // notification; what it does not do is make a noise.
-            let quiet = self.project_of(change.at).is_some_and(|p| !p.sound);
+            // notification; what it does not do is make a noise. The harness
+            // is asked first and the project second, because the more specific
+            // answer is the one somebody wrote about this exact thing: three
+            // agents in one repository is the case that needed this, and a
+            // project answer cannot tell them apart.
+            let agent = match change.at {
+                Focus::Ws { p, w } => self
+                    .session
+                    .workspace(p, w)
+                    .and_then(|ws| ws.active_pane())
+                    .and_then(|pane| pane.occupant.agent())
+                    .map(|k| k.name.clone()),
+                Focus::Layout(_) => None,
+            };
+            let quiet = match self.cfg.sound.about(agent.as_deref()) {
+                config::Says::Yes => false,
+                config::Says::No => true,
+                config::Says::Nothing => self.project_of(change.at).is_some_and(|p| !p.sound),
+            };
             self.alert(
                 change.to,
                 format!("{} {what}", change.label),
