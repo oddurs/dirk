@@ -2078,26 +2078,37 @@ fn every_pane_can_carry_a_rule_that_says_which_one_has_the_keyboard() {
     );
 }
 
+/// Which column the pane focus mark is in, so a click can be seen to have moved
+/// it. Boards are not usable for this: one whose program is not installed is
+/// dropped at startup, so which rows exist depends on the machine.
+fn focus_mark(h: &Harness) -> Option<usize> {
+    h.rows().iter().find_map(|row| row.find('\u{258A}'))
+}
+
 #[test]
 fn the_mouse_can_be_left_to_the_terminal_that_owns_it() {
     // All or nothing. dirk captures so it can decide per pane whether the
     // program inside wanted the click; declining hands the outer terminal its
     // own selection back, and everything a click reaches has a key.
-    let mut off = Harness::start_with_config("[ui]\nmouse = false\n");
+    let ruled = "[ui]\npane_rules = \"always\"\n";
+    let mut off = Harness::start_with_config(&format!("{ruled}mouse = false\n"));
     assert!(off.wait_for(READY, START), "never started\n{}", off.drawn());
-
-    // A click that would open a board does nothing. Dropped rather than merely
-    // not asked for: the setting has to hold when something else has turned
-    // reporting on.
-    let row = off
-        .rows()
-        .iter()
-        .position(|r| r.contains("ptop"))
-        .expect("a board to click") as u16;
-    off.click(4, row);
-    std::thread::sleep(Duration::from_millis(400));
+    off.send(b"\x00|");
     assert!(
-        off.drawn().contains("+ workspace"),
+        off.wait_until(START, |h| rules(h) == 2),
+        "the split never drew\n{}",
+        off.drawn()
+    );
+    let was = focus_mark(&off).expect("a focused pane");
+
+    // A click into the other pane does nothing. Dropped rather than merely not
+    // asked for: the setting has to hold when something else turned reporting
+    // on.
+    off.click(40, 3);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        focus_mark(&off),
+        Some(was),
         "a click reached dirk after the mouse was turned off\n{}",
         off.drawn()
     );
@@ -2106,24 +2117,25 @@ fn the_mouse_can_be_left_to_the_terminal_that_owns_it() {
     // it off reasonable.
     off.send(b"\x00w");
     assert!(
-        off.wait_until(START, |h| h.drawn().contains('▸')),
+        off.wait_until(START, |h| h.drawn().contains('\u{25B8}')),
         "the nav could not be reached without a mouse\n{}",
         off.drawn()
     );
     drop(off);
 
-    // The same click, with the mouse on, does something.
-    let mut on = Harness::start();
+    // The same click, with the mouse on, moves the focus.
+    let mut on = Harness::start_with_config(ruled);
     assert!(on.wait_for(READY, START), "never started\n{}", on.drawn());
-    let row = on
-        .rows()
-        .iter()
-        .position(|r| r.contains("ptop"))
-        .expect("a board to click") as u16;
-    on.click(4, row);
+    on.send(b"\x00|");
     assert!(
-        on.wait_until(START, |h| !h.drawn().contains("+ workspace")
-            || h.drawn().contains("ptop")),
+        on.wait_until(START, |h| rules(h) == 2),
+        "the split never drew\n{}",
+        on.drawn()
+    );
+    let was = focus_mark(&on).expect("a focused pane");
+    on.click(40, 3);
+    assert!(
+        on.wait_until(START, |h| focus_mark(h) != Some(was)),
         "a click did nothing with the mouse on\n{}",
         on.drawn()
     );

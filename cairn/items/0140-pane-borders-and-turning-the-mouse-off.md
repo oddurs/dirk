@@ -2,10 +2,10 @@
 id: 140
 title: Pane borders, and turning the mouse off
 type: feature
-status: backlog
+status: done
 milestone: v0.8
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p3
 area: chrome
 effort: s
@@ -61,3 +61,8 @@ pointing device, and `--remote` should do what the laptop says.
 border to grab, so if that lands first this one is its blocker rather than a
 separate tidy-up. The `mouse = false` half is the same argument the
 mouse-first milestone makes in `when there is no pointer`: all or nothing.
+
+CI caught the test rather than the code: it clicked a board row, and a board
+whose program is not installed is dropped at startup — `ptop` is not on a CI
+runner, so which rows exist depends on the machine. It now clicks into a pane
+and watches the focus mark, which exists wherever dirk does.
