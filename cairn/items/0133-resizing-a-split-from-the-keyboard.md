@@ -30,3 +30,8 @@ The rail says which mode you are in, as it does for the nav.
 - [ ] Nested splits resize the boundary that is actually there, not the outermost
 - [ ] Minimum sizes hold; a pane cannot be resized to nothing
 - [ ] The rail names the mode
+
+**Related.** This is the keyboard half. `splits resize by dragging the border
+between them` is the pointer half, and both are wanted: a mode for precision
+and for anybody who never reaches for a pointer, a drag for "that one wants to
+be wider".
