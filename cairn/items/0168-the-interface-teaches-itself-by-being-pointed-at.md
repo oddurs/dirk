@@ -50,3 +50,9 @@ milestone is actually for, and the only item here that checks it end to end.
 - [ ] Nothing that taught something was removed before its replacement worked
 - [ ] The keys are still discoverable on screen, wherever that ends up being
 - [ ] The conclusion is written down, including if it is "leave it as it was"
+
+**Since this was written** the pane strip and the tab strip both arrived, and
+they carry controls with no keys printed on them. So the question is no longer
+only what the footers are for -- it is whether a session now says its keys in
+one place, several, or nowhere, and whether that is a change anybody would
+notice as a loss.

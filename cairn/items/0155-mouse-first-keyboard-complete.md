@@ -15,33 +15,33 @@ depends_on:
 ---
 
 ## Problem
-The mouse works and is second-class. Every gesture in the interface today is a
-translation of a keyboard model: clicking a row you are already on folds it,
-because that is "the only thing left for that click to mean"; the footers under
-each section teach keys and offer no buttons; folding, the palette, finding and
-naming are keys with a click bolted beside them where somebody happened to add
-one.
+The mouse is second-class and the numbers say how much. dirk has twenty-six
+actions. **Fifteen of them cannot be reached by pointing at anything.** Every
+operation on a pane -- split, close, zoom, move, restart -- is keyboard-only,
+and so is every operation on a tab. The character `✕` appears in exactly one
+place in the whole interface.
 
-Inverting that is the milestone. What the milestone cannot do by itself is stop
-the keyboard rotting on the way, and a shift like this rots it quietly: the
-next action gets a click and no key, then the one after that, and a year later
-dirk does not work over a link that will not report a pointer.
+So the interface is not a mouse interface with gaps. It is a keyboard interface
+with six buttons on it.
 
 ## Proposal
 One sentence, in `AGENTS.md` beside the other things that have to be in your
 head, and a test that holds it rather than a promise that somebody will:
 
-> **Mouse-first, keyboard-complete.** Every action is reachable by pointing and
-> every action is reachable by key. Neither is a translation of the other.
+> **The pointer is how dirk is meant to be used. The keyboard can do
+> everything the pointer can.**
 
-`action.rs` already makes half of this checkable: `Action::ALL` is the table,
-and an action that is not in it does not exist. The other half needs the hit
-map to be able to say which actions it can reach, which is what makes this
-depend on the two items under it rather than being a change to a document.
+The two halves are not symmetric and saying so is the point. The pointer is
+what the interface is designed around, what it teaches, and what it shows you
+before you know anything. The keyboard is complete -- because this is a
+terminal, and ssh from a phone, a link that will not report motion, and thirty
+years of muscle memory are all real -- but completeness is a floor, not the
+design.
 
-The interesting case is the gestures that are not actions -- drag to resize,
-drag to move, drag to select. Those need a keyboard equivalent named in the
-same table, not a footnote admitting the mouse can do more.
+The asymmetry is what stops the obvious failure in each direction. Design for
+the keyboard and the mouse is a translation, which is what dirk is now. Design
+for the mouse and forget the floor, and dirk stops working in the place it
+lives.
 
 ## Acceptance criteria
 - [ ] The principle is in `AGENTS.md`, in one sentence, with the reasoning

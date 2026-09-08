@@ -22,7 +22,7 @@ Panes on a pty, a clickable sidebar, a rail, and naming. Single process:
 
 ## v0.11 — Pointing at it
 
-`··········` 0% · 0 of 14 done · due 2027-10-15
+`··········` 0% · 0 of 21 done · due 2027-10-15
 
 The sidebar is the product, and a sidebar is a thing you point at. dirk's is
 
@@ -42,6 +42,13 @@ The sidebar is the product, and a sidebar is a thing you point at. dirk's is
 - [ ] `0166` Double-click and middle-click mean one thing each <sup>feature · p2 · chrome</sup>
 - [ ] `0167` When there is no pointer <sup>feature · p1 · config</sup>
 - [ ] `0168` The interface teaches itself by being pointed at <sup>feature · p2 · chrome</sup>
+- [ ] `0169` Fifteen of twenty-six actions cannot be reached by pointing <sup>bug · p0 · chrome</sup>
+- [ ] `0170` A pane has a strip, and the strip has its controls <sup>feature · p0 · chrome</sup>
+- [ ] `0171` The things you close have something to press <sup>feature · p1 · chrome</sup>
+- [ ] `0172` Tabs are a strip you point at, not rows in a list <sup>feature · p1 · chrome</sup>
+- [ ] `0173` An overlay closes the way an overlay closes <sup>feature · p1 · chrome</sup>
+- [ ] `0174` Taking a selection says that it was taken <sup>feature · p2 · chrome</sup>
+- [ ] `0175` A trackpad is not a wheel with two directions <sup>chore · p2 · mux</sup>
 
 ## v0.2 — The nav
 
