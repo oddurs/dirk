@@ -27,8 +27,26 @@ Naming already has a token and template system; these become tokens in it, so a
 row can be arranged to show one without a new configuration mechanism.
 
 ## Acceptance criteria
-- [ ] `pane metadata --set` and `--clear`, with a source name per writer
-- [ ] Tokens are available to naming templates and nav rows
-- [ ] Setting one never affects state, ordering or notifications
-- [ ] Tokens are ephemeral: they do not survive a cold restart
-- [ ] Documented beside `agent state`, saying plainly which one to reach for
+- [x] `pane metadata <pane> key=value`, and an empty value clears — no source, see below
+- [x] Tokens are available to naming templates and nav rows
+- [x] Setting one never affects state, ordering or notifications
+- [x] Tokens are ephemeral: they do not survive a cold restart
+- [x] Documented beside `agent state`, saying plainly which one to reach for
+
+## 2026-09-08
+
+Namespaced as `{said.summary}` rather than flat. dirk checks its own token names
+against a list and reports a typo, and it cannot check somebody else's — so the
+two vocabularies are kept apart, which also means nobody's `summary` can shadow
+a token dirk adds later.
+
+No `--source`. herdr has one so that several writers can each own their tokens;
+dirk's are already scoped to a pane, and a source would double every key to
+solve a problem nobody in one session has. Last writer wins, and if two programs
+are writing the same token about the same pane they have a bigger disagreement
+than this could arbitrate.
+
+"nav rows" is met through naming: a template is what a row shows, and templates
+are where tokens are addressed. What that turned up is that a template only runs
+when naming has an intent to decide a label from — so the test has to give the
+pane a title before the token can appear, which is worth knowing.

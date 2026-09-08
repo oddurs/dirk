@@ -407,6 +407,28 @@ or until the pane produces output — because a pane producing text is not
 finished, whatever it said a minute ago. Without that rule a harness whose hook
 fires on stop but not on start sticks on `done` while it grinds.
 
+### Showing something that is not a state
+
+`dirk agent state` is how a program tells dirk what an agent is *doing*, and it
+has to stay a small closed set: it drives waits, notifications, ordering and the
+attention column, and dirk reasons about every value in it. Anything a program
+wants to *show* — an indexer's progress, a test count, which model is running —
+had nowhere else to go, so it had to become a state and then be reasoned about
+as one.
+
+```console
+$ dirk pane metadata --current summary=indexing
+$ dirk pane metadata --current summary=          # an empty value clears
+```
+
+These are addressed as `{said.summary}` in a naming template, which is what a
+row shows. The namespace is the point: dirk checks its own token names against
+a list and reports a typo, and it cannot check yours — so yours live somewhere
+a template makes obvious.
+
+Setting one never touches state, ordering or a notification, and none of them
+survive a restart. They describe a moment in a process that is gone.
+
 ### Being told
 
 Two events are worth hearing — an agent blocking, and an agent finishing — and

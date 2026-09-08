@@ -1902,6 +1902,32 @@ impl Session {
         }
     }
 
+    /// Record, or clear, something an outside program wants shown about a pane.
+    ///
+    /// An empty value clears rather than setting an empty one: a token that is
+    /// absent and a token that is the empty string render the same and mean
+    /// different things, and only one of them can be expressed on a command
+    /// line.
+    pub fn report_metadata(&mut self, id: PaneId, key: &str, value: &str) -> bool {
+        let Some(pane) = self.pane_anywhere_mut(id) else {
+            return false;
+        };
+        match value.trim().is_empty() {
+            true => {
+                pane.metadata.remove(key);
+            }
+            false => {
+                pane.metadata.insert(key.to_string(), value.to_string());
+            }
+        }
+        true
+    }
+
+    /// What has been said about a pane.
+    pub fn metadata(&mut self, id: PaneId) -> Option<std::collections::BTreeMap<String, String>> {
+        self.pane_anywhere_mut(id).map(|p| p.metadata.clone())
+    }
+
     /// Does this pane exist, and is anything still running in it?
     ///
     /// `None` is "no such pane" and `Some(false)` is "its program has exited",
@@ -2013,6 +2039,14 @@ impl Session {
     pub fn tokens(&self, p: usize, w: usize) -> crate::tokens::Tokens {
         use crate::tokens::Tokens;
         let mut t = Tokens::default();
+        if let Some(pane) = self
+            .projects
+            .get(p)
+            .and_then(|proj| proj.workspaces.get(w))
+            .and_then(|ws| ws.active_pane())
+        {
+            t.said(&pane.metadata);
+        }
         let Some(proj) = self.projects.get(p) else {
             return t;
         };

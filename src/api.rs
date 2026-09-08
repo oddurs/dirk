@@ -465,6 +465,11 @@ pub const COMMANDS: &[Command] = &[
         answer: "pane, matched",
     },
     Command {
+        name: "pane.metadata",
+        args: "<pane> [key=value]... (an empty value clears)",
+        answer: "pane, said",
+    },
+    Command {
         name: "pane.attach",
         args: "<pane> [--takeover]",
         answer: "pane, rows, cols, then that pane's screen until you detach",

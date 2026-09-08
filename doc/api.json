@@ -114,6 +114,14 @@
       ]
     },
     {
+      "name": "pane.metadata",
+      "args": "<pane> [key=value]... (an empty value clears)",
+      "answer": [
+        "pane",
+        "said"
+      ]
+    },
+    {
       "name": "pane.attach",
       "args": "<pane> [--takeover]",
       "answer": [
