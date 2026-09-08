@@ -2,10 +2,10 @@
 id: 126
 title: Install the hook, do not print it
 type: feature
-status: backlog
+status: done
 milestone: v0.7
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 priority: p0
 area: agents
 effort: m
