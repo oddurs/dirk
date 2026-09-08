@@ -259,6 +259,102 @@ pub fn strip_project(text: &str, project: &str) -> String {
     }
 }
 
+/// Shorten a label to fit, keeping the part that tells it from its neighbours.
+///
+/// `elide` cuts the tail, which is right for a path or an identifier and wrong
+/// for a label. Labels here come from intent, and an intent is *verb the noun*:
+/// the verb is shared with every other row and the noun is the whole of what
+/// distinguishes them. Cutting the tail keeps the shared half and throws away
+/// the distinguishing half, so a column of workspaces collapses into a column
+/// of `Building the …`.
+///
+/// The policy is to drop whole words from the front. Never part of a word: a
+/// label beginning mid-word reads as damage rather than as shortening, and the
+/// ellipsis already says something is missing.
+///
+/// One word that does not fit is the exception, and it falls back to keeping
+/// the head. A single word is identified by how it starts — `reorganis…` is a
+/// word you can guess at and `…anisation` is not.
+///
+/// What this deliberately does not do is look at the sibling labels. It would
+/// be more correct: shown together, two labels that differ only in their tails
+/// should keep their tails. But dropping the shared verb already separates the
+/// case that occurs — `Building the mux core` and `Building the release` are
+/// distinct the moment the verb goes — and the sibling-aware version costs
+/// every call site the whole set of its neighbours to fix a case that needs two
+/// labels agreeing to the last word.
+pub fn shorten(text: &str, max: usize, ellipsis: &str) -> String {
+    let width = |s: &str| crate::ui::cells(s) as usize;
+
+    if width(text) <= max {
+        return text.to_string();
+    }
+    let mark = width(ellipsis);
+    if max <= mark {
+        return ellipsis.to_string();
+    }
+
+    // A template can put a counter in front of the intent -- `#{n} {intent}` --
+    // and that counter is the whole of what tells two rows apart when their
+    // intents are similar. It is not prose and the rule below does not apply to
+    // it, so it is taken off the front and put back afterwards.
+    let (marker, body) = split_marker(text);
+    let kept = if marker.is_empty() {
+        0
+    } else {
+        width(marker) + 1
+    };
+
+    // The longest suffix of the prose that begins at a word boundary and still
+    // fits. Walking forward rather than back means the first one that fits is
+    // the longest.
+    let budget = max.saturating_sub(mark + kept);
+    let mut rest = body;
+    while let Some(cut) = rest.find(' ') {
+        rest = rest[cut + 1..].trim_start();
+        if width(rest) <= budget {
+            return format!(
+                "{marker}{}{ellipsis}{rest}",
+                if kept > 0 { " " } else { "" }
+            );
+        }
+    }
+
+    // One word, and it is too long. Nothing is gained by taking its end, and a
+    // marker that leaves no room for any of the word it introduces is not
+    // helping either.
+    crate::ui::elide(text, max, ellipsis)
+}
+
+/// Split a leading run of counters off a label.
+///
+/// A marker is short and has a digit in it: `#1`, `2`, `[12]`. The length is
+/// what keeps `vt100` out of it — a counter put there by a template is two or
+/// three columns, and a word that merely carries a number is prose like any
+/// other.
+///
+/// The last word is never a marker. A row showing a counter and nothing else
+/// has given up the only part anyone was reading.
+fn split_marker(text: &str) -> (&str, &str) {
+    let mut rest = text;
+    let mut end = 0;
+    while let Some((word, tail)) = rest.split_once(' ') {
+        if !is_marker(word) {
+            break;
+        }
+        rest = tail.trim_start();
+        end = text.len() - rest.len();
+    }
+    match end {
+        0 => ("", text),
+        _ => (text[..end].trim_end(), rest),
+    }
+}
+
+fn is_marker(word: &str) -> bool {
+    word.chars().any(|c| c.is_ascii_digit()) && crate::ui::cells(word) <= 4
+}
+
 /// The longest an agent name may be, matching herdr's `[a-z][a-z0-9_-]{0,31}`.
 pub const AGENT_NAME_MAX: usize = 32;
 
@@ -961,5 +1057,77 @@ mod tests {
             normalize("  ✳ Thinking about naming  "),
             "Thinking about naming"
         );
+    }
+
+    #[test]
+    fn shortening_a_label_keeps_the_word_that_distinguishes_it() {
+        // The bug this exists for: two intents sharing a verb elided to the
+        // same string, so a column of rows says the same thing twice.
+        assert_eq!(shorten("Building the mux core", 14, "…"), "…the mux core");
+        assert_eq!(shorten("Building the release", 14, "…"), "…the release");
+        assert_ne!(
+            shorten("Building the mux core", 14, "…"),
+            shorten("Building the release", 14, "…"),
+        );
+    }
+
+    #[test]
+    fn shortening_never_begins_in_the_middle_of_a_word() {
+        // `…ing the release` is a shortened label that reads as a damaged one.
+        for max in 6..24 {
+            let out = shorten("Building the release", max, "…");
+            if let Some(rest) = out.strip_prefix('…') {
+                assert!(
+                    "Building the release"
+                        .split(' ')
+                        .any(|w| rest.starts_with(w)),
+                    "at {max} columns it began mid-word: {out}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_word_that_does_not_fit_keeps_its_head() {
+        // A single word is identified by how it starts. There is no shared verb
+        // to drop, so the general rule has nothing to say and the old one is
+        // still the better answer.
+        assert_eq!(shorten("reorganisation", 10, "…"), "reorganis…");
+        assert_eq!(shorten("core", 10, "…"), "core");
+    }
+
+    #[test]
+    fn shortening_measures_columns_and_respects_the_glyph_set() {
+        // Three wide characters are six columns, and a set chosen for a
+        // terminal that cannot draw `▾` cannot draw `…` either.
+        assert_eq!(crate::ui::cells(&shorten("読み込み 読み込み", 9, "…")), 9);
+        assert_eq!(shorten("Building the release", 12, "~"), "~the release");
+        // Nothing to do is left exactly alone, ellipsis and all.
+        assert_eq!(shorten("Building", 8, "…"), "Building");
+    }
+
+    #[test]
+    fn there_is_always_room_for_the_mark() {
+        // Below the width of the ellipsis there is nothing truthful to say
+        // except that something is missing.
+        assert_eq!(shorten("Building the release", 1, "…"), "…");
+        assert_eq!(shorten("Building the release", 0, "…"), "…");
+    }
+
+    #[test]
+    fn a_counter_from_a_template_is_kept_at_the_front() {
+        // `#{n} {intent}` puts the counter first, and the counter is the whole
+        // of what tells two rows apart when their intents are alike. Dropping
+        // leading words must not reach it.
+        assert_eq!(
+            shorten("#1 Reading the vt100 grid", 18, "…"),
+            "#1 …the vt100 grid"
+        );
+        assert_eq!(shorten("2 Building the release", 14, "…"), "2 …the release");
+        // A word that merely carries a number is prose, and prose is droppable.
+        assert_eq!(shorten("vt100 grid parser", 13, "…"), "…grid parser");
+        // The last word is never a marker: a row showing only a counter has
+        // given up the part anyone was reading.
+        assert_eq!(shorten("#1", 1, "…"), "…");
     }
 }

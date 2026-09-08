@@ -973,11 +973,13 @@ fn a_label_is_arranged_by_its_template() {
     h.send(b"printf '\\033]2;Reading the vt100 grid\\007'\r");
     assert!(
         h.wait_until(Duration::from_secs(20), |h| {
+            // The counter, which is what the template arranged, and the end of
+            // the intent, which is what shortening keeps. Not `#1 Reading`:
+            // that asserts the intent was not shortened, which is a different
+            // test and no longer true at this width.
             h.rows().iter().any(|r| {
-                r.chars()
-                    .take(34)
-                    .collect::<String>()
-                    .contains("#1 Reading")
+                let row: String = r.chars().take(34).collect();
+                row.contains("#1 ") && row.contains("vt100 grid")
             })
         }),
         "the label was not arranged by the template\n{}",
@@ -992,10 +994,8 @@ fn a_label_is_arranged_by_its_template() {
     assert!(
         h.wait_until(Duration::from_secs(25), |h| {
             h.rows().iter().any(|r| {
-                r.chars()
-                    .take(34)
-                    .collect::<String>()
-                    .contains("#1 Something")
+                let row: String = r.chars().take(34).collect();
+                row.contains("#1 ") && row.contains("entirely")
             })
         }),
         "a templated label froze after one rename\n{}",
@@ -1024,6 +1024,37 @@ fn a_program_that_titles_itself_does_not_become_a_workspace_name() {
 }
 
 #[test]
+fn two_intents_sharing_a_verb_are_still_told_apart() {
+    // Elision used to cut the tail. The verb is shared with every other row and
+    // the noun is the whole of what tells them apart, so two workspaces both
+    // read "Building the …" and the list stopped being a way to choose between
+    // them. Rows are the place to assert it: they sit adjacent, which is the
+    // only situation in which two labels have to differ.
+    let mut h = Harness::start_with_config("[notify]\nenabled = false\n");
+    assert!(h.wait_for(READY, START), "never started");
+
+    h.send(b"printf '\\033]2;Building the mux core\\007'\r");
+    std::thread::sleep(Duration::from_secs(3));
+    h.prefix(b"n");
+    std::thread::sleep(Duration::from_millis(400));
+    h.send(b"printf '\\033]2;Building the release notes\\007'\r");
+
+    // The nav is the sidebar's width, so both labels are shortened there too.
+    assert!(
+        h.wait_until(Duration::from_secs(10), |h| {
+            let nav: Vec<String> = h
+                .rows()
+                .iter()
+                .map(|r| r.chars().take(34).collect())
+                .collect();
+            nav.iter().any(|r| r.contains("mux core")) && nav.iter().any(|r| r.contains("release"))
+        }),
+        "two workspaces sharing a verb were not told apart\n{}",
+        h.drawn()
+    );
+}
+
+#[test]
 fn the_second_source_enabled_without_a_key_changes_nothing() {
     // Every failure of the second source has to leave naming exactly where it
     // was without it: no key, no curl, a timeout, a bad answer, all the same.
@@ -1046,11 +1077,14 @@ interval_ms = 0
     h.send(b"printf '\\033]2;Still named by the title\\007'\r");
     assert!(
         h.wait_until(Duration::from_secs(20), |h| {
+            // The tail of the title rather than its head: what this test is
+            // about is that the title named the workspace and the second
+            // source did not, and either end proves that.
             h.rows().iter().any(|r| {
                 r.chars()
                     .take(34)
                     .collect::<String>()
-                    .contains("Still named by")
+                    .contains("by the title")
             })
         }),
         "naming stopped working with the second source enabled\n{}",

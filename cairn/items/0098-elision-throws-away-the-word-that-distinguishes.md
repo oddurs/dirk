@@ -2,8 +2,9 @@
 id: 98
 title: Elision throws away the word that distinguishes
 type: bug
-status: backlog
+status: done
 milestone: v0.5
+assignee: oddurs
 labels:
 - rail
 created: 2026-09-07
@@ -50,3 +51,24 @@ the version that is actually correct; the first is most of the value.
 3. Both chips read the same.
 
 Design note: https://claude.ai/code/artifact/0540f4dc-aa3a-4eea-af94-42d910635ce0
+
+## 2026-09-08
+
+**Settled: whole words from the front, and no sibling awareness.**
+
+Dropping leading words is most of the value and all of the reported case:
+`Building the mux core` and `Building the release` are distinct the moment the
+verb goes. Sibling awareness only earns anything when two labels agree to the
+last word, and it would cost every call site the whole set of its neighbours.
+
+Never part of a word, either. A label that begins mid-word reads as damage
+rather than as shortening, and the ellipsis has already said something is
+missing. The exception is one word that does not fit on its own: there is no
+shared verb to drop, and a single word is identified by how it starts —
+`reorganis…` is a word you can guess at and `…anisation` is not.
+
+`shorten` is in `name.rs` beside the rest of the naming policy, and is unit
+tested there. It is applied to the three places that draw an intent — the nav
+row, the tab label and the rail chip — and to nothing else. A pane's occupant,
+a board's configured name and an exit explanation are identifiers or sentences,
+and the head is what identifies those.
