@@ -20,6 +20,29 @@ Panes on a pty, a clickable sidebar, a rail, and naming. Single process:
 - [x] `0006` Project picker <sup>feature · p1 · nav</sup>
 - [x] `0016` README and install <sup>docs · p1 · docs</sup>
 
+## v0.11 — Pointing at it
+
+`··········` 0% · 0 of 14 done · due 2027-10-15
+
+The sidebar is the product, and a sidebar is a thing you point at. dirk's is
+
+### backlog
+
+- [ ] `0155` Mouse-first, keyboard-complete <sup>chore · p0 · docs</sup>
+- [ ] `0156` A pointer is a gesture, not a chain of special cases <sup>chore · p0 · chrome</sup>
+- [ ] `0157` The hit map says what is there, not only what a click does <sup>feature · p0 · chrome</sup>
+- [ ] `0158` Every pointer move costs a frame and buys nothing <sup>bug · p0 · perf</sup>
+- [ ] `0159` Who owns the mouse inside a pane <sup>spike · p0 · mux</sup>
+- [ ] `0160` The pointer leaves a trace <sup>feature · p0 · chrome</sup>
+- [ ] `0161` Right-click: every action, where you are pointing <sup>feature · p0 · chrome</sup>
+- [ ] `0162` What can be clicked looks different from what cannot <sup>feature · p1 · chrome</sup>
+- [ ] `0163` Splits resize by dragging the border between them <sup>feature · p1 · layout</sup>
+- [ ] `0164` A scrollbar that shows the depth and takes a drag <sup>feature · p1 · chrome</sup>
+- [ ] `0165` Drag a pane to where you want it <sup>feature · p2 · mux</sup>
+- [ ] `0166` Double-click and middle-click mean one thing each <sup>feature · p2 · chrome</sup>
+- [ ] `0167` When there is no pointer <sup>feature · p1 · config</sup>
+- [ ] `0168` The interface teaches itself by being pointed at <sup>feature · p2 · chrome</sup>
+
 ## v0.2 — The nav
 
 `##########` 100% · 16 of 16 done · due 2026-10-15

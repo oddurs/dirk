@@ -31,3 +31,8 @@ nothing, because a half-captured mouse is a mode you have to remember.
 - [ ] `mouse = false` requests no mouse reporting at all
 - [ ] With the mouse off, everything reachable by click is reachable by key
 - [ ] Both apply on reload without a restart
+
+**Related.** `splits resize by dragging the border between them` needs a
+border to grab, so if that lands first this one is its blocker rather than a
+separate tidy-up. The `mouse = false` half is the same argument the
+mouse-first milestone makes in `when there is no pointer`: all or nothing.
