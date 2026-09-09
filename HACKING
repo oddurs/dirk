@@ -100,6 +100,38 @@ whether a change to the chrome did what you meant, and it pastes into an issue
 far better than a screenshot of a terminal does.
 
 
+Seeing it run
+-------------
+
+    $ make dev           # once, anywhere in the repository
+    $ dirk-dev           # in any terminal: attach to the dev session
+
+`make dev` builds, then watches `src`, `tests` and the manifest in this
+checkout and in every worktree beside it, and on every change builds the tree
+that changed and hands the running `dev` session over to the result with
+`session handoff`. Every shell and agent in the session survives, because a
+handoff is an `exec` and not a restart, and the attached terminal comes back
+on its own as the new binary. A build that fails leaves the session on what it
+had, and the log says which tree and commit it is running.
+
+Every tree rather than this one because the loop puts each piece of work in a
+worktree of its own: an agent editing one of them sees its change running
+without anyone restarting the watcher there. When two trees change, the later
+one wins.
+
+The session runs from a copy of the binary under `~/.cache/dirk/dev`, not from
+any `target/`, which is what lets one session be handed builds from several
+trees: the path a server execs is its own, so it has to be the same path every
+time. It is a separate session from your everyday `dirk`, with its own name
+and socket, and the two binaries never meet.
+
+Handing off is off by default, for the reason `[session] handoff` gives in the
+manual; `make dev` needs it on in `~/.config/dirk/config.toml`:
+
+    [session]
+    handoff = true
+
+
 Testing a program that draws a terminal
 ---------------------------------------
 
