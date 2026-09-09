@@ -44,7 +44,7 @@ protocol dirk does not speak, which is how those protocols say "unsupported".
 
 ## Acceptance criteria
 
-- [x] DA1, DA2, DA3, DSR, CPR and XTVERSION are answered
+- [x] DA1, DA2, DSR, CPR and XTVERSION are answered; DA3 is not
 - [x] fish reaches its prompt without the warning
 - [x] A query is answered only while the program is reading, so a program that
       floods the pane with queries cannot wedge dirk in `write`
@@ -60,10 +60,14 @@ chunk and sends them to the loop as `Ev::Answer`; the loop writes them.
 Two decisions worth keeping:
 
 - The loop writes, not the reader thread, and it polls the pty for `POLLOUT`
-  first. A program that floods its pane with questions and never reads would
-  fill the pty's input queue, and from there `write` blocks. The reader thread
-  blocking is the deadlock `tests/smoke.rs` warns about, turned inside out. A
-  terminal's driver drops input at that point; so does this.
+  before *every byte*. A program that floods its pane with questions and never
+  reads would fill the pty's input queue, and from there `write` blocks. The
+  reader thread blocking is the deadlock `tests/smoke.rs` warns about, turned
+  inside out. A terminal's driver drops input at that point; so does this.
+  Per byte, because `POLLOUT` promises room for one: on macOS a master reports
+  writable with a single byte free and a blocking write of more sits until the
+  program reads, which review proved with a stuck raw-mode reader. A reply cut
+  short is garbage, but only to a program that is not reading it.
 
 - The kitty keyboard query and DECRQM get no answer. Silence is how those
   protocols say "unsupported", and it is safe only because DA1 *is* answered:

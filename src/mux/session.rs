@@ -1768,17 +1768,6 @@ fn resize_tree(ws: &mut Workspace, area: Rect, ui: &crate::config::Ui) {
 }
 
 impl Session {
-    /// Note that a pane produced output.
-    ///
-    /// Both the pane's own clock and the workspace's: the pane's decides
-    /// whether its agent is working, and the workspace's is the age in the nav,
-    /// which is about the workspace as a whole.
-    ///
-    /// Deliberately does *not* return a scrolled pane to the bottom. Being
-    /// scrolled back is a thing you asked for, and a build that prints a line
-    /// every second would otherwise drag you out of what you were reading --
-    /// which is the reason to be reading it. Typing is what brings you back,
-    /// because typing is a statement about the live screen.
     /// One pane, wherever it is, for something addressed to it by id.
     pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
         let layouts = self.layouts.iter_mut().filter_map(|l| l.ws.as_mut());
@@ -1792,6 +1781,17 @@ impl Session {
             .find(|p| p.id == id)
     }
 
+    /// Note that a pane produced output.
+    ///
+    /// Both the pane's own clock and the workspace's: the pane's decides
+    /// whether its agent is working, and the workspace's is the age in the nav,
+    /// which is about the workspace as a whole.
+    ///
+    /// Deliberately does *not* return a scrolled pane to the bottom. Being
+    /// scrolled back is a thing you asked for, and a build that prints a line
+    /// every second would otherwise drag you out of what you were reading --
+    /// which is the reason to be reading it. Typing is what brings you back,
+    /// because typing is a statement about the live screen.
     pub fn touch(&mut self, id: PaneId) {
         let now = Instant::now();
         let mark = |ws: &mut Workspace| -> bool {

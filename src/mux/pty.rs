@@ -128,14 +128,19 @@ impl vt100::Callbacks for Sink {
 
 pub type Term = vt100::Parser<Sink>;
 
-/// Whether the pty would take a write now, without waiting for it.
+/// Whether the pty would take one byte now, without waiting for it.
+///
+/// One byte is all `POLLOUT` promises. macOS reports a master writable with
+/// a single byte of room in the line's queue, and a blocking write of more
+/// than that room sits until something reads; Linux promises 256. Either way
+/// the answer is per byte, and so is the write that follows it.
 fn writable(fd: std::os::fd::RawFd) -> bool {
     let mut p = libc::pollfd {
         fd,
         events: libc::POLLOUT,
         revents: 0,
     };
-    // One descriptor, and the count says so; a zero timeout returns at once.
+    // The pollfd outlives the call and the count matches it.
     let ready = unsafe { libc::poll(&mut p, 1, 0) };
     ready > 0 && p.revents & libc::POLLOUT != 0
 }
@@ -519,12 +524,21 @@ impl Pane {
     /// floods its pane with questions and never reads is exactly the one that
     /// fills it — from there the loop would hang on a pane that had stopped
     /// listening. A terminal's driver drops input at that point, and so does
-    /// this, by asking first. A reply is only owed while something is reading
-    /// for it.
+    /// this: each byte is written only after the pty has said it will take
+    /// one, and the rest of the reply is dropped the moment it will not. A
+    /// reply cut short is garbage to the program, but a program whose queue
+    /// is full is not reading it, and one that starts again gets its next
+    /// question answered whole.
     pub fn answer(&mut self, bytes: &[u8]) {
-        if self.master.raw_fd().is_some_and(writable) {
-            self.write(bytes);
+        let Some(fd) = self.master.raw_fd() else {
+            return;
+        };
+        for b in bytes {
+            if !writable(fd) || self.writer.write_all(std::slice::from_ref(b)).is_err() {
+                break;
+            }
         }
+        let _ = self.writer.flush();
     }
 
     /// The process group the tty currently has in the foreground.
