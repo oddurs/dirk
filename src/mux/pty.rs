@@ -23,9 +23,12 @@
 //! grid. The parser is behind a mutex because exactly two threads touch it: the
 //! reader writes, the renderer reads.
 //!
-//! The parser carries a [`TitleSink`] so OSC title sequences are captured
-//! rather than discarded. That is not a detail — an agent's own summary of what
-//! it is doing arrives that way, and it is the entire input to `name.rs`.
+//! The parser carries a [`Sink`] so OSC title sequences are captured rather
+//! than discarded. That is not a detail — an agent's own summary of what it is
+//! doing arrives that way, and it is the entire input to `name.rs`. The same
+//! sink collects the answers a program is owed: a terminal is asked questions
+//! as well as told things, and one that never answers is one every shell waits
+//! on before it prints a prompt.
 
 use crate::mux::Ev;
 use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
@@ -36,22 +39,106 @@ use std::sync::{Arc, Mutex};
 
 pub type PaneId = u64;
 
-/// Captures `ESC ] 2 ; <title> BEL`. vt100 drops window titles on the floor
-/// unless a callback claims them, and this is the only reason dirk installs
-/// callbacks at all.
+/// What the parser hands back: the title a program set, and the answers it
+/// is owed.
+///
+/// vt100 drops window titles on the floor unless a callback claims them, and
+/// for a long time that was the only reason dirk installed callbacks at all.
+/// It also drops every question a program asks its terminal, and a program
+/// that asks one waits for the reply: fish 4 sits for ten seconds on an
+/// unanswered "who are you" before it prints its first prompt.
 #[derive(Default)]
-pub struct TitleSink {
+pub struct Sink {
+    /// `ESC ] 2 ; <title> BEL`, the most recent.
     pub title: Option<String>,
+    /// Replies owed to the program, in the order it asked. The reader thread
+    /// takes them after every chunk and hands them to the loop, which is the
+    /// one thing that writes to a pane.
+    pub answers: Vec<u8>,
 }
 
-impl vt100::Callbacks for TitleSink {
+/// Who a pane's terminal says it is: a VT220 with colour, which is about what
+/// vt100 emulates. Not the xterm answer, whatever `TERM` claims — a program
+/// that believes it is talking to xterm starts using things the parser has
+/// never heard of.
+const DA1: &[u8] = b"\x1b[?62;22c";
+
+/// The secondary attributes. The first number is the terminal's own letter,
+/// the way tmux answers 84 for `T`, and the version is zero. Nothing reads
+/// more than the shape of this, and vim in particular reads a small version as
+/// "not xterm", which is right.
+const DA2: &[u8] = b"\x1b[>100;0;0c";
+
+/// How much of a reply is owed per chunk of output.
+///
+/// A program that asks a thousand questions in one write is not waiting for
+/// any of them, and a pane that answered every one would have that much to
+/// write into a pty nothing is reading from.
+const OWED: usize = 256;
+
+impl vt100::Callbacks for Sink {
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         let t = String::from_utf8_lossy(title).trim().to_string();
         self.title = if t.is_empty() { None } else { Some(t) };
     }
+
+    /// The questions a program asks its terminal, and the answers.
+    ///
+    /// Only what dirk can stand behind. A query for a protocol the pane does
+    /// not speak — the kitty keyboard protocol's `CSI ? u`, a `DECRQM` for a
+    /// mode vt100 does not track — gets nothing, because silence is how those
+    /// protocols say "unsupported". That is safe precisely because DA1 is
+    /// answered: every program that probes sends DA1 last and stops waiting
+    /// when it comes back.
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        i1: Option<u8>,
+        _i2: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        if self.answers.len() >= OWED {
+            return;
+        }
+        let first = params.first().and_then(|p| p.first()).copied().unwrap_or(0);
+        let (row, col) = screen.cursor_position();
+        let (row, col) = (u32::from(row) + 1, u32::from(col) + 1);
+        match (i1, c, first) {
+            (None, 'c', 0) => self.answers.extend_from_slice(DA1),
+            (Some(b'>'), 'c', 0) => self.answers.extend_from_slice(DA2),
+            // DSR: "are you all right", and "where is the cursor", one-based.
+            (None, 'n', 5) => self.answers.extend_from_slice(b"\x1b[0n"),
+            (None, 'n', 6) => self
+                .answers
+                .extend_from_slice(format!("\x1b[{row};{col}R").as_bytes()),
+            (Some(b'?'), 'n', 6) => self
+                .answers
+                .extend_from_slice(format!("\x1b[?{row};{col};1R").as_bytes()),
+            // XTVERSION, which fish reads to decide which terminal it is
+            // working around. Named for what it is, so a workaround for
+            // something else is not applied here.
+            (Some(b'>'), 'q', 0) => self.answers.extend_from_slice(
+                concat!("\x1bP>|dirk ", env!("CARGO_PKG_VERSION"), "\x1b\\").as_bytes(),
+            ),
+            _ => {}
+        }
+    }
 }
 
-pub type Term = vt100::Parser<TitleSink>;
+pub type Term = vt100::Parser<Sink>;
+
+/// Whether the pty would take a write now, without waiting for it.
+fn writable(fd: std::os::fd::RawFd) -> bool {
+    let mut p = libc::pollfd {
+        fd,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    // One descriptor, and the count says so; a zero timeout returns at once.
+    let ready = unsafe { libc::poll(&mut p, 1, 0) };
+    ready > 0 && p.revents & libc::POLLOUT != 0
+}
 
 pub struct Pane {
     pub id: PaneId,
@@ -301,6 +388,10 @@ impl Pane {
         if let Ok(mut term) = pane.term.lock() {
             term.process(&note.modes.sequences());
             term.process(&crate::handoff::unbase64(&note.screen));
+            // The replay is what the screen looked like, not what was said to
+            // it. Nothing in it is a question, and the image that heard the
+            // questions answered them.
+            term.callbacks_mut().answers.clear();
         }
         Ok(pane)
     }
@@ -327,7 +418,7 @@ impl Pane {
             rows,
             cols,
             scrollback,
-            TitleSink::default(),
+            Sink::default(),
         )));
 
         let sink = Arc::clone(&term);
@@ -346,8 +437,10 @@ impl Pane {
                         // The graphics come out first: vt100 would swallow them
                         // and there is no way to ask it what it swallowed.
                         let (text, drawn) = apc.take(&buf[..n]);
+                        let mut owed = Vec::new();
                         if let Ok(mut t) = sink.lock() {
                             t.process(&text);
+                            owed = std::mem::take(&mut t.callbacks_mut().answers);
                             if !drawn.is_empty()
                                 && let Ok(mut store) = drawing.lock()
                             {
@@ -362,6 +455,9 @@ impl Pane {
                         }
                         // A send failure means the UI is gone; so is the reason
                         // to keep reading.
+                        if !owed.is_empty() && tx.send(Ev::Answer(id, owed)).is_err() {
+                            return;
+                        }
                         if tx.send(Ev::Output(id)).is_err() {
                             return;
                         }
@@ -415,6 +511,20 @@ impl Pane {
     pub fn write(&mut self, bytes: &[u8]) {
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
+    }
+
+    /// Answer something the program asked, if it is still listening.
+    ///
+    /// `write` blocks once the pty's input queue is full, and a program that
+    /// floods its pane with questions and never reads is exactly the one that
+    /// fills it — from there the loop would hang on a pane that had stopped
+    /// listening. A terminal's driver drops input at that point, and so does
+    /// this, by asking first. A reply is only owed while something is reading
+    /// for it.
+    pub fn answer(&mut self, bytes: &[u8]) {
+        if self.master.raw_fd().is_some_and(writable) {
+            self.write(bytes);
+        }
     }
 
     /// The process group the tty currently has in the foreground.
@@ -521,6 +631,63 @@ impl Drop for Pane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a program that wrote `bytes` to its pane would be answered.
+    fn asked(bytes: &[u8]) -> Vec<u8> {
+        let mut term = Term::new_with_callbacks(24, 80, 0, Sink::default());
+        term.process(bytes);
+        std::mem::take(&mut term.callbacks_mut().answers)
+    }
+
+    #[test]
+    fn who_are_you_is_answered_with_what_vt100_is() {
+        assert_eq!(asked(b"\x1b[c"), DA1);
+        assert_eq!(asked(b"\x1b[0c"), DA1);
+        assert_eq!(asked(b"\x1b[>c"), DA2);
+        assert_eq!(asked(b"\x1b[>0c"), DA2);
+    }
+
+    #[test]
+    fn the_cursor_is_reported_one_based() {
+        assert_eq!(asked(b"abc\x1b[6n"), b"\x1b[1;4R");
+        assert_eq!(asked(b"\r\n\x1b[?6n"), b"\x1b[?2;1;1R");
+        assert_eq!(asked(b"\x1b[5n"), b"\x1b[0n");
+    }
+
+    #[test]
+    fn the_version_is_the_one_cargo_built() {
+        let reply = asked(b"\x1b[>q");
+        let text = String::from_utf8(reply).unwrap();
+        assert_eq!(
+            text,
+            format!("\x1bP>|dirk {}\x1b\\", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    /// What fish 4 sends at startup: a kitty keyboard query, then DA1 as the
+    /// terminator. The first is not answered, because saying nothing is how a
+    /// terminal declines that protocol; the second is, or fish waits ten
+    /// seconds.
+    #[test]
+    fn a_protocol_dirk_does_not_speak_gets_silence_and_da1_still_comes_back() {
+        assert_eq!(asked(b"\x1b[?u\x1b[c"), DA1);
+        assert!(asked(b"\x1b[?2026$p\x1b[=c").is_empty());
+    }
+
+    #[test]
+    fn answers_come_back_in_the_order_asked() {
+        let mut want = b"\x1b[1;1R".to_vec();
+        want.extend_from_slice(DA1);
+        assert_eq!(asked(b"\x1b[6n\x1b[c"), want);
+    }
+
+    #[test]
+    fn a_flood_of_questions_is_answered_only_so_far() {
+        let flood = b"\x1b[c".repeat(1000);
+        let owed = asked(&flood);
+        assert!(!owed.is_empty());
+        assert!(owed.len() < OWED + DA1.len(), "{}", owed.len());
+    }
 
     /// A pane running something that will sit still, and its grid.
     fn a_pane() -> (Pane, Arc<Mutex<Term>>) {

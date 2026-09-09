@@ -1779,6 +1779,19 @@ impl Session {
     /// every second would otherwise drag you out of what you were reading --
     /// which is the reason to be reading it. Typing is what brings you back,
     /// because typing is a statement about the live screen.
+    /// One pane, wherever it is, for something addressed to it by id.
+    pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        let layouts = self.layouts.iter_mut().filter_map(|l| l.ws.as_mut());
+        let projects = self
+            .projects
+            .iter_mut()
+            .flat_map(|p| p.workspaces.iter_mut());
+        layouts
+            .chain(projects)
+            .flat_map(Workspace::every_pane_mut)
+            .find(|p| p.id == id)
+    }
+
     pub fn touch(&mut self, id: PaneId) {
         let now = Instant::now();
         let mark = |ws: &mut Workspace| -> bool {

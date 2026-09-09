@@ -1886,6 +1886,11 @@ impl App {
                 self.session.apply_agents(reading);
                 self.session.name_agents(&self.cfg.naming);
             }
+            Ev::Answer(id, bytes) => {
+                if let Some(pane) = self.session.pane_mut(id) {
+                    pane.answer(&bytes);
+                }
+            }
             Ev::Exited(id) => {
                 self.session.reap(id);
                 self.session.refocus();

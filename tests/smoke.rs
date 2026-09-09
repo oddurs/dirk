@@ -444,6 +444,25 @@ fn a_shell_in_a_pane_runs_and_echoes() {
     );
 }
 
+/// A program asks its terminal who it is and gets an answer, through the pty,
+/// the way fish does at every start. Without this, fish waits ten seconds for
+/// a reply before it prints a prompt.
+#[test]
+fn a_question_asked_in_a_pane_is_answered() {
+    let mut h = Harness::start();
+    assert!(h.wait_for(READY, START), "never started");
+
+    // Raw and quiet, because the reply has no newline for `read` to stop at
+    // and the tty would otherwise echo it back in a form that looks like the
+    // answer. The escape is made visible so the assertion can find it.
+    h.send(b"stty -icanon -echo; printf '\\033[c'; head -c 9 | tr '\\033' '^'; stty icanon echo\r");
+    assert!(
+        h.wait_for("^[?62;22c", Duration::from_secs(10)),
+        "no answer came back; dirk drew:\n{}",
+        h.drawn()
+    );
+}
+
 #[test]
 fn the_prefix_opens_the_picker_and_escape_closes_it() {
     let mut h = Harness::start();
