@@ -229,7 +229,7 @@ A session survives detaching. It should also survive the binary changing under
 
 ## v0.10 — More than one machine
 
-`####······` 33% · 3 of 9 done · due 2027-09-15
+`###·······` 30% · 3 of 10 done · due 2027-09-15
 
 Local and several saved machines in one nav, one agent list across all of them,
 
@@ -241,6 +241,10 @@ Local and several saved machines in one nav, one agent list across all of them,
 - [ ] `0193` The questions only the outer terminal can answer <sup>feature · p3 · pty</sup>
 - [ ] `0194` A terminal that says it is zero by zero panics the pane's parser <sup>bug · p2 · pty</sup>
 - [ ] `0197` A pane that panicked once blocks every handoff after it <sup>bug · p2 · server</sup>
+
+### in progress
+
+- [ ] `0198` A one-off script for editing items is committed at the root <sup>chore · p3 · packaging</sup>
 
 ### done
 
