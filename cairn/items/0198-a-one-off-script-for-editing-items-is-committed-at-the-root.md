@@ -2,10 +2,9 @@
 id: 198
 title: A one-off script for editing items is committed at the root
 type: chore
-status: doing
+status: done
 milestone: v0.10
 assignee: Oddur Sigurdsson
-claimed: 2026-09-08
 created: 2026-09-08
 updated: 2026-09-08
 priority: p3
