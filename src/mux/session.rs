@@ -1768,6 +1768,19 @@ fn resize_tree(ws: &mut Workspace, area: Rect, ui: &crate::config::Ui) {
 }
 
 impl Session {
+    /// One pane, wherever it is, for something addressed to it by id.
+    pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        let layouts = self.layouts.iter_mut().filter_map(|l| l.ws.as_mut());
+        let projects = self
+            .projects
+            .iter_mut()
+            .flat_map(|p| p.workspaces.iter_mut());
+        layouts
+            .chain(projects)
+            .flat_map(Workspace::every_pane_mut)
+            .find(|p| p.id == id)
+    }
+
     /// Note that a pane produced output.
     ///
     /// Both the pane's own clock and the workspace's: the pane's decides

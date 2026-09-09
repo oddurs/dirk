@@ -148,6 +148,13 @@ finding out what dirk can do no longer means reading its source.
 
 ** Fixes
 
+A pane never answered what the program in it asked.  fish 4 asks its terminal
+who it is at every start and waited ten seconds for a reply that never came,
+so every new shell took ten seconds to reach a prompt; vim and neovim did the
+same wait more quietly.  A pane now answers for itself — who it is, where its
+cursor is, which dirk this is — and says nothing to a protocol it does not
+speak, which is how those protocols say no.
+
 A CLI answer through a closed pipe used to end in a backtrace.  `dirk session
 list | head -1` now ends the way every other program on the system ends.
 

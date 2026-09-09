@@ -227,7 +227,10 @@ fn remove(doc: &mut Value, event: &str) -> usize {
     list.retain(|group| {
         let mut found = Vec::new();
         collect(Some(group), &mut found);
-        !(!found.is_empty() && found.iter().all(|c| agent::ours(c)))
+        // Gone only when it is ours and nothing else's -- and not when it is
+        // empty, which is a group somebody wrote by hand and has not filled.
+        let ours = !found.is_empty() && found.iter().all(|c| agent::ours(c));
+        !ours
     });
     before - list.len()
 }

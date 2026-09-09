@@ -52,6 +52,10 @@ pub enum Ev {
     /// The id is unused while dirk redraws whole frames; it is what a
     /// damage-tracked renderer would key on.
     Output(#[allow(dead_code)] PaneId),
+    /// The program in a pane asked its terminal something, and this is the
+    /// reply. Written by the loop rather than the reader thread, because the
+    /// reader must never block on a pty the program has stopped reading.
+    Answer(PaneId, Vec<u8>),
     Exited(PaneId),
     /// A sample of what is running in each pane finished.
     Agents(crate::agent::Reading),
