@@ -155,6 +155,10 @@ same wait more quietly.  A pane now answers for itself — who it is, where its
 cursor is, which dirk this is — and says nothing to a protocol it does not
 speak, which is how those protocols say no.
 
+A terminal attached through `session handoff` used to be cut and left at a
+shell prompt, with the reason lost on the way.  It now comes back on its own,
+as the new binary, which is what makes `make dev` a loop rather than a chore.
+
 A CLI answer through a closed pipe used to end in a backtrace.  `dirk session
 list | head -1` now ends the way every other program on the system ends.
 

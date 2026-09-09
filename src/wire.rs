@@ -84,6 +84,14 @@ pub enum Kind {
     /// session's — `{host}` is the machine the panes are on — and the terminal
     /// is the client's, which under `--remote` are two different machines.
     Title = 10,
+    /// The session is about to become a new binary, and this link ends with
+    /// it.
+    ///
+    /// Its own kind rather than a `Bye` with a particular reason, because the
+    /// two ask opposite things of a terminal: a `Bye` means stop, and this
+    /// means come back -- as the new binary, which the client is also about
+    /// to be.
+    Handoff = 11,
 }
 
 impl Kind {
@@ -99,6 +107,7 @@ impl Kind {
             8 => Kind::Clip,
             9 => Kind::Watch,
             10 => Kind::Title,
+            11 => Kind::Handoff,
             _ => return None,
         })
     }

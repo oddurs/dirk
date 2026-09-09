@@ -782,28 +782,6 @@ fn keep_across_exec(fd: i32) -> io::Result<()> {
     }
 }
 
-/// Replace this process's image with a new binary, as a server for the same
-/// session.
-///
-/// Returns only on failure. `execv` does not come back when it works: from the
-/// kernel's point of view this is the same process throughout, which is exactly
-/// why every child keeps the parent it had.
-fn exec_self(binary: &std::path::Path, session: &str) -> io::Error {
-    use std::ffi::CString;
-    let Ok(path) = CString::new(binary.as_os_str().as_encoded_bytes()) else {
-        return io::Error::other("the binary's path cannot be passed to exec");
-    };
-    let args = ["dirk", "--session", session, "server"];
-    let owned: Vec<CString> = args.iter().filter_map(|a| CString::new(*a).ok()).collect();
-    if owned.len() != args.len() {
-        return io::Error::other("the arguments cannot be passed to exec");
-    }
-    let mut argv: Vec<*const libc::c_char> = owned.iter().map(|a| a.as_ptr()).collect();
-    argv.push(std::ptr::null());
-    unsafe { libc::execv(path.as_ptr(), argv.as_ptr()) };
-    io::Error::last_os_error()
-}
-
 /// Be the session.
 fn serve(session: &str, path: &std::path::Path) -> io::Result<()> {
     // A note from the image this one replaced, if that is what happened. Read
@@ -1315,7 +1293,8 @@ impl App {
         self.announce_handoff();
 
         unsafe { std::env::set_var("DIRK_HANDOFF", &at) };
-        let err = exec_self(&binary, &name);
+        let args = ["dirk", "--session", &name, "server"].map(String::from);
+        let err = handoff::exec(&binary, &args);
         // Only reached when `exec` refused, which leaves this process entirely
         // intact -- so the note goes, the descriptors stay open, and the
         // session carries on as though nothing was attempted.
@@ -1336,12 +1315,14 @@ impl App {
             held.back.send(why.clone());
         }
         self.waits.clear();
+        // JSON, like every other reason, or the far end reads an empty one.
         for w in &mut self.watchers {
-            let _ = wire::send(&mut w.out, wire::Kind::Bye, b"the session handed off");
+            let _ = wire::send_json(&mut w.out, wire::Kind::Bye, &"the session handed off");
         }
         self.watchers.clear();
+        // Not a `Bye`: a terminal is cut so that it can come back.
         for v in &mut self.views {
-            let _ = wire::send(&mut v.out, wire::Kind::Bye, b"the session handed off");
+            let _ = wire::send_json(&mut v.out, wire::Kind::Handoff, &"");
         }
         self.views.clear();
     }

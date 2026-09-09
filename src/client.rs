@@ -326,6 +326,9 @@ fn run(dial: &mut Dial) -> io::Result<bool> {
 
         let painted = match end {
             Ok(End::Bye) => break Ok(true),
+            // Only ever reached when it did not happen: on success this
+            // process is the new client from here on.
+            Ok(End::Handoff) => break Err(come_back()),
             Ok(End::Dropped { painted }) => painted,
             Err(e) if !dial.patient => break Err(e),
             Err(_) => false,
@@ -435,8 +438,26 @@ fn config() -> &'static crate::config::Config {
 enum End {
     /// The session said so, and meant it.
     Bye,
+    /// The session is becoming a new binary, and this client should too.
+    Handoff,
     /// It stopped answering.
     Dropped { painted: bool },
+}
+
+/// Become the new binary, attached as before.
+///
+/// The same binary path this client was started from, which is the one the
+/// session just became, with the arguments it was started with. Returns only
+/// when `exec` refused; on success there is nothing here to come back to. The
+/// listening socket survived the exec on the server side, so the attach that
+/// follows queues until the new image accepts it rather than being refused.
+fn come_back() -> io::Error {
+    let binary = match std::env::current_exe() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let args: Vec<String> = std::env::args().collect();
+    crate::handoff::exec(&binary, &args)
 }
 
 /// Read frames until the session says goodbye or the link stops.
@@ -513,6 +534,10 @@ fn pump(reader: &mut dyn Read, arrived: &dyn Fn()) -> io::Result<End> {
                     eprintln!("dirk: {why}");
                 }
                 return Ok(End::Bye);
+            }
+            Kind::Handoff => {
+                restore();
+                return Ok(End::Handoff);
             }
             _ => {}
         }

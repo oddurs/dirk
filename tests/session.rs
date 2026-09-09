@@ -4806,6 +4806,65 @@ fn a_handoff_replaces_the_binary_and_keeps_every_pane_running() {
 }
 
 #[test]
+fn a_terminal_attached_through_a_handoff_comes_back() {
+    // A handoff cuts every attached terminal. Being cut is fine; being left at
+    // a shell prompt to type `dirk` again is not, and doing it on every change
+    // to the source is what `make dev` does.
+    let home = config_home().join("handoff-back");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("dirk")).expect("config dir");
+    std::fs::write(
+        home.join("dirk").join("config.toml"),
+        "[session]\nhandoff = true\n",
+    )
+    .expect("config");
+
+    let session = unique("handoff-back");
+    let mut client = Client::spawn(&session, COLS, ROWS, &{
+        let home = home.clone();
+        move |cmd| {
+            cmd.env("XDG_CONFIG_HOME", &home);
+        }
+    });
+    assert!(client.wait_for(READY, START), "never started");
+
+    let (ok, list) = ask(&session, &["pane", "list"]);
+    assert!(ok, "pane list failed");
+    let pane = first_field(&list, "id");
+    let before = pane_pid(&session, &pane);
+    assert!(before > 0, "no process behind the pane");
+
+    let (ok, why) = ask(&session, &["session", "handoff"]);
+    assert!(
+        !ok && why.contains("did not answer"),
+        "not handed off: {why}"
+    );
+
+    // The same terminal, the same shell, and nothing typed to get there: what
+    // is typed now lands in the pane and is painted back.
+    assert!(
+        client.wait_for(READY, START),
+        "the terminal did not come back after the handoff\n{}",
+        client.drawn()
+    );
+    client.send(b"printf 'zz%s' BACK\r");
+    assert!(
+        client.wait_for("zzBACK", START),
+        "the terminal came back but is not attached\n{}",
+        client.drawn()
+    );
+    assert_eq!(pane_pid(&session, &pane), before, "the pane was restarted");
+    assert!(
+        client.ended(Duration::from_millis(300)).is_none(),
+        "the client ended instead of coming back"
+    );
+
+    drop(client);
+    end(&session);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
 fn a_handoff_is_refused_until_it_is_asked_for() {
     // The thing at risk is every running pane in the session, which is the
     // most expensive thing dirk holds.
