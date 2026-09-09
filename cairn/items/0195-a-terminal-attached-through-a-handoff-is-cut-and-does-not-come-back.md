@@ -2,10 +2,9 @@
 id: 195
 title: A terminal attached through a handoff is cut and does not come back
 type: bug
-status: doing
+status: done
 milestone: v0.10
 assignee: Oddur Sigurdsson
-claimed: 2026-09-08
 created: 2026-09-08
 updated: 2026-09-08
 priority: p2

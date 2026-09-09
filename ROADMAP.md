@@ -229,7 +229,7 @@ A session survives detaching. It should also survive the binary changing under
 
 ## v0.10 — More than one machine
 
-`##········` 17% · 1 of 6 done · due 2027-09-15
+`####······` 38% · 3 of 8 done · due 2027-09-15
 
 Local and several saved machines in one nav, one agent list across all of them,
 
@@ -244,6 +244,8 @@ Local and several saved machines in one nav, one agent list across all of them,
 ### done
 
 - [x] `0192` A pane never answers what the program in it asks <sup>bug · p1 · pty</sup>
+- [x] `0195` A terminal attached through a handoff is cut and does not come back <sup>bug · p2 · server</sup>
+- [x] `0196` make dev: a session that follows the build <sup>chore · p2 · packaging</sup>
 
 ## v1.0 — Production
 
