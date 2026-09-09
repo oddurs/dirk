@@ -127,7 +127,8 @@ the first thing to look at when a script seems hung.
 .B handoff
 replaces the running binary without stopping the work: every pty and every
 process is kept across an \fBexec\fR, so shells and agents never notice.
-Attached terminals, outstanding waits and open streams are all cut and told so.
+Attached terminals come back on their own, as the new binary; outstanding waits
+and open streams are cut and told so.
 Experimental, and refused unless
 .B [session] handoff
 is set.

@@ -56,7 +56,7 @@ conflicts:
 # gate, so the first thing to fail on it was a change to the script that runs
 # the gate. Skipped rather than fatal when shellcheck is absent -- CI is the
 # authority and says so out loud rather than passing in silence.
-SCRIPTS = scripts/work scripts/news scripts/milestones .githooks/commit-msg .githooks/pre-push
+SCRIPTS = scripts/work scripts/news scripts/milestones scripts/dev .githooks/commit-msg .githooks/pre-push
 
 # A milestone is as done as the work in it, and cairn's hook keeps that true as
 # changes happen. This catches the case the hook cannot: somebody editing an
@@ -84,6 +84,12 @@ test:
 # assumes. HACKING has the rest.
 setup:
 	@scripts/work setup
+
+# A session that follows the build: rebuilds on every change to the source and
+# hands the running `dev` session over to the result, keeping every shell and
+# agent in it. Attach from anywhere with `dirk-dev`.
+dev:
+	@scripts/dev
 
 # Print what dirk currently paints, as plain text. The fastest way to see
 # whether a change to the chrome did what you meant.
@@ -210,6 +216,7 @@ help:
 	@echo 'build      cargo build --release'
 	@echo 'check      fmt, clippy and the full suite — the gate CI enforces'
 	@echo 'setup      configure git for the worktree workflow (once per checkout)'
+	@echo 'dev        a running session that follows the build; attach with dirk-dev'
 	@echo 'shot       print what dirk currently paints, as plain text'
 	@echo 'site       build the website into site/dist'
 	@echo 'site-serve build it, serve it, and rebuild on change'

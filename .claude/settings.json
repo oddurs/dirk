@@ -13,6 +13,8 @@
       "Bash(cairn:*)",
       "Bash(scripts/work:*)",
       "Bash(scripts/news:*)",
+      "Bash(dirk-dev:*)",
+      "Bash(scripts/dev:*)",
       "Bash(git work:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",

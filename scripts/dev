@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#
+# dev — a session that follows the build.
+#
+# Watches this repository and every worktree beside it, builds whichever one
+# changed, keeps the binary somewhere stable, and hands the running dev session
+# over to it. Shells and agents in the session survive, because a handoff is an
+# `exec` and not a restart; the attached terminal comes back on its own as the
+# new binary.
+#
+#   make dev                  build, watch, hand off on every change
+#   dirk-dev                  attach to the dev session, from any terminal
+#
+# Every tree, not just this one, because the loop puts each piece of work in a
+# worktree of its own: an agent editing one of them should see its change
+# running without anyone restarting the watcher there. When two trees change,
+# the later one wins, and the log says which it was.
+#
+# The session is named "dev" and runs from a copy of the binary under
+# ~/.cache, not from any target/. The path a server execs on a handoff is its
+# own, so it has to be the same path every time, whichever tree built it.
+#
+# `[session] handoff = true` has to be set in ~/.config/dirk/config.toml. It is
+# off by default for a reason the manual gives; this script will not turn it on
+# for you.
+#
+set -euo pipefail
+
+name=${DIRK_DEV_SESSION:-dev}
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/dirk/dev
+bin=$cache/dirk
+wrapper=${DIRK_DEV_BIN:-$HOME/.local/bin/dirk-dev}
+every=${DIRK_DEV_EVERY:-2}
+watched=(src tests Cargo.toml Cargo.lock)
+
+say() { printf '\033[1mdev:\033[0m %s\n' "$*" >&2; }
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { say "not a git repository"; exit 1; }
+cd "$root"
+
+# The main checkout and the worktrees beside it, the way `git work` lays them
+# out. Asked every time round, so a worktree made after the watcher started is
+# seen without restarting it.
+trees() {
+    git worktree list --porcelain | sed -n 's/^worktree //p'
+}
+
+# One word to attach, rather than a path and a flag. The wrapper is the only
+# thing on PATH; the binary it runs is whatever was built last.
+wrap() {
+    mkdir -p "$cache" "$(dirname "$wrapper")"
+    if [ ! -x "$wrapper" ]; then
+        printf '#!/bin/sh\nexec "%s" --session "%s" "$@"\n' "$bin" "$name" > "$wrapper"
+        chmod 755 "$wrapper"
+        say "made $wrapper"
+    fi
+}
+
+# Build one tree, and put the result where the session runs from.
+#
+# Copied and then renamed rather than written over: a running image whose file
+# is overwritten in place can die on its next page fault, while one whose file
+# is replaced keeps the old inode until it is done with it.
+place() {
+    local tree=$1
+    (cd "$tree" && cargo build --quiet) || return 1
+    if [ -e "$bin" ] && cmp -s "$tree/target/debug/dirk" "$bin"; then
+        return 2
+    fi
+    cp "$tree/target/debug/dirk" "$bin.new" && mv -f "$bin.new" "$bin"
+    # Written down so `dirk-dev` and a person can both tell which tree the
+    # session is running.
+    printf '%s %s\n' "$tree" "$(git -C "$tree" rev-parse --short HEAD)" > "$cache/built-from"
+}
+
+# Hand the running session to the binary just placed.
+#
+# The command has no success answer: when it works the server becomes the new
+# binary partway through the call and the connection simply ends. Only a
+# refusal comes back, and a refusal names its reason.
+handoff() {
+    if ! "$bin" --session "$name" session info >/dev/null 2>&1; then
+        say "no $name session running; the next dirk-dev starts this build"
+        return 0
+    fi
+    local out
+    out=$("$bin" --session "$name" session handoff 2>&1 || true)
+    case $out in
+        *'"error"'*) say "handoff refused: $out"; return 1 ;;
+    esac
+    say "handed off"
+}
+
+cycle() {
+    local tree=$1 label rc=0
+    label="$(basename "$tree") $(git -C "$tree" rev-parse --short HEAD)$(git -C "$tree" diff --quiet 2>/dev/null || printf ' + local changes')"
+    place "$tree" || rc=$?
+    case $rc in
+        0) say "built $label"; handoff ;;
+        2) say "built $label; nothing changed in the binary" ;;
+        *) say "build failed in $label; the session keeps what it has" ;;
+    esac
+}
+
+# Which trees have something newer than the last look. Polling rather than a
+# file watcher, because the set of trees changes under a watcher and every
+# watcher has to be told; asking every couple of seconds is fine for a person
+# and costs nothing anyone can feel.
+changed() {
+    local stamp=$1 tree
+    for tree in $(trees); do
+        [ -d "$tree/src" ] || continue
+        if [ -n "$(cd "$tree" && find "${watched[@]}" -newer "$stamp" -print -quit 2>/dev/null)" ]; then
+            printf '%s\n' "$tree"
+        fi
+    done
+}
+
+wrap
+say "building $(basename "$root")"
+stamp=$(mktemp)
+cycle "$root"
+say "watching every tree under $(dirname "$root") -- attach with: dirk-dev"
+while sleep "$every"; do
+    touched=$(changed "$stamp")
+    [ -n "$touched" ] || continue
+    touch "$stamp"
+    # The last one listed is the most recently added worktree, which is the
+    # likelier one to be the work in progress when several changed at once.
+    tree=$(printf '%s\n' "$touched" | tail -1)
+    cycle "$tree"
+done

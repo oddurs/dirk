@@ -44,7 +44,9 @@
 //! through a handoff needs to know its wait ended rather than silently never
 //! returning:
 //!
-//! - **Client connections.** Every attached terminal is dropped and reconnects.
+//! - **Client connections.** Every attached terminal is cut, and comes back
+//!   on its own as the new binary: told `Handoff`, it `exec`s the binary it
+//!   was started from with the arguments it was started with.
 //! - **Outstanding waits.** Ended with an error naming the handoff.
 //! - **Observers and controllers.** Dropped; their streams end with a reason.
 //! - **Scrollback.** The screen comes across; what scrolled off it does not.
@@ -53,6 +55,30 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Replace this process's image with `binary`, run as `args`.
+///
+/// Returns only on failure. `execv` does not come back when it works: from the
+/// kernel's point of view this is the same process throughout, which is
+/// exactly why every child keeps the parent it had -- and why a client that
+/// does this keeps the terminal it had.
+pub fn exec(binary: &Path, args: &[String]) -> std::io::Error {
+    use std::ffi::CString;
+    let Ok(path) = CString::new(binary.as_os_str().as_encoded_bytes()) else {
+        return std::io::Error::other("the binary's path cannot be passed to exec");
+    };
+    let owned: Vec<CString> = args
+        .iter()
+        .filter_map(|a| CString::new(a.as_str()).ok())
+        .collect();
+    if owned.len() != args.len() {
+        return std::io::Error::other("the arguments cannot be passed to exec");
+    }
+    let mut argv: Vec<*const libc::c_char> = owned.iter().map(|a| a.as_ptr()).collect();
+    argv.push(std::ptr::null());
+    unsafe { libc::execv(path.as_ptr(), argv.as_ptr()) };
+    std::io::Error::last_os_error()
+}
 
 /// The format the two images agree on. A handoff written by a version that
 /// knew more than this one is refused rather than half-read -- and refusing
