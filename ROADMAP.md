@@ -229,7 +229,7 @@ A session survives detaching. It should also survive the binary changing under
 
 ## v0.10 — More than one machine
 
-`··········` 0% · 0 of 3 done · due 2027-09-15
+`##········` 17% · 1 of 6 done · due 2027-09-15
 
 Local and several saved machines in one nav, one agent list across all of them,
 
@@ -238,6 +238,12 @@ Local and several saved machines in one nav, one agent list across all of them,
 - [ ] `0147` Saved machines, in the nav <sup>feature · p0 · nav</sup>
 - [ ] `0148` Getting dirk onto the far side of an ssh connection <sup>feature · p1 · server</sup>
 - [ ] `0149` One attention column across every machine <sup>feature · p1 · nav</sup>
+- [ ] `0193` The questions only the outer terminal can answer <sup>feature · p3 · pty</sup>
+- [ ] `0194` A terminal that says it is zero by zero panics the pane's parser <sup>bug · p2 · pty</sup>
+
+### done
+
+- [x] `0192` A pane never answers what the program in it asks <sup>bug · p1 · pty</sup>
 
 ## v1.0 — Production
 
